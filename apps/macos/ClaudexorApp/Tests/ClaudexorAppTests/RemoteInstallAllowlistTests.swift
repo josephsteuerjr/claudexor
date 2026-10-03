@@ -27,4 +27,14 @@ import Testing
         #expect(cliHarnesses.contains("copilot"))
         #expect(installableRemoteHarnesses == cliHarnesses)
     }
+
+    /// A not-ready install names a step that exists: stored credentials for the
+    /// families without a native login flow, the Login menu for the others.
+    @Test func notReadyInstallNamesTheCredentialStepWithoutNativeLogin() {
+        #expect(remoteInstallNextStep(harness: "copilot", displayName: "GitHub Copilot")
+            == "Configure its provider credentials.")
+        #expect(remoteInstallNextStep(harness: "opencode", displayName: "OpenCode")
+            == "Configure its provider credentials.")
+        #expect(remoteInstallNextStep(harness: "claude", displayName: "Claude") == "Use Login → Claude.")
+    }
 }
