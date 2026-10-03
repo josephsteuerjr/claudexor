@@ -19,6 +19,7 @@ export const MANAGED_SECRET_NAMES = [
   "openrouter",
   "cursor",
   "opencode",
+  "copilot",
   "raw",
 ] as const;
 

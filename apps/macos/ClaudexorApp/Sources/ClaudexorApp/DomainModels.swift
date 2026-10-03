@@ -51,21 +51,21 @@ struct HarnessFamily: RawRepresentable, Identifiable, Hashable {
     static let claude = Self(rawValue: "claude")
     static let cursor = Self(rawValue: "cursor")
     static let opencode = Self(rawValue: "opencode")
+    static let copilot = Self(rawValue: "copilot")
     static let agy = Self(rawValue: "agy")
     static let raw = Self(rawValue: "raw-api")
-    /// The openrouter raw-API instance (registry.ts `createRawApiAdapter({ id:
-    /// "openrouter" })`): a second api-key meta-host, not a built-in family row —
-    /// it renders only when its key is configured and the daemon lists it live.
+    /// OpenRouter is a meta-provider instance; it renders when the daemon
+    /// lists a configured route, rather than appearing among built-in rows.
     static let openrouter = Self(rawValue: "openrouter")
     static let fake = Self(rawValue: "fake")
-    static let builtIns: [Self] = [.codex, .claude, .cursor, .opencode, .agy, .raw]
+    static let builtIns: [Self] = [.codex, .claude, .cursor, .opencode, .copilot, .agy, .raw]
     var id: String { rawValue }
 
     /// Human-facing family names; anything else title-cases its rawValue. The
     /// vendor brands the PRODUCT "Antigravity" — `agy` is only its binary.
     private static let labels = [
         "codex": "Codex", "claude": "Claude", "cursor": "Cursor", "opencode": "OpenCode",
-        "agy": "Antigravity", "raw-api": "Raw API", "openrouter": "OpenRouter", "fake": "Fake",
+        "agy": "Antigravity", "copilot": "GitHub Copilot", "raw-api": "Raw API", "openrouter": "OpenRouter", "fake": "Fake",
     ]
     var label: String {
         Self.labels[rawValue] ?? rawValue.split(separator: "-").map { $0.capitalized }.joined(separator: " ")
@@ -81,7 +81,7 @@ struct HarnessFamily: RawRepresentable, Identifiable, Hashable {
     var defaultAuthReadinessRequest: AuthReadinessRefreshRequest? {
         if self == .codex || self == .claude || self == .cursor {
             AuthReadinessRefreshRequest(authRequest: .subscription, source: .nativeSession)
-        } else if self == .opencode || self == .raw || self == .openrouter {
+        } else if self == .opencode || self == .copilot || self == .raw || self == .openrouter {
             AuthReadinessRefreshRequest(authRequest: .apiKey, source: .apiKeyEnvironment)
         } else {
             nil

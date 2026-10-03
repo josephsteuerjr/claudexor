@@ -12,6 +12,7 @@ import {
 } from "@claudexor/schema";
 import { HarnessGateway } from "@claudexor/gateway";
 import { createAgyAdapter } from "@claudexor/harness-agy";
+import { copilot, createAcpAdapter } from "@claudexor/harness-acp";
 import { createClaudeAdapter } from "@claudexor/harness-claude";
 import { createCodexAdapter } from "@claudexor/harness-codex";
 import { createCursorAdapter } from "@claudexor/harness-cursor";
@@ -40,6 +41,7 @@ export function buildRegistry(opts: RegistryOptions = {}): AdapterRegistry {
   for (const adapter of [
     createCodexAdapter(),
     createAgyAdapter(),
+    createAcpAdapter(copilot),
     createClaudeAdapter(),
     createCursorAdapter(),
     createOpenCodeAdapter(),

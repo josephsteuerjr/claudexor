@@ -17,6 +17,7 @@ import {
   projectRuntimeDir,
 } from "@claudexor/util";
 import { ensureLaneHomeEnv, type LaneHomeEnv } from "./lanes.js";
+import { ensureHarnessHome, harnessHomeEnv } from "./harness-home.js";
 import { ArtifactOwnership } from "./artifact-ownership.js";
 import {
   captureDirectoryWorkspace,
@@ -140,19 +141,7 @@ export class WorkspaceManager {
     const workspaceMode = opts.inPlace ? "in_place" : "isolated";
     ensureDir(base);
     const homeDir = join(base, "home");
-    const codexHome = join(homeDir, ".codex");
-    const claudeConfig = join(homeDir, ".claude");
-    const cursorConfig = join(homeDir, ".cursor");
-    const opencodeConfig = join(homeDir, ".config", "opencode");
-    for (const d of [homeDir, codexHome, claudeConfig, cursorConfig, opencodeConfig]) {
-      ensureDir(d);
-    }
-    const harnessConfigDirs = {
-      codex_home: codexHome,
-      claude_config: claudeConfig,
-      cursor_config: cursorConfig,
-      opencode_config: opencodeConfig,
-    };
+    const harnessConfigDirs = ensureHarnessHome(homeDir);
     // Liveness marker for crash GC: the sweeper must never dispose an envelope
     // whose creating process (daemon, CLI, MCP/ACP serve) is still alive —
     // startup GC's "nothing can own an envelope" premise only holds for
@@ -285,15 +274,7 @@ export class WorkspaceManager {
 
   /** Env vars that scope a child harness to this envelope (HOME + per-harness config dirs). */
   envFor(env: WorkspaceEnvelope): Record<string, string> {
-    return {
-      HOME: env.home_dir,
-      CODEX_HOME: env.harness_config_dirs["codex_home"] ?? join(env.home_dir, ".codex"),
-      CLAUDE_CONFIG_DIR: env.harness_config_dirs["claude_config"] ?? join(env.home_dir, ".claude"),
-      // Pin XDG_CONFIG_HOME to the scoped home so an XDG-aware harness
-      // (opencode/cursor) cannot follow an INHERITED XDG_CONFIG_HOME back into the
-      // operator's real ~/.config under `mirror_native` (§6 containment).
-      XDG_CONFIG_HOME: join(env.home_dir, ".config"),
-    };
+    return harnessHomeEnv(env.home_dir, env.harness_config_dirs);
   }
 
   /**
@@ -314,18 +295,8 @@ export class WorkspaceManager {
     // no-project Ask leaves nothing in its cwd (§7) and nothing in any worktree (§6).
     const base = mkdtempSync(join(tmpdir(), "claudexor-ro-"));
     const homeDir = join(base, "home");
-    const codexHome = join(homeDir, ".codex");
-    const claudeConfig = join(homeDir, ".claude");
-    const cursorConfig = join(homeDir, ".cursor");
-    const opencodeConfig = join(homeDir, ".config", "opencode");
-    for (const d of [homeDir, codexHome, claudeConfig, cursorConfig, opencodeConfig]) ensureDir(d);
     return {
-      env: {
-        HOME: homeDir,
-        CODEX_HOME: codexHome,
-        CLAUDE_CONFIG_DIR: claudeConfig,
-        XDG_CONFIG_HOME: join(homeDir, ".config"),
-      },
+      env: harnessHomeEnv(homeDir, ensureHarnessHome(homeDir)),
       dispose: () => {
         try {
           rmSync(base, { recursive: true, force: true });

@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { CLAUDE_VENDOR_CLI_VERSION } from "@claudexor/harness-claude";
 import { CODEX_VENDOR_CLI_VERSION } from "@claudexor/harness-codex";
 import { OPENCODE_VENDOR_CLI_VERSION } from "@claudexor/harness-opencode";
+import { copilot } from "@claudexor/harness-acp";
 import { managedNodeRoot, windowsNativeImageSegments } from "@claudexor/core";
 import type { PinnedVendorCliVersion } from "@claudexor/util";
 import { INSTALLABLE_HARNESSES } from "./harness-command-specs.js";
@@ -70,6 +71,12 @@ export const NPM_PINS: Partial<
     }
   >
 > = {
+  copilot: {
+    npmPackage: copilot.npmPackage,
+    binaryNames: [copilot.binary],
+    version: copilot.version,
+    verification: "deterministic_only",
+  },
   claude: {
     npmPackage: "@anthropic-ai/claude-code",
     binaryNames: ["claude"],

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSyn
 import { join, sep } from "node:path";
 import { WorkspaceError } from "@claudexor/core";
 import { ensureDir, projectRuntimeDir } from "@claudexor/util";
+import { ensureHarnessHome, harnessHomeEnv } from "./harness-home.js";
 
 /**
  * DURABLE per-lane read-only homes (INV-034). A "lane" is a
@@ -78,19 +79,9 @@ export function ensureLaneHomeEnv(
   profileId: string | null,
 ): LaneHomeEnv {
   const homeDir = laneHomeDir(runtimeRoot, threadId, harnessId, profileId);
-  const codexHome = join(homeDir, ".codex");
-  const claudeConfig = join(homeDir, ".claude");
-  const cursorConfig = join(homeDir, ".cursor");
-  const opencodeConfig = join(homeDir, ".config", "opencode");
-  for (const d of [homeDir, codexHome, claudeConfig, cursorConfig, opencodeConfig]) ensureDir(d);
   return {
     homeDir,
-    env: {
-      HOME: homeDir,
-      CODEX_HOME: codexHome,
-      CLAUDE_CONFIG_DIR: claudeConfig,
-      XDG_CONFIG_HOME: join(homeDir, ".config"),
-    },
+    env: harnessHomeEnv(homeDir, ensureHarnessHome(homeDir)),
   };
 }
 
