@@ -15,11 +15,21 @@ struct RemoteNativeLoginReadiness: Equatable {
 }
 
 /// The installable-harness allowlist — the ONE Swift copy, mirroring the
-/// CLI SSOT (`INSTALLABLE_HARNESSES` in
-/// packages/cli/src/harness-installer.ts). The remote CLI re-enforces the
+/// CLI SSOT (`INSTALLABLE_HARNESSES` in packages/cli/src/harness-command-specs.ts;
+/// RemoteInstallAllowlistTests pins the mirror). The remote CLI re-enforces the
 /// allowlist itself (usage exit 2 for anything else); this constant only
 /// feeds the Settings install menu and the pre-flight guard.
-let installableRemoteHarnesses = ["agy", "claude", "codex", "cursor", "opencode"]
+let installableRemoteHarnesses = ["agy", "claude", "codex", "copilot", "cursor", "opencode"]
+
+/// The step a remote install names when Harness Doctor finds the harness but
+/// it is not ready. A family without a native login flow (no `SetupHarness`
+/// case: opencode, copilot) can only get ready through stored credentials, so
+/// it is never sent to the Login menu.
+func remoteInstallNextStep(harness: String, displayName: String) -> String {
+    SetupHarness(rawValue: harness) == nil
+        ? "Configure its provider credentials."
+        : "Use Login → \(displayName)."
+}
 
 enum RemoteHarnessInstallVerification: String, Decodable, Equatable, Sendable {
     case releaseVerified = "release_verified"
@@ -404,10 +414,7 @@ extension AppModel {
                 "\(displayName) installed and ready."
         } else {
             let reason = result.reasons.first ?? "authentication is still required"
-            let nextStep =
-                harness == "opencode"
-                ? "Configure its provider credentials."
-                : "Use Login → \(displayName)."
+            let nextStep = remoteInstallNextStep(harness: harness, displayName: displayName)
             remoteConnectionMessages[connectionID] =
                 "\(displayName) installed, but is not ready: \(reason). \(nextStep)"
         }

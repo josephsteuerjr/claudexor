@@ -73,6 +73,39 @@ describe("runDoctor fresh probes", () => {
     expect(calls).toBe(3);
   });
 
+  it("keeps a paid conformance probe and the free probe of one route apart", async () => {
+    invalidateDoctorCache();
+    let calls = 0;
+    const adapter = {
+      id: "real-conformance-cache-test",
+      discover: async () => {
+        throw new Error("not used");
+      },
+      doctor: async (spec: { conformance?: boolean }) =>
+        ConformanceReport.parse({
+          harness_id: "real-conformance-cache-test",
+          status: "ok",
+          reasons: [`${spec.conformance ? "paid" : "free"}-${++calls}`],
+        }),
+      run: async function* () {
+        /* not used */
+      },
+    } satisfies HarnessAdapter;
+    const registry = new Map([[adapter.id, adapter]]);
+    const route = { cwd: "/repo", authSource: "api_key_env" as const, env: { HOME: "/lane" } };
+
+    const free = await runDoctor(registry, route);
+    const paid = await runDoctor(registry, { ...route, conformance: true });
+    const freeAgain = await runDoctor(registry, { ...route, conformance: false });
+    const paidAgain = await runDoctor(registry, { ...route, conformance: true });
+
+    expect(free[0]?.reasons).toEqual(["free-1"]);
+    expect(paid[0]?.reasons).toEqual(["paid-2"]);
+    expect(freeAgain[0]?.reasons).toEqual(["free-1"]);
+    expect(paidAgain[0]?.reasons).toEqual(["paid-2"]);
+    expect(calls).toBe(2);
+  });
+
   it("invalidates every target-adapter variant without evicting unrelated adapters", async () => {
     invalidateDoctorCache();
     const calls = new Map<string, number>();

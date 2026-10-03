@@ -82,18 +82,21 @@ function cacheGeneration(adapterId: string, cwd: string): string {
 
 function doctorCacheKey(adapterId: string, spec: DoctorSpec): string {
   // The key covers EVERY spec field that can change a probe's outcome: cwd,
-  // the auth-route preference, and any scoped env overlay. Omitting them
-  // would let a scoped-route probe poison (or be served) the default-route
-  // report for the same cwd — a latent cross-route cache bug even though
-  // today's scoped callers bypass runDoctor. Env entries can carry key
-  // MATERIAL, so they enter the key only as a digest, never as plaintext.
+  // the auth-route preference, any scoped env overlay, and the explicit paid
+  // conformance opt-in (a free probe never stands in for a paid one, nor the
+  // reverse). Omitting them would let a scoped-route probe poison (or be
+  // served) the default-route report for the same cwd — a latent cross-route
+  // cache bug even though today's scoped callers bypass runDoctor. Env
+  // entries can carry key MATERIAL, so they enter the key only as a digest,
+  // never as plaintext.
   const envDigest = spec.env
     ? createHash("sha256")
         .update(JSON.stringify(Object.entries(spec.env).sort(([a], [b]) => a.localeCompare(b))))
         .digest("hex")
         .slice(0, 16)
     : "";
-  return `${adapterId}::${spec.cwd ?? ""}::${spec.authPreference ?? ""}::${spec.authSource ?? ""}::${envDigest}`;
+  const conformance = spec.conformance === true ? "conformance" : "";
+  return `${adapterId}::${spec.cwd ?? ""}::${spec.authPreference ?? ""}::${spec.authSource ?? ""}::${envDigest}::${conformance}`;
 }
 
 /** Run conformance probes across all registered adapters; never throws. */

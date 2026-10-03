@@ -10,7 +10,14 @@ import type { CliCommandSpec } from "./command-registry.js";
 
 /** Vendor CLIs `claudexor harness install` can fetch. harness-installer.ts
  * owns each one's install recipe and its test asserts this list is exhaustive. */
-export const INSTALLABLE_HARNESSES = ["agy", "claude", "codex", "cursor", "opencode"] as const;
+export const INSTALLABLE_HARNESSES = [
+  "agy",
+  "claude",
+  "codex",
+  "copilot",
+  "cursor",
+  "opencode",
+] as const;
 
 /** The `harness` argument shape: rendered by `claudexor help` and reprinted by
  * the dispatcher when a verb is unknown. */

@@ -163,7 +163,7 @@ at every wire boundary.
   `RunFacts` projection from canonical run artifacts.
 - `packages/gateway`: harness discovery and capability/intent gating (route
   selection itself lives in the budget router and orchestrator routing).
-- `packages/harness-codex|claude|cursor|opencode|agy|raw-api|fake`: adapters that
+- `packages/harness-codex|claude|cursor|opencode|agy|acp|raw-api|fake`: adapters that
   translate native CLI/API streams into typed `HarnessEvent`s. The `fake-*` kinds
   are deterministic offline test fixtures (incl. `fake-implement`, which writes a
   real worktree file); they are explicit-`--harness` only and never enter
@@ -619,8 +619,10 @@ they can refuse no more than the producer can. `advisory` (claude: the picker
 is an alias menu of one binary version plus the account's bootstrap rows;
 codex: `model/list` carries no provenance and the CLI substitutes a bundled
 default list when its remote fetch times out; cursor: `--list-models` is a
-fail-soft menu blind to routing variants) makes an unlisted EXPLICIT model
-undecidable, so every gate forwards it byte-identical and the vendor decides.
+fail-soft menu blind to routing variants; copilot: `session/new` config
+options are an optional per-session menu over unverified hint rows) makes
+an unlisted EXPLICIT model undecidable, so every gate forwards it
+byte-identical and the vendor decides.
 Each admitting consumer says so once: the settings write persists the model
 and its read-back carries the admission in `notes` (the CLI prints it), the
 doctor's configured-model row passes with the note in its detail, and the
@@ -1003,8 +1005,8 @@ STRICT in the adapter — exactly the row's transport or a typed error event,
 never a fallback to
 default credentials (claude: config-dir login / stored token non-bare / stored
 key; codex: scoped `CODEX_HOME` login / scoped key `auth.json`; cursor: scoped
-file-store HOME login / namespaced key; opencode, raw-api: secret-ref keys
-only). Adapters stamp
+file-store HOME login / namespaced key; opencode, copilot, raw-api:
+secret-ref keys only). Adapters stamp
 `credential_profile_id` beside `credential_route` on stream events so quota
 and retry evidence stays profile-attributable, and the run's `auth_route`
 receipt carries `profile_id`; Control API projects it as `authRoute.profileId`
@@ -3065,7 +3067,7 @@ refused` lifecycle state before consumption is typed `live_input_refused`
 without failing the run. A one-shot argv run (no interaction channel; never
 the daemon's shape) has no live session and answers `not_active`/`no_live_session`. Cursor declares `none` (no
 persistent live-input channel: its prompt is piped once, then EOF); agy,
-opencode and raw-api declare `none`. There is no CLI verb or MCP tool for
+opencode, copilot and raw-api declare `none`. There is no CLI verb or MCP tool for
 messages in this release (`claudexor follow` is the later surface), and the
 ACP server's `session/prompt` on an active session is refused rather than
 bridged into a steer.

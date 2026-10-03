@@ -31,6 +31,8 @@ export interface CredentialAccountProbeReceipt {
 
 export interface DoctorSpec {
   cwd: string;
+  /** ACP opt-in for one paid conformance prompt; other adapters may ignore it. */
+  conformance?: boolean;
   /** Optional scoped env for probes that must mirror a concrete run route. */
   env?: Record<string, string | null | undefined>;
   /** Optional auth route preference for probes that must mirror a concrete run route. */

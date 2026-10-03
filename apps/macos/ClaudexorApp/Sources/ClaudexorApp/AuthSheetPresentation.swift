@@ -72,7 +72,8 @@ enum AuthSheetPresentation {
     static func managedSecretSlot(for family: HarnessFamily) -> String? {
         switch family {
         case .codex: "openai"; case .claude: "anthropic"; case .cursor: "cursor"
-        case .opencode: "opencode"; case .raw: "raw"; case .openrouter: "openrouter"
+        case .opencode: "opencode"; case .copilot: "copilot"; case .raw: "raw"
+        case .openrouter: "openrouter"
         default: nil
         }
     }

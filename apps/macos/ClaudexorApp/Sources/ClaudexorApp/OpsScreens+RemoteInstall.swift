@@ -7,9 +7,9 @@ import ClaudexorKit
 /// destination, and version pin — and the installer itself runs in the
 /// visible embedded terminal, where the user watches it like interactive
 /// SSH auth. Claude and Codex install the exact pinned npm version this
-/// release was verified against; OpenCode installs its exact pin as a
-/// deterministic install target (no recorded verification fixture covers
-/// it); the script vendors (Antigravity and Cursor) have their installer
+/// release was verified against; OpenCode and GitHub Copilot install their
+/// exact pins as deterministic install targets (no recorded verification
+/// fixture covers them); the script vendors (Antigravity and Cursor) have their installer
 /// downloaded in full and executed under the user's eyes because they
 /// cannot be pinned. Every vendor NAME here comes from `HarnessFamily.label`
 /// — never `id.capitalized`, which renders Antigravity as "Agy".
@@ -22,7 +22,7 @@ struct RemoteHarnessInstallSection: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 SectionLabel("Remote Harness Install", systemImage: "arrow.down.circle")
                 Text(
-                    "Puts a vendor CLI on an SSH host. Claude and Codex install the exact npm version this Claudexor release was verified against; OpenCode installs its exact pinned version as a deterministic target (not covered by recorded verification fixtures); the Antigravity and Cursor installer scripts ship no pinnable npm artifact, so each is downloaded in full and runs in the embedded terminal where you watch it. Nothing runs before you confirm the exact command.")
+                    "Puts a vendor CLI on an SSH host. Claude and Codex install the exact npm version this Claudexor release was verified against; OpenCode and GitHub Copilot install their exact pinned versions as deterministic targets (not covered by recorded verification fixtures); the Antigravity and Cursor installer scripts ship no pinnable npm artifact, so each is downloaded in full and runs in the embedded terminal where you watch it. Nothing runs before you confirm the exact command.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(model.remoteConnections) { connection in
                     HStack {

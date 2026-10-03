@@ -37,7 +37,8 @@
     "@claudexor/schema": "workspace:*",
     "@claudexor/secrets": "workspace:*",
     "@claudexor/util": "workspace:*",
-    "@claudexor/workspace": "workspace:*"
+    "@claudexor/workspace": "workspace:*",
+    "@claudexor/harness-acp": "workspace:*"
   },
   "repository": {
     "type": "git",

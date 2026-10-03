@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLAUDE_VENDOR_CLI_VERSION } from "@claudexor/harness-claude";
 import { CODEX_VENDOR_CLI_VERSION } from "@claudexor/harness-codex";
 import { OPENCODE_VENDOR_CLI_VERSION } from "@claudexor/harness-opencode";
+import { copilot } from "@claudexor/harness-acp";
 import type { ParsedArgs } from "./args.js";
 import { INSTALLABLE_HARNESSES } from "./harness-command-specs.js";
 import {
@@ -79,9 +80,12 @@ describe("pinned versions (issue #89: never @latest)", () => {
         version: OPENCODE_VENDOR_CLI_VERSION,
         verification: "deterministic_only",
       },
+      copilot: { version: copilot.version, verification: "deterministic_only" },
     } as const;
     for (const [harness, pin] of Object.entries(pins)) {
-      const disclosure = harnessInstallerDisclosure(harness as "claude" | "codex" | "opencode");
+      const disclosure = harnessInstallerDisclosure(
+        harness as (typeof INSTALLABLE_HARNESSES)[number],
+      );
       expect(pin.version).toMatch(/^\d+\.\d+\.\d+$/);
       expect(disclosure.pinnedVersion).toBe(pin.version);
       expect(disclosure.command.endsWith(`@${pin.version}`)).toBe(true);

@@ -12,6 +12,7 @@ import {
 } from "@claudexor/schema";
 import { HarnessGateway } from "@claudexor/gateway";
 import { createAgyAdapter } from "@claudexor/harness-agy";
+import { copilot, createAcpAdapter } from "@claudexor/harness-acp";
 import { createClaudeAdapter } from "@claudexor/harness-claude";
 import { createCodexAdapter } from "@claudexor/harness-codex";
 import { createCursorAdapter } from "@claudexor/harness-cursor";
@@ -30,7 +31,7 @@ export interface RegistryOptions {
 }
 
 /**
- * Build the adapter registry. All six real adapters are always registered;
+ * Build the adapter registry. All real adapters are always registered;
  * the gateway only selects doctor-OK non-fake harnesses by default. Fakes are
  * registered for explicit `--harness`. An `openrouter` raw-API instance is the
  * direct-API path for explicitly requested auxiliary models when its key exists.
@@ -40,6 +41,7 @@ export function buildRegistry(opts: RegistryOptions = {}): AdapterRegistry {
   for (const adapter of [
     createCodexAdapter(),
     createAgyAdapter(),
+    createAcpAdapter(copilot),
     createClaudeAdapter(),
     createCursorAdapter(),
     createOpenCodeAdapter(),
