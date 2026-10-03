@@ -24,7 +24,11 @@ export class AcpEvents {
   private cost = 0;
   private calls = new Map<string, { tool: ToolRef; terminal: boolean }>();
 
-  constructor(private readonly sessionId: string) {}
+  constructor(
+    private readonly sessionId: string,
+    /** The vendor row's disabled-tools notice prefix (AcpEntry). */
+    private readonly noticePrefix?: string,
+  ) {}
 
   event(type: HarnessEvent["type"], fields: Partial<HarnessEvent> = {}): HarnessEvent {
     return { type, session_id: this.sessionId, ts: nowIso(), ...fields };
@@ -44,7 +48,8 @@ export class AcpEvents {
         if (child) return [this.event("status", { payload: { child_message: text } })];
         const notice =
           this.firstChunk &&
-          text.startsWith("Info: Disabled tools: ") &&
+          this.noticePrefix !== undefined &&
+          text.startsWith(this.noticePrefix) &&
           !text.trimEnd().includes("\n");
         this.firstChunk = false;
         if (notice) return [this.event("status", { text })];

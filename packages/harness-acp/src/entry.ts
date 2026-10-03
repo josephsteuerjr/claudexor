@@ -16,6 +16,8 @@ export interface AcpEntry {
   workspaceTools: readonly string[];
   effortLevels: readonly string[];
   modelHints: readonly string[];
+  /** Prefix of a single-line first chunk that reports disabled tools: status, not answer. */
+  disabledToolsNotice?: string;
 }
 
 // Docs-verified 2026-10-03, not a live CLI conformance claim. The npm pin is
@@ -56,4 +58,5 @@ export const copilot: AcpEntry = {
   ],
   effortLevels: ["low", "medium", "high", "xhigh", "max"],
   modelHints: ["claude-sonnet-4.6", "gpt-5.4"],
+  disabledToolsNotice: "Info: Disabled tools: ",
 };

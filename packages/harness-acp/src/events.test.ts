@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateTypedStream } from "@claudexor/core";
+import { copilot } from "./entry.js";
 import { AcpEvents } from "./events.js";
 
 const message = (text: string, child = false) => ({
@@ -10,8 +11,12 @@ const message = (text: string, child = false) => ({
 
 describe("ACP event translation", () => {
   it("distinguishes configuration notices, narration, child messages and the final answer", () => {
-    const events = new AcpEvents("s");
+    const events = new AcpEvents("s", copilot.disabledToolsNotice);
     expect(events.update(message("Info: Disabled tools: bash\n"))[0]?.type).toBe("status");
+    // The notice is vendor-row data: an entry without one keeps the chunk as answer text.
+    expect(new AcpEvents("s").update(message("Info: Disabled tools: bash\n"))[0]?.type).toBe(
+      "message",
+    );
     events.update(message("Checking..."));
     const call = {
       sessionUpdate: "tool_call",

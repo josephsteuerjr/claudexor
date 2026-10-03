@@ -28,7 +28,7 @@ export function acpRunner(entry: AcpEntry) {
       await active.get(sessionId)?.();
     },
     async *run(spec: HarnessRunSpec, options: AcpRunOptions = {}): AsyncGenerator<HarnessEvent> {
-      const events = new AcpEvents(spec.session_id);
+      const events = new AcpEvents(spec.session_id, entry.disabledToolsNotice);
       const queue = new Channel<HarnessEvent>();
       const abort = new AbortController();
       const observation = options.observation ?? {

@@ -934,9 +934,10 @@ provided in stage 1.
 
 Events: `agent_message_chunk` → delta `message`, `agent_thought_chunk` →
 `thinking`, `plan` → plan `status`, tool call/update → `tool_call`, typed
-`tool_result` and diff `file_change`. The first single-line
-`Info: Disabled tools: …` chunk is status. Root tool activity resets the
-candidate answer; child-agent text never becomes the final answer.
+`tool_result` and diff `file_change`. A single-line first chunk that starts
+with the vendor row's disabled-tools notice (Copilot: `Info: Disabled tools: …`)
+is status. Root tool activity resets the candidate answer; child-agent text
+never becomes the final answer.
 `end_turn` produces a final message (`final_source: session/prompt`) only
 with a nonempty root answer and no unfinished tools. Refusal and limit stops
 produce `error` then `completed`; cancellation produces aborted completion
