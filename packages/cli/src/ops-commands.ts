@@ -29,6 +29,7 @@ import {
   GitCapability,
 } from "@claudexor/schema";
 import { type ParsedArgs, flagBool, flagStr } from "./args.js";
+import { GC_LOCKSTEP_REPORTS, gcReceiptNotes } from "./gc-receipt-notes.js";
 import { harnessListPath, requestedHarnesses, unknownHarnesses } from "./ops-harness-selection.js";
 import { CliError, controlProblemError, renderCliFailure, usageError } from "./cli-error.js";
 import { accountsCommand, profilesCommand, secretsCommand } from "./credential-commands.js";
@@ -505,16 +506,17 @@ export async function gcCommand(args: ParsedArgs, json: boolean): Promise<number
   const dryRun = flagBool(args, "dry-run") === true;
   const { addr, engine } = await ensureDaemon();
   // Capability negotiation over the handshake's validated engine identity:
-  // request the advisory data-root report ONLY from a lockstep daemon (same
-  // engine version as this CLI). Any skew — older daemon, newer daemon, or a
-  // malformed identity — omits the flag, so both sides exchange the exact
-  // pre-feature request/receipt shapes and a strict old schema never rejects
-  // the receipt of a mutating verb the daemon already executed.
+  // request the opt-in receipt reports (data-root scan, thread purges)
+  // ONLY from a lockstep daemon (same engine version as this CLI). Any skew —
+  // older daemon, newer daemon, or a malformed identity — omits the flags, so
+  // both sides exchange the exact pre-feature request/receipt shapes and a
+  // strict old schema never rejects the receipt of a mutating verb the daemon
+  // already executed.
   const lockstep = engine.engineVersion === CLAUDEXOR_VERSION;
   const response = await controlApiFetch(addr, "/maintenance/gc", {
     method: "POST",
     headers: { Authorization: `Bearer ${addr.token}`, "content-type": "application/json" },
-    body: JSON.stringify({ dry_run: dryRun, ...(lockstep ? { data_root_report: true } : {}) }),
+    body: JSON.stringify({ dry_run: dryRun, ...(lockstep ? GC_LOCKSTEP_REPORTS : {}) }),
   });
   if (!response.ok) throw new Error(`gc failed (${response.status}): ${await response.text()}`);
   const receipt = ControlGcReceipt.parse(await response.json());
@@ -529,16 +531,7 @@ export async function gcCommand(args: ParsedArgs, json: boolean): Promise<number
       `(examined ${receipt.examined_runs}; kept active=${receipt.kept.active} recent=${receipt.kept.recent} young=${receipt.kept.young} ` +
       `referenced=${receipt.kept.referenced} actionable=${receipt.kept.actionable} unknown=${receipt.kept.unknown_state})`,
   );
-  // Advisory disclosure of foreign top-level data-root entries (never
-  // deleted; absent on old daemons or a failed scan — errors carry the why).
-  const foreign = receipt.data_root_unrecognized;
-  if (foreign && foreign.length > 0) {
-    const shown = foreign.slice(0, 10).join(", ");
-    const ellipsis = foreign.length > 10 ? `, … showing 10 of ${foreign.length}` : "";
-    print(
-      `note: ${foreign.length} non-engine entr${foreign.length === 1 ? "y" : "ies"} in ${claudexorOwnedRoot()}: ${shown}${ellipsis}`,
-    );
-  }
+  for (const note of gcReceiptNotes(receipt, claudexorOwnedRoot())) print(note);
   for (const error of receipt.errors) print(`warning: ${error}`);
   return 0;
 }

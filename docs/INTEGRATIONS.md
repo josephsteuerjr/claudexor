@@ -741,7 +741,8 @@ Terminal window.
 `session/new` creates a daemon thread (default `in_place`) and returns that
 thread id. `session/list`, `session/load`, `session/resume`, `session/close`,
 `session/prompt`, and `session/cancel` all resolve through the same `/v2`
-authority; no second in-memory session catalog exists. A prompt may pin its
+authority; no second in-memory session catalog exists. `session/list` omits
+trashed threads: a deleted conversation waiting for its purge is not a session. A prompt may pin its
 turn to one account with `_meta.claudexor.credentialProfileId`, the same strict
 pin MCP run tools accept. Images and embedded resources are uploaded/finalized
 into immutable daemon resource IDs before the turn enqueues. Blocked/failed

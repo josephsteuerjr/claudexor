@@ -63,13 +63,49 @@ describe("gcCommand data_root_report capability negotiation", () => {
     stdoutSpy.mockRestore();
   });
 
-  it("sends data_root_report:true ONLY to a lockstep same-version daemon", async () => {
+  it("sends the opt-in report flags ONLY to a lockstep same-version daemon", async () => {
     mocks.ensureDaemon.mockResolvedValue({
       addr: { baseUrl: "http://127.0.0.1:1234", token: "t" },
       engine: engine(CLAUDEXOR_VERSION),
     });
     expect(await gcCommand(parseArgs(["gc", "--dry-run"]), true)).toBe(0);
-    expect(sentBody()).toEqual({ dry_run: true, data_root_report: true });
+    expect(sentBody()).toEqual({ dry_run: true, data_root_report: true, trash_purge_report: true });
+  });
+
+  it("prints the thread purges a lockstep receipt discloses", async () => {
+    mocks.ensureDaemon.mockResolvedValue({
+      addr: { baseUrl: "http://127.0.0.1:1234", token: "t" },
+      engine: engine(CLAUDEXOR_VERSION),
+    });
+    mocks.controlApiFetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ...RECEIPT,
+          dry_run: true,
+          purged_threads: ["th-1", "th-2"],
+          purge_leftovers: ["th-0"],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    expect(await gcCommand(parseArgs(["gc", "--dry-run"]), false)).toBe(0);
+    const out = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("");
+    expect(out).toContain("would purge 2 expired trash thread(s): th-1, th-2");
+    expect(out).toContain("would finish 1 purge(s) whose cleanup failed earlier: th-0");
+  });
+
+  it("prints no trash line when the receipt omits the opt-in field", async () => {
+    mocks.ensureDaemon.mockResolvedValue({
+      addr: { baseUrl: "http://127.0.0.1:1234", token: "t" },
+      engine: engine("0.0.1"),
+    });
+    expect(await gcCommand(parseArgs(["gc"]), false)).toBe(0);
+    const out = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("");
+    expect(out).not.toContain("expired trash");
+    expect(out).not.toContain("cleanup failed earlier");
   });
 
   it("omits the flag on engine-version skew (exact 3.3.11 request shape)", async () => {

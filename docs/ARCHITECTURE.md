@@ -1452,7 +1452,9 @@ adoption. An isolated thread's accumulated worktree diff is delivered to the
 project on demand via `POST /v2/threads/:id/apply`. The isolated workspace is
 pinned by a persistent `claudexor/thread-*` branch (not a dangling commit);
 successful delivery advances that branch. Trash retains the thread and its
-branch for 30 days and exposes explicit restore/purge routes.
+branch for 30 days and exposes explicit restore/purge routes; once
+`purge_after` passes, restore is refused and the next disk-retention pass
+purges the thread (see the thread lifecycle routes and disk retention below).
 
 ### Agent --n (race) / --create
 
@@ -1938,6 +1940,33 @@ Endpoint semantics beyond the inventory:
   agent runs against the frozen plan rather than a bare prompt. `POST /v2/threads/:id/apply` delivers an isolated thread's accumulated
   worktree diff to the project; in-place threads write the project directly and
   never need it.
+- `POST /v2/threads/:id/trash` moves a thread into recoverable trash for 30 days
+  (`trashedAt`, `purgeAfter`); a trashed thread refuses edits and new turns, and
+  a turn already running finishes normally. `restore` returns it to its
+  pre-trash state until `purgeAfter` (afterwards `410 thread_trash_expired`).
+  `purge` requires trash (`409 thread_not_trashed`) and answers `409
+  thread_busy` while ANY turn of the thread is queued or running, because an
+  Ask/Plan turn can run inside the lane home purge deletes; trash and restore
+  delete nothing and never refuse a busy thread. What purge deletes and keeps
+  is listed here once; DESIGN_SYSTEM (the Delete Now dialog) and the FEATURES
+  row refer to it. Purge journals the `purged` state first, which takes the
+  thread out of every listing, then deletes the thread's own directories: the
+  isolated worktree, with any changes never applied to the project, and its
+  `claudexor/thread-*` branch, and every lane home (the per-thread HOME of its
+  Ask/Plan turns and its cached continuation summaries). A directory error
+  after that commit (ENOTEMPTY, EBUSY, a Windows lock) fails the request
+  although the thread is already purged and no longer restorable, so a client
+  re-reads the list instead of promising Trash, and reads the thread's absence
+  as a purge only from a list whose `problems` name no skipped project and
+  whose rows it could all decode; a repeated purge or the next disk-retention
+  pass (below) finishes the cleanup, and nothing makes a partially deleted
+  thread restorable again. Purge does not erase the
+  conversation: the thread and turn records stay in the journal, run trees
+  follow the run retention below, native sessions that a route keeps outside
+  the lane home stay in the agent's own storage (Agent turns, and Codex
+  config-dir login profiles and Antigravity, which keep sessions in the
+  account's directory), and project files are untouched. (ACP's view of
+  trashed threads is in INTEGRATIONS.)
 - Refused turns are honest end-to-end: when a turn's run dies BEFORE it starts
   (the trust gate refusing `access: full`, preflight validation, an enqueue
   throw, or an Implement whose plan still has open questions and no explicit
@@ -2539,7 +2568,22 @@ reclaimed run leaves a tombstone projection behind, so its artifacts answer
 with a typed 410 `run_expired_by_retention` — never a mysterious 404. The
 receipt also carries an advisory `data_root_unrecognized` listing — names of
 top-level data-root entries the engine does not own and never touches
-(absent, with an `errors[]` entry, when that scan fails).
+(absent, with an `errors[]` entry, when that scan fails). The same pass purges
+EXPIRED TRASH: a trashed thread whose `purge_after` has passed goes through the
+one thread purge owner (the service behind `POST /v2/threads/:id/purge`) before
+run candidates are judged, so the runs only it referenced become ordinary
+unreferenced candidates. A thread with a queued or running turn is kept for a
+later pass and disclosed in `errors[]`, as is a failed purge; a dry run purges
+nothing and previews those threads' runs as unreferenced. Before that, the
+pass FINISHES PURGES whose directory cleanup failed after the journal commit:
+every purged thread whose isolated worktree or lane home is still on disk goes
+through the same owner again (it journals nothing new and deletes what is
+left); a cleanup that fails again is disclosed in `errors[]` and retried by the
+next pass, and a dry run only lists them. The receipt's `purged_threads` names
+the purged (or would-be-purged) expired trash and `purge_leftovers` the
+finished (or would-be-finished) purges; like `data_root_unrecognized` both are
+opt-in (`trash_purge_report`, sent only by a lockstep CLI), the startup pass
+requests them for its log line, and `claudexor gc` prints them.
 While running it snapshots its live harness child process groups to
 `daemon/pids.json`; the NEXT startup reaps recorded orphans that survived a
 crash (pid liveness + command-name recycling guard) and sweeps workspace

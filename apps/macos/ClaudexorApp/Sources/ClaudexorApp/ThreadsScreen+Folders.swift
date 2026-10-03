@@ -20,13 +20,15 @@ struct ThreadFolderEditor {
 }
 
 extension ThreadsScreen {
-    /// The thread list rows. Without folders this is the plain list, exactly as
-    /// before folders existed (no section header); with at least one folder,
-    /// one section per folder, then "Ungrouped".
-    @ViewBuilder var threadListRows: some View {
-        let sections = ThreadFolderSection.sections(for: model.locatedThreads)
+    /// The rows of the active threads (the collapsed Archived and Trash
+    /// sections follow them, ThreadsScreen+Lifecycle). Without folders among
+    /// them this is the plain list, exactly as before folders existed (no
+    /// section header); with at least one folder, one section per folder, then
+    /// "Ungrouped".
+    @ViewBuilder func threadListRows(_ active: [LocatedThread]) -> some View {
+        let sections = ThreadFolderSection.sections(for: active)
         if sections.isEmpty {
-            ForEach(model.locatedThreads) { located in
+            ForEach(active) { located in
                 threadRow(located).tag(located.id)
             }
         } else {

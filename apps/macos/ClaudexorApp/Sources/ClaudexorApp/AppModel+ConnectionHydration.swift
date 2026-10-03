@@ -7,6 +7,10 @@ import ClaudexorKit
 // A manual reconnect can therefore retire a delayed success or failure without
 // allowing the previous daemon to repaint the successor's projections.
 extension AppModel {
+    /// What a failed thread-list read leaves in the status line; the next
+    /// successful read retires it (`reconcileThreadStatus`).
+    static let threadRefreshFailurePrefix = "Could not refresh threads: "
+
     func refreshSecrets(locationID requestedLocationID: ExecutionLocationID? = nil) async {
         let locationID = requestedLocationID ?? activeExecutionLocation
         guard let requestClient = gateway(for: locationID) else { return }
@@ -55,6 +59,7 @@ extension AppModel {
             guard requestIsCurrent() else { return false }
             threads = list.threads
             projectListingProblems = list.problems
+            reconcileThreadStatus(at: .local, listGaps: ThreadListGaps(list))
             if list.droppedThreads > 0 {
                 // Per-row salvage disclosed: the store carried rows this
                 // app build cannot decode, so disclose it instead of hiding it.
@@ -67,12 +72,19 @@ extension AppModel {
             guard requestIsCurrent() else { return false }
             threads = []
             projectListingProblems = []
+            threadListGaps[.local] = nil   // an engine without threads confirms no purge
             return true
         } catch {
             guard requestIsCurrent() else { return false }
             // A transport/decode failure is not an empty thread list: retain
-            // last-known rows and surface the failure.
-            threadStatus = "Could not refresh threads: \(userMessage(for: error))"
+            // last-known rows and surface the failure. It takes the one status
+            // line: a Delete Now banner it replaces comes back with the next
+            // list, one that had already left the line is over.
+            if threadStatus != deleteNowBanner?.text,
+               threadStatus?.hasPrefix(Self.threadRefreshFailurePrefix) != true {
+                deleteNowBanner = nil
+            }
+            threadStatus = Self.threadRefreshFailurePrefix + userMessage(for: error)
             return false
         }
     }

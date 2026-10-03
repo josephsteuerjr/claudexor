@@ -113,6 +113,10 @@ final class AppModel {
     var selectedThreadId: String?
     var selectedThreadDetail: ThreadDetailResponse?
     var threadStatus: String?
+    /// What a failed Delete Now said, and what each engine's last thread list
+    /// could not show; later lists retire the banner (AppModel+ThreadTrash.swift).
+    @ObservationIgnored var deleteNowBanner: DeleteNowBanner?
+    @ObservationIgnored var threadListGaps: [ExecutionLocationID: ThreadListGaps] = [:]
     /// Projects the daemon skipped listing because their root is gone (QA-064):
     /// the sidebar surfaces a relink hint instead of silently hiding those
     /// threads. Server-owned — refreshed on every list, cleared when it resolves.
@@ -1026,13 +1030,9 @@ final class AppModel {
     /// open detail in place from the returned `ThreadSummary` — no heavy
     /// `refreshThreads()` + `openThread()` re-fetch (which re-hydrated everything,
     /// flickered, and conflated a later GET's error with the PATCH).
-    func applyThreadUpdate(_ updated: ThreadSummary) {
-        applyThreadUpdate(updated, at: .local)
-    }
-
     func applyThreadUpdate(
         _ updated: ThreadSummary,
-        at locationID: ExecutionLocationID
+        at locationID: ExecutionLocationID = .local
     ) {
         if locationID == .local {
             if let i = threads.firstIndex(where: { $0.id == updated.id }) {

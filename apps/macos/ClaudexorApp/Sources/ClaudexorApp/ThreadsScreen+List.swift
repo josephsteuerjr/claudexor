@@ -163,6 +163,7 @@ extension ThreadsScreen {
                     }
                 }
             }
+            threadDeleteMenuItem(located)
         }
         .padding(.vertical, Theme.Spacing.xxs)
     }

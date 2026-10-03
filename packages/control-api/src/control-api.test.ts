@@ -361,6 +361,27 @@ describe("DaemonControlApiServer", () => {
     job,
   });
 
+  /** A persisted thread record in the given lifecycle state (lifecycle route tests). */
+  function lifecycleThread(state: "active" | "trashed" | "purged") {
+    const now = new Date().toISOString();
+    return {
+      schema_version: 2,
+      id: "th-lifecycle",
+      created_at: now,
+      updated_at: now,
+      repo: { root: tmpdir(), base_ref: "HEAD" },
+      title: "lifecycle thread",
+      mode: "agent",
+      workspace: { mode: "in_place", worktree_path: null, base_sha: null },
+      auth_preference: "auto",
+      primary_harness: null,
+      eligible_harnesses: [],
+      run_ids: [],
+      head_run_id: null,
+      state,
+    };
+  }
+
   function fakeDaemon(options: { runFacts?: "blocked" | "clean" } = {}): {
     daemon: DaemonFacadeClient;
     record: DaemonRunRecord;
@@ -6777,6 +6798,121 @@ describe("DaemonControlApiServer", () => {
   });
 
   for (const activeState of ["queued", "running"] as const) {
+    // Lifecycle busy semantics (owner decision E4 = A): ONLY purge refuses, and
+    // it refuses for ANY live turn — an ask/plan turn runs inside the lane home
+    // purge deletes. Trash and restore delete nothing and gain no refusal.
+    for (const mode of ["ask", "plan", "agent"] as const) {
+      it(`refuses thread purge with thread_busy while a ${mode} turn is ${activeState}`, async () => {
+        const { daemon } = fakeDaemon();
+        let purges = 0;
+        const busyDaemon: DaemonFacadeClient = {
+          ...daemon,
+          async list() {
+            return [
+              { id: "job-active", state: activeState, params: { threadId: "th-lifecycle", mode } },
+            ];
+          },
+        };
+        await withDaemonServer(
+          busyDaemon,
+          async (base) => {
+            const response = await apiFetch(`${base}/threads/th-lifecycle/purge`, {
+              method: "POST",
+              headers: { authorization: `Bearer ${token}` },
+            });
+            expect(response.status).toBe(409);
+            expect(((await response.json()) as { code: string }).code).toBe("thread_busy");
+            expect(purges).toBe(0);
+          },
+          undefined,
+          {
+            purgeThread: async () => {
+              purges += 1;
+              return lifecycleThread("purged");
+            },
+          },
+        );
+      });
+    }
+
+    it(`keeps thread trash and restore available while an agent turn is ${activeState}`, async () => {
+      const { daemon } = fakeDaemon();
+      const calls: string[] = [];
+      const busyDaemon: DaemonFacadeClient = {
+        ...daemon,
+        async list() {
+          return [
+            {
+              id: "job-active",
+              state: activeState,
+              params: { threadId: "th-lifecycle", mode: "agent" },
+            },
+          ];
+        },
+      };
+      await withDaemonServer(
+        busyDaemon,
+        async (base) => {
+          for (const action of ["trash", "restore"]) {
+            const response = await apiFetch(`${base}/threads/th-lifecycle/${action}`, {
+              method: "POST",
+              headers: { authorization: `Bearer ${token}` },
+            });
+            expect(response.status).toBe(200);
+          }
+          expect(calls).toEqual(["trash", "restore"]);
+        },
+        undefined,
+        {
+          trashThread: async () => {
+            calls.push("trash");
+            return lifecycleThread("trashed");
+          },
+          restoreThread: async () => {
+            calls.push("restore");
+            return lifecycleThread("active");
+          },
+        },
+      );
+    });
+
+    it(`purges a thread whose own turns are terminal while another thread's turn is ${activeState}`, async () => {
+      const { daemon } = fakeDaemon();
+      let purges = 0;
+      const busyDaemon: DaemonFacadeClient = {
+        ...daemon,
+        async list() {
+          return [
+            { id: "job-other", state: activeState, params: { threadId: "th-other", mode: "ask" } },
+            {
+              id: "job-done",
+              state: "succeeded",
+              params: { threadId: "th-lifecycle", mode: "ask" },
+            },
+          ];
+        },
+      };
+      await withDaemonServer(
+        busyDaemon,
+        async (base) => {
+          const response = await apiFetch(`${base}/threads/th-lifecycle/purge`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${token}` },
+          });
+          expect(response.status).toBe(200);
+          expect(((await response.json()) as { state: string }).state).toBe("purged");
+          expect(purges).toBe(1);
+        },
+        undefined,
+        {
+          purgeThread: async () => {
+            purges += 1;
+            return lifecycleThread("purged");
+          },
+        },
+      );
+    });
+
     it(`refuses thread apply with thread_busy while a mutating turn is ${activeState}`, async () => {
       const now = new Date().toISOString();
       const threadObj = {

@@ -135,6 +135,12 @@ export async function advanceThreadWorktree(
   return targetSha;
 }
 
+/** Whether an isolated thread's directory is still on disk: its purge failed
+ * after the journal commit, and the next retention pass retries it. */
+export function threadWorktreeDirExists(projectRoot: string, threadId: string): boolean {
+  return existsSync(join(projectRuntimeDir(projectRoot), "threads", threadId));
+}
+
 /** Explicit purge of daemon-owned isolated-thread resources. Lifecycle
  * authority lives in the journal; the generic orphan sweeper never guesses. */
 export async function purgeThreadWorktree(projectRoot: string, threadId: string): Promise<void> {

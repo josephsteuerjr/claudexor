@@ -240,6 +240,8 @@ export async function acpSessionQuery(
   if (p.mode === "__acp_session_list") {
     const body = await request("/threads");
     const sessions = (Array.isArray(body["threads"]) ? body["threads"] : [])
+      // A trashed thread is a deleted conversation awaiting purge, not a session.
+      .filter((thread) => (thread as Record<string, unknown>)["state"] !== "trashed")
       .map((thread) => sessionRecord(thread as Record<string, unknown>))
       .filter((session) => !p.repoPath || session.cwd === p.repoPath);
     return { sessions };

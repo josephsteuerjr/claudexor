@@ -243,7 +243,7 @@
               "type": "null"
             }
           ],
-          "description": "Earliest automatic purge time; 30 days after trash.",
+          "description": "End of the 30-day trash window: restore is refused after it, and the daemon's next retention pass (startup or claudexor gc) purges the thread.",
           "default": null
         },
         "pre_trash_state": {

@@ -323,6 +323,14 @@ export class ProjectPartitions implements CommandAuthority {
     });
   }
 
+  /** Purged threads of every READY store. Every listing hides them; the
+   * retention pass reads them to finish a byte cleanup that failed after the
+   * purge was journaled. */
+  listPurgedThreads(): Thread[] {
+    this.partitions.sync();
+    return this.threadStores().flatMap((store) => store.listThreads("purged"));
+  }
+
   getThread(id: string): Thread | undefined {
     return this.threadStoreForThread(id)?.getThread(id);
   }
