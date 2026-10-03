@@ -3,6 +3,7 @@
   "value": {
     "id": "th-1",
     "title": null,
+    "folder": null,
     "repoRoot": null,
     "workspaceMode": "in_place",
     "authPreference": "auto",

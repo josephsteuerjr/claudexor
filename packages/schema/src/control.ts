@@ -21,7 +21,13 @@ import {
 export { ControlQuotaResponse } from "./quota.js";
 import { RunOutcomeFacts } from "./decision.js";
 import { EffortHint, InputTokenUsage, InteractionQuestion } from "./harness.js";
-import { ContinuityKind, ThreadState, ThreadTurnKind, WorkspaceMode } from "./thread.js";
+import {
+  ContinuityKind,
+  ThreadFolderName,
+  ThreadState,
+  ThreadTurnKind,
+  WorkspaceMode,
+} from "./thread.js";
 import { ResourceAttachmentRef } from "./attachment.js";
 import { RequestRequirementResolution } from "./request-requirements.js";
 import { ProtectedPathApproval, TestCommandInvocation } from "./task.js";
@@ -1052,6 +1058,9 @@ export const ControlThread = z
   .object({
     id: Id.describe("Thread id."),
     title: z.string().nullable().default(null).describe("Thread title; null until set."),
+    folder: ThreadFolderName.nullable()
+      .default(null)
+      .describe("Optional sidebar folder; null means ungrouped."),
     repoRoot: z
       .string()
       .nullable()
@@ -1287,56 +1296,6 @@ export const ControlThreadTurn = z
   })
   .describe("Control-plane projection of one thread turn with its embedded run card.");
 export type ControlThreadTurn = z.infer<typeof ControlThreadTurn>;
-
-export const ControlThreadCreateRequest = z
-  .object({
-    title: z.string().optional().describe("Initial thread title."),
-    scope: RunScope.default({ kind: "none" }),
-    mode: ModeKind.optional().describe("Default mode for new turns."),
-    workspace: WorkspaceMode.optional().describe(
-      "Workspace mode for the thread (in_place or isolated).",
-    ),
-    authPreference: AuthPreference.optional().describe("Per-thread auth preference override."),
-    credentialProfileId: NonBlankString.optional().describe(
-      "Sticky credential profile for the thread (INV-135); per-turn selection wins.",
-    ),
-    primaryHarness: NonBlankString.optional().describe("Sticky primary harness for the thread."),
-    /** Sticky eligible pool for the thread; turns inherit it when unset. */
-    eligibleHarnesses: z
-      .array(NonBlankString)
-      .optional()
-      .describe("Sticky eligible harness pool; turns inherit it when unset."),
-    access: AccessProfile.optional().describe(
-      "Sticky write scope for the thread's write turns; omit = the repo trust default.",
-    ),
-  })
-  .strict()
-  .describe("Request body for POST /threads.");
-export type ControlThreadCreateRequest = z.infer<typeof ControlThreadCreateRequest>;
-
-/** Mutate a thread's title, open/closed state, or sticky routing (rename,
- * archive, switch primary/pool). primaryHarness nullable => clear back to auto. */
-export const ControlThreadUpdateRequest = z
-  .object({
-    title: z.string().optional().describe("New thread title."),
-    state: z.enum(["active", "closed"]).optional().describe("New open/archive state."),
-    primaryHarness: NonBlankString.nullable()
-      .optional()
-      .describe("New sticky primary harness; null clears back to engine routing."),
-    credentialProfileId: NonBlankString.nullable()
-      .optional()
-      .describe("New sticky credential profile; null clears back to engine-default credentials."),
-    eligibleHarnesses: z
-      .array(NonBlankString)
-      .optional()
-      .describe("New sticky eligible harness pool."),
-    access: AccessProfile.nullable()
-      .optional()
-      .describe("New sticky write scope; null clears back to the repo trust default."),
-  })
-  .strict()
-  .describe("Request body for PATCH /threads/:id: rename, archive, or switch sticky routing.");
-export type ControlThreadUpdateRequest = z.infer<typeof ControlThreadUpdateRequest>;
 
 /** A registered project skipped during thread listing because its root is no
  * longer usable (F2 resilience): disclosed per-project so a dead root

@@ -283,7 +283,7 @@ struct ThreadsScreen: View {
                 )
                 .frame(maxHeight: .infinity)
             } else {
-                List(model.locatedThreads, selection: Binding(
+                List(selection: Binding(
                     get: { model.selectedLocatedThreadID },
                     set: { locatedID in
                         guard let locatedID,
@@ -297,9 +297,7 @@ struct ThreadsScreen: View {
                                 id: located.thread.id)
                         }
                     }
-                )) { located in
-                    threadRow(located).tag(located.id)
-                }
+                )) { threadListRows }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)   // let the Liquid Glass panel show through
             }
@@ -307,6 +305,7 @@ struct ThreadsScreen: View {
             SidebarFooter()
         }
         .padding(.top, Theme.Spacing.xs)
+        .modifier(ThreadFolderDialogs(editor: $folderEditor))
         .sheet(isPresented: Binding(
             get: { renameTargetId != nil },
             set: {
@@ -318,6 +317,7 @@ struct ThreadsScreen: View {
         )) { renameSheet }
     }
 
+    @State var folderEditor = ThreadFolderEditor()
     @State var renameDraft = ""
     @State var renameTargetId: String?
     @State var renameTargetLocation: ExecutionLocationID?

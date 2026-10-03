@@ -8,6 +8,20 @@
           "type": "string",
           "description": "New thread title."
         },
+        "folder": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "description": "User-visible thread folder name."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "New sidebar folder; null moves the thread to ungrouped."
+        },
         "state": {
           "type": "string",
           "enum": [
@@ -68,7 +82,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Request body for PATCH /threads/:id: rename, archive, or switch sticky routing."
+      "description": "Request body for PATCH /threads/:id: rename, file into a sidebar folder, archive, or switch sticky routing."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

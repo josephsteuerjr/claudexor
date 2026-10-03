@@ -176,6 +176,7 @@ export function buildNewThread(input: CreateThreadInput): Thread {
     updated_at: now,
     repo: input.repoRoot ? { root: input.repoRoot, base_ref: "HEAD" } : null,
     title: input.title ?? null,
+    folder: input.folder ?? null,
     // Default mode follows the scope: a no-project thread can only Ask
     // (read-only), so it must NOT default to agent (which would 400 on the
     // first turn for lack of a project root). A project thread defaults to agent.
@@ -195,12 +196,23 @@ export function buildNewThread(input: CreateThreadInput): Thread {
   });
 }
 
+/** A patch that only files the thread into a folder (or out of one). It is not
+ * conversation activity, so it keeps `updated_at`: the list order and the
+ * terminal `--resume` target (both keyed on it) stay where they were. */
+function isFolderOnlyPatch(patch: UpdateThreadInput): boolean {
+  return (
+    patch.folder !== undefined &&
+    Object.entries(patch).every(([field, value]) => field === "folder" || value === undefined)
+  );
+}
+
 /** Apply an UpdateThreadInput patch; a primary outside the (non-empty) pool
  * coerces to null (Auto) rather than persisting an incoherent state. */
 export function mergeThreadPatch(thread: Thread, patch: UpdateThreadInput): Thread {
   const next = ThreadSchema.parse({
     ...thread,
     ...(patch.title !== undefined ? { title: patch.title } : {}),
+    ...(patch.folder !== undefined ? { folder: patch.folder } : {}),
     ...(patch.state !== undefined ? { state: patch.state } : {}),
     ...(patch.primaryHarness !== undefined ? { primary_harness: patch.primaryHarness } : {}),
     ...(patch.credentialProfileId !== undefined
@@ -210,7 +222,7 @@ export function mergeThreadPatch(thread: Thread, patch: UpdateThreadInput): Thre
     ...(patch.eligibleHarnesses !== undefined
       ? { eligible_harnesses: patch.eligibleHarnesses }
       : {}),
-    updated_at: nowIso(),
+    updated_at: isFolderOnlyPatch(patch) ? thread.updated_at : nowIso(),
   });
   next.primary_harness = coercePrimaryToPool(next.primary_harness, next.eligible_harnesses);
   return next;

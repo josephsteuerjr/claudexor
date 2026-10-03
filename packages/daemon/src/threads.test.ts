@@ -429,6 +429,48 @@ describe("ThreadStore", () => {
     expect(s.getThread(t.id)?.access).toBe("full");
   });
 
+  it("persists, renames, and clears a thread folder across journal replay", () => {
+    const { root, journal, s } = store();
+    const thread = s.createThread({ repoRoot: "/tmp/proj", folder: "Research" });
+    expect(thread.folder).toBe("Research");
+    s.updateThread(thread.id, { folder: "Shipping" });
+    expect(s.getThread(thread.id)?.folder).toBe("Shipping");
+    const reloaded = reload(root, journal);
+    expect(reloaded.getThread(thread.id)?.folder).toBe("Shipping");
+    reloaded.updateThread(thread.id, { folder: null });
+    expect(reloaded.getThread(thread.id)?.folder).toBeNull();
+  });
+
+  it("a folder-only patch keeps updated_at (list order), while a title patch still bumps it", () => {
+    vi.useFakeTimers({ now: new Date("2026-10-03T08:00:00.000Z"), toFake: ["Date"] });
+    try {
+      const { s } = store();
+      const older = s.createThread({ repoRoot: "/tmp/proj", title: "older" });
+      vi.setSystemTime(new Date("2026-10-03T09:00:00.000Z"));
+      const newer = s.createThread({ repoRoot: "/tmp/proj", title: "newer" });
+      vi.setSystemTime(new Date("2026-10-03T10:00:00.000Z"));
+
+      // Filing the older thread (in, across, and out of folders) is not activity.
+      expect(s.updateThread(older.id, { folder: "Research" }).updated_at).toBe(older.updated_at);
+      expect(s.updateThread(older.id, { folder: "Shipping" }).updated_at).toBe(older.updated_at);
+      // The PATCH route forwards every field, absent ones as undefined.
+      const routed = { title: undefined, folder: null, state: undefined, access: undefined };
+      expect(s.updateThread(older.id, routed).updated_at).toBe(older.updated_at);
+      expect(s.listThreads().map((thread) => thread.id)).toEqual([newer.id, older.id]);
+
+      // A rename is activity: it bumps exactly as before, alone or with a folder.
+      expect(s.updateThread(older.id, { title: "renamed" }).updated_at).toBe(
+        "2026-10-03T10:00:00.000Z",
+      );
+      vi.setSystemTime(new Date("2026-10-03T11:00:00.000Z"));
+      const both = s.updateThread(newer.id, { title: "again", folder: "Research" });
+      expect(both.updated_at).toBe("2026-10-03T11:00:00.000Z");
+      expect(both.folder).toBe("Research");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resume never crosses credential profiles (INV-135)", () => {
     const { s } = store();
     const t = s.createThread({ repoRoot: "/tmp/proj" });

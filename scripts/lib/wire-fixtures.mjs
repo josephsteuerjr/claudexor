@@ -91,6 +91,7 @@ export function buildWireFixtures() {
   add("thread-maximal", "ControlThread", {
     id: "th-2",
     title: "Fix the parser",
+    folder: "Parser work",
     repoRoot: "/tmp/proj",
     mode: "agent",
     workspaceMode: "isolated",

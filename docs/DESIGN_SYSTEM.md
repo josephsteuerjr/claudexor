@@ -503,9 +503,21 @@ frequency and volume are. The contracts:
 - Single window, **three regions**:
   - **Thread list (glass sidebar):** the conversations, with a needs-you marker;
     "New" enters the draft state (the first message materializes the thread).
-    Each row carries a context menu — Rename… (title sheet) and
-    Archive/Reopen — riding the server-owned `PATCH /threads/:id`
-    (`title`/`state`); no local-only thread state. The sidebar's BOTTOM-LEFT
+    Each row carries a context menu — Rename… (title sheet), Move to Folder
+    (Ungrouped, the existing folders, New Folder…) and Archive/Reopen — riding
+    the server-owned `PATCH /threads/:id` (`title`/`state`/`folder`); no
+    local-only thread state. Folder names are derived from their member
+    threads, so empty folders do not persist and one name used on several
+    engines is ONE section. With no folder anywhere the list is the plain list,
+    with no section header; once a folder exists, the list shows one section
+    per folder (sorted; header menu Rename… / Remove Folder…), then
+    "Ungrouped" for threads without one. Filing a thread does not reorder the
+    list (a folder-only PATCH keeps `updatedAt`). Rename/Remove re-file each
+    member — a thread in the trash keeps its folder — and report a partial
+    result as "Updated N of M threads; K failed."; the folder sheet disables
+    Create for a name outside 1–120 characters and says why on a reserved
+    line; an engine older than folders is reported as "The engine is too old
+    for folders. Update Claudexor." The sidebar's BOTTOM-LEFT
     carries ONE compact accounts control (Claude-Code style, INV-135): a quiet
     single-line trigger — worst-readiness dot + the account name (or "N
     accounts") + worst quota % + chevron — that opens a popover to manage

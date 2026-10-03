@@ -145,6 +145,7 @@ extension ThreadsScreen {
                 renameTargetId = thread.id
                 renameTargetLocation = located.locationID
             }
+            threadFolderMenu(located)
             // ThreadState is active|closed (server enum) — "closed" is the
             // archived state; Reopen PATCHes back to "active".
             if thread.state != "closed" {
