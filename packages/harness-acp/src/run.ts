@@ -138,7 +138,11 @@ export function acpRunner(entry: AcpEntry) {
           } catch (error) {
             failure = error;
           }
-          prepared?.dispose();
+          try {
+            prepared?.dispose();
+          } catch (error) {
+            failure ??= error;
+          }
           external?.removeEventListener("abort", onAbort);
           active.delete(spec.session_id);
           if (!queue.closed) {

@@ -11,6 +11,10 @@ const capture = async (source: string) => {
   return events;
 };
 describe("bounded process frames", () => {
+  it("does not silently strip a UTF-8 BOM from transcript bytes", async () => {
+    const events = await capture('process.stdout.write("\\uFEFF{}\\n")');
+    expect(events.find((e) => e.type === "stdout")).toMatchObject({ wire: "\uFEFF{}\n" });
+  });
   it("preserves CRLF and drains a bounded stderr tail", async () => {
     const events = await capture(
       'process.stdout.write("{}\\r\\n"); process.stderr.write("x".repeat(100)+"tail")',

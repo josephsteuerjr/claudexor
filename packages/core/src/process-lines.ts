@@ -46,7 +46,7 @@ export function readProcessLines(
         if (lf !== -1) {
           await waitForSpace();
           if (closed) return;
-          const wire = new TextDecoder("utf-8", { fatal: true }).decode(
+          const wire = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
             Buffer.concat(parts, bytes),
           );
           publish({ type: "stdout", line: wire.slice(0, -1), wire });

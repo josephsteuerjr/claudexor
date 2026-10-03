@@ -1,5 +1,5 @@
 // Semantics ported from Róger Valderrama's ouroboros#769. Q00 MIT notice: ../NOTICE.
-import { realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { RequestPermissionRequest, RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import { AccessProfileIncompatibleError } from "@claudexor/core";
@@ -12,6 +12,14 @@ function physicalPath(path: string): string {
     return realpathSync(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    // realpath reports ENOENT for a dangling link too. Follow its target
+    // before resolving missing ancestors, or a new write could escape cwd.
+    try {
+      if (lstatSync(path).isSymbolicLink())
+        return physicalPath(resolve(dirname(path), readlinkSync(path)));
+    } catch (statError) {
+      if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError;
+    }
     const parent = dirname(path);
     if (parent === path) throw error;
     return join(physicalPath(parent), relative(parent, path));

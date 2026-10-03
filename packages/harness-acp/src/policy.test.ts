@@ -25,6 +25,15 @@ const selected = { outcome: { outcome: "selected", optionId: "once" } };
 const denied = { outcome: { outcome: "cancelled" } };
 
 describe("ACP typed permissions", () => {
+  it("refuses a dangling symlink whose new target would be outside cwd", () => {
+    symlinkSync(join(root, "not-created"), join(cwd, "dangling"));
+    expect(
+      decidePermission("workspace_write", cwd, permission("edit", { path: "dangling" })),
+    ).toEqual(denied);
+    expect(
+      decidePermission("workspace_write", cwd, permission("edit", { path: "dangling/new.txt" })),
+    ).toEqual(denied);
+  });
   it.each(["read", "search"])("readonly admits %s with workspace evidence", (kind) => {
     expect(decidePermission("readonly", cwd, permission(kind, { pattern: "needle" }))).toEqual(
       selected,
