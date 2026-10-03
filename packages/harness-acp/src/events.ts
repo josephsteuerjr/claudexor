@@ -17,12 +17,34 @@ export const record = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {};
 
+const TOOL_KINDS: Record<string, ToolRef["kind"]> = {
+  read: "file",
+  edit: "file",
+  delete: "file",
+  move: "file",
+  search: "search",
+  execute: "command",
+  fetch: "web",
+};
+
+/** One tool call as ACP partial updates have left it: a present field replaces,
+ * an absent or null one keeps its value. rawOutput is kept only as the typed
+ * facts the result needs, since ACP replaces it as a whole. */
+interface AcpToolState {
+  title?: string;
+  kind?: string;
+  status?: string;
+  exitCode?: number;
+  reportedError?: boolean;
+  terminal: boolean;
+}
+
 export class AcpEvents {
   private answer = "";
   private answerBytes = 0;
   private firstChunk = true;
   private cost = 0;
-  private calls = new Map<string, { tool: ToolRef; terminal: boolean }>();
+  private calls = new Map<string, AcpToolState>();
 
   constructor(
     private readonly sessionId: string,
@@ -105,35 +127,35 @@ export class AcpEvents {
     if (typeof id !== "string" || !id)
       throw new AcpFailure("invalid_tool", "ACP tool call has no id");
     let call = this.calls.get(id);
-    const events: HarnessEvent[] = [];
+    const first = !call;
     if (!call) {
       if (this.calls.size >= 4096)
         throw new AcpFailure("too_many_tools", "ACP turn exceeds 4096 tool calls");
-      const kinds: Record<string, ToolRef["kind"]> = {
-        read: "file",
-        edit: "file",
-        delete: "file",
-        move: "file",
-        search: "search",
-        execute: "command",
-        fetch: "web",
-      };
-      call = {
-        tool: {
-          name: (update.title ?? update.kind ?? "tool").slice(0, 512),
-          kind: kinds[update.kind ?? ""] ?? "other",
-          use_id: id,
-        },
-        terminal: false,
-      };
+      call = { terminal: false };
       this.calls.set(id, call);
       if (!child) {
         this.answer = "";
         this.answerBytes = 0;
       }
-      events.push(this.event("tool_call", { tool: { ...call.tool } }));
     }
-    if (call.terminal) return events;
+    if (call.terminal) return [];
+    if (update.title != null) call.title = update.title;
+    if (update.kind != null) call.kind = update.kind;
+    if (update.status != null) call.status = update.status;
+    if (update.rawOutput != null) {
+      const output = record(update.rawOutput);
+      const exit = [output["exitCode"], output["exit_code"], output["returncode"]].find(
+        (value) => typeof value === "number" && Number.isInteger(value),
+      );
+      call.exitCode = exit as number | undefined;
+      call.reportedError = output["isError"] === true || output["success"] === false;
+    }
+    const tool: ToolRef = {
+      name: (call.title ?? call.kind ?? "tool").slice(0, 512),
+      kind: TOOL_KINDS[call.kind ?? ""] ?? "other",
+      use_id: id,
+    };
+    const events: HarnessEvent[] = first ? [this.event("tool_call", { tool: { ...tool } })] : [];
     // ACP may attach a diff before its terminal status update. Keep that
     // evidence when it arrives; a file_change is not proof of a disk write.
     for (const item of update.content ?? []) {
@@ -144,20 +166,17 @@ export class AcpEvents {
           }),
         );
     }
-    if (update.status !== "completed" && update.status !== "failed") return events;
+    if (call.status !== "completed" && call.status !== "failed") return events;
     call.terminal = true;
-    const output = record(update.rawOutput);
-    const exit = output["exitCode"] ?? output["exit_code"] ?? output["returncode"];
-    const exitCode = typeof exit === "number" && Number.isInteger(exit) ? exit : undefined;
+    const { exitCode } = call;
     const failed =
-      update.status === "failed" ||
-      output["isError"] === true ||
-      output["success"] === false ||
+      call.status === "failed" ||
+      call.reportedError === true ||
       (exitCode !== undefined && exitCode !== 0);
     events.push(
       this.event("tool_result", {
         tool: {
-          ...call.tool,
+          ...tool,
           status: failed ? "error" : "ok",
           ...(exitCode !== undefined ? { exit_code: exitCode } : {}),
         },

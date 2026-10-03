@@ -111,6 +111,62 @@ describe("ACP event translation", () => {
     );
   });
 
+  // ACP v1 tool_call_update frames carry only changed fields; an absent field
+  // keeps its previous value, so the result reads the accumulated call.
+  const split = (output: Record<string, unknown>) => {
+    const events = new AcpEvents("s");
+    events.update({
+      sessionUpdate: "tool_call",
+      toolCallId: "t",
+      title: "Run tests",
+      kind: "execute",
+      status: "in_progress",
+    });
+    expect(
+      events.update({ sessionUpdate: "tool_call_update", toolCallId: "t", rawOutput: output }),
+    ).toEqual([]);
+    return events.update({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t",
+      status: "completed",
+    });
+  };
+  it.each([
+    [{ exitCode: 7 }, "error", 7],
+    [{ isError: true }, "error", undefined],
+    [{ success: false }, "error", undefined],
+    [{ exitCode: 0 }, "ok", 0],
+    [{ output: "done" }, "ok", undefined],
+  ])("keeps rawOutput %j across a split terminal update", (output, status, exitCode) => {
+    expect(split(output)).toEqual([
+      expect.objectContaining({
+        type: "tool_result",
+        tool: {
+          name: "Run tests",
+          kind: "command",
+          use_id: "t",
+          status,
+          ...(exitCode === undefined ? {} : { exit_code: exitCode }),
+        },
+      }),
+    ]);
+  });
+
+  it("names the result from fields that arrived after the tool call", () => {
+    const events = new AcpEvents("s");
+    events.update({ sessionUpdate: "tool_call", toolCallId: "t", title: "", status: "pending" });
+    events.update({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t",
+      kind: "read",
+      title: "a.ts",
+    });
+    expect(
+      events.update({ sessionUpdate: "tool_call_update", toolCallId: "t", status: "failed" })[0]
+        ?.tool,
+    ).toEqual({ name: "a.ts", kind: "file", use_id: "t", status: "error" });
+  });
+
   it("does not infer a failure from command output prose", () => {
     const events = new AcpEvents("s");
     const result = events.update({
