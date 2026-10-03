@@ -104,6 +104,32 @@ describe("ACP typed permissions", () => {
     spec.tool_permission_policy.deny = ["view"];
     expect(() => acpArgs(copilot, spec)).toThrow("no available tools");
   });
+  // Copilot applies --available-tools and ignores --excluded-tools when both are passed.
+  const toolFlags = (access: string, allow: string[], deny: string[]) =>
+    acpArgs(
+      copilot,
+      HarnessRunSpec.parse({
+        session_id: "s",
+        task_id: "t",
+        intent: "implement",
+        prompt: "p",
+        cwd,
+        access,
+        tool_permission_policy: { allow, deny },
+      }),
+    ).filter((arg) => arg.startsWith("--available-tools=") || arg.startsWith("--excluded-tools="));
+  it.each(["full", "inherit_native"])("subtracts deny from the %s allowlist", (access) => {
+    expect(toolFlags(access, ["view", "bash"], ["bash"])).toEqual(["--available-tools=view"]);
+    expect(toolFlags(access, [], ["bash"])).toEqual(["--excluded-tools=bash"]);
+    expect(toolFlags(access, [], [])).toEqual([]);
+    expect(() => toolFlags(access, ["bash"], ["bash"])).toThrow("no available tools");
+  });
+  it("readonly subtracts deny from its allowlist and passes no ignored denylist", () => {
+    expect(toolFlags("readonly", ["view", "grep", "bash"], ["grep"])).toEqual([
+      "--available-tools=view",
+    ]);
+    expect(toolFlags("readonly", [], ["grep", "bash"])).toEqual(["--available-tools=view,glob"]);
+  });
 });
 
 describe("ACP credential and environment isolation", () => {

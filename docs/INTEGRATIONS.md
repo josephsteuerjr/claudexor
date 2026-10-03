@@ -903,7 +903,10 @@ not a locally installed Copilot binary. The client negotiates `initialize`,
 creates `session/new {cwd, mcpServers: []}`, then sends one `session/prompt`.
 `--model` and `--effort` preserve requested values. Readonly restricts
 `--available-tools` to `view,glob,grep`; tool allow/deny lists narrow the
-selected profile. Workspace permission callbacks admit typed read/search,
+selected profile. Copilot ignores `--excluded-tools` beside `--available-tools`,
+so a denied tool is removed from the allowlist itself; `--excluded-tools` is
+passed only when no allowlist applies, and a policy that leaves no tool
+refuses before spawn. Workspace permission callbacks admit typed read/search,
 edit and command requests within cwd; full selects `allow_always` when
 offered, while inherit-native declines new client permission grants.
 

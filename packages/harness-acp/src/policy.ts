@@ -105,14 +105,16 @@ export function acpArgs(entry: AcpEntry, spec: HarnessRunSpec): string[] {
       : spec.access === "workspace_write"
         ? entry.workspaceTools
         : [];
-  const allowed = defaults.length
-    ? defaults.filter((t) => (!allow.length || allow.includes(t)) && !deny.includes(t))
-    : allow;
-  if (defaults.length && !allowed.length)
+  // The CLI ignores --excluded-tools whenever --available-tools is present,
+  // so a deny is subtracted from any allowlist instead of passed beside it.
+  const allowed = (
+    defaults.length ? defaults.filter((t) => !allow.length || allow.includes(t)) : allow
+  ).filter((t) => !deny.includes(t));
+  if ((defaults.length || allow.length) && !allowed.length)
     throw new AccessProfileIncompatibleError(
       "ACP tool policy leaves no available tools for this access profile",
     );
   if (allowed.length) args.push(`--available-tools=${allowed.join(",")}`);
-  if (deny.length) args.push(`--excluded-tools=${deny.join(",")}`);
+  else if (deny.length) args.push(`--excluded-tools=${deny.join(",")}`);
   return args;
 }
