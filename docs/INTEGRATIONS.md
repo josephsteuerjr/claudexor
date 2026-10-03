@@ -905,10 +905,12 @@ creates `session/new {cwd, mcpServers: []}`, then sends one `session/prompt`.
 `--available-tools` to `view,glob,grep`; tool allow/deny lists narrow the
 selected profile. Copilot ignores `--excluded-tools` beside `--available-tools`,
 so a denied tool is removed from the allowlist itself; `--excluded-tools` is
-passed only when no allowlist applies, and a policy that leaves no tool
-refuses before spawn. Workspace permission callbacks admit typed read/search,
-edit and command requests within cwd; full selects `allow_always` when
-offered, while inherit-native declines new client permission grants.
+passed only when no allowlist applies. A policy that leaves no tool and a
+missing managed token throw typed refusals (`access_profile_incompatible`,
+harness unavailable) before spawn. Workspace permission callbacks admit
+typed read/search, edit and command requests within cwd; full selects
+`allow_always` when offered, while inherit-native declines new client
+permission grants.
 
 The free doctor checks the binary, managed token, `initialize` and
 `session/new`, without sending a prompt. ACP authentication-required errors

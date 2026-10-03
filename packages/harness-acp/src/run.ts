@@ -37,7 +37,6 @@ export function acpRunner(entry: AcpEntry) {
       };
       let transport: ReturnType<typeof connectAcp> | undefined;
       let prepared: ReturnType<typeof prepareAcpEnv> | undefined;
-      let token = "";
       let cancelled = false;
       let failure: unknown;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -55,6 +54,10 @@ export function acpRunner(entry: AcpEntry) {
       };
       if (active.has(spec.session_id))
         throw new HarnessUnavailableError("ACP session is already active");
+      // Typed pre-spawn refusals throw like the check above, so the engine keeps
+      // their failure class instead of a generic acp_error event.
+      const args = acpArgs(entry, spec);
+      const token = acpToken(entry, spec.credential_profile);
       active.set(spec.session_id, cancel);
       external?.addEventListener("abort", onAbort, { once: true });
       const work = (async () => {
@@ -77,8 +80,6 @@ export function acpRunner(entry: AcpEntry) {
               "mcp_unsupported",
               "ACP MCP injection is not supported in stage 1",
             );
-          const args = acpArgs(entry, spec);
-          token = acpToken(entry, spec.credential_profile);
           prepared = prepareAcpEnv(entry, token, spec.env);
           await emit(
             events.event("started", {

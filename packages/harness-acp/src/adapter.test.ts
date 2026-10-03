@@ -1,10 +1,15 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { streamExpectationViolations, validateTypedStream } from "@claudexor/core";
+import {
+  AccessProfileIncompatibleError,
+  HarnessUnavailableError,
+  streamExpectationViolations,
+  validateTypedStream,
+} from "@claudexor/core";
 import { HarnessRunSpec, type HarnessEvent } from "@claudexor/schema";
 import { createAcpAdapter, copilot } from "./index.js";
 
@@ -187,6 +192,27 @@ describe("ACP adapter over stdio", () => {
     });
     await stream.return?.();
     for (const pid of [pids!["pid"], pids!["child"]]) expect(() => process.kill(pid, 0)).toThrow();
+  });
+
+  it("throws typed pre-spawn refusals and keeps the session id reusable", async () => {
+    const peer = adapter();
+    const request = spec({
+      access: "full",
+      tool_permission_policy: { web: "auto", allow: ["bash"], deny: ["bash"] },
+    });
+    await expect(collect(peer.adapter.run(request))).rejects.toMatchObject({
+      code: "access_profile_incompatible",
+    });
+    await expect(collect(peer.adapter.run(request))).rejects.toBeInstanceOf(
+      AccessProfileIncompatibleError,
+    );
+    secrets.token = null;
+    await expect(collect(peer.adapter.run(spec()))).rejects.toBeInstanceOf(HarnessUnavailableError);
+    expect(existsSync(peer.log)).toBe(false);
+    secrets.token = "fixture-managed-token";
+    request.tool_permission_policy.deny = [];
+    const events = await collect(peer.adapter.run(request));
+    expect(validateTypedStream(events)).toMatchObject({ started: 1, completed: 1, errors: 0 });
   });
 
   it.each([
