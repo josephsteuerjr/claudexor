@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { registerChildProcess, unregisterChildProcess } from "./process-registry.js";
-import { createInterface } from "node:readline";
+import { readProcessLines, type ProcessStreamLimits } from "./process-lines.js";
 import { composeBaseEnv } from "./env-scope.js";
 import {
   killWindowsProcessTree,
@@ -18,6 +18,8 @@ import {
 } from "./process-group.js";
 
 export interface SpawnOptions {
+  /** Bounded protocol frames/queue and independently drained stderr. */
+  streamLimits?: ProcessStreamLimits;
   cwd?: string;
   env?: Record<string, string | null | undefined>;
   /**
@@ -95,7 +97,7 @@ export interface ChildStdin {
 }
 
 export type ProcEvent =
-  | { type: "stdout"; line: string }
+  | { type: "stdout"; line: string; wire?: string }
   | { type: "stderr"; line: string }
   | { type: "exit"; code: number | null; signal: NodeJS.Signals | null }
   /**
@@ -213,6 +215,7 @@ export async function* spawnProcess(
   let wake: (() => void) | null = null;
   let finished = false;
   let spawnError: Error | null = null;
+  let capacity: (() => void) | undefined;
 
   const push = (e: ProcEvent): void => {
     queue.push(e);
@@ -222,10 +225,22 @@ export async function* spawnProcess(
     }
   };
 
-  const rlOut = createInterface({ input: child.stdout });
-  const rlErr = createInterface({ input: child.stderr });
-  rlOut.on("line", (line) => push({ type: "stdout", line }));
-  rlErr.on("line", (line) => push({ type: "stderr", line }));
+  const lines = readProcessLines(
+    child,
+    push,
+    async () => {
+      if (opts.streamLimits && queue.length >= opts.streamLimits.queuedFrames) {
+        await new Promise<void>((resolve) => {
+          capacity = resolve;
+        });
+      }
+    },
+    (error) => {
+      spawnError = error;
+      requestCancel();
+    },
+    opts.streamLimits,
+  );
 
   child.on("error", (err) => {
     if (typeof child.pid === "number") unregisterChildProcess(child.pid);
@@ -236,8 +251,9 @@ export async function* spawnProcess(
       wake = null;
     }
   });
-  child.on("close", (code, signal) => {
+  child.on("close", async (code, signal) => {
     if (typeof child.pid === "number") unregisterChildProcess(child.pid);
+    await lines.drained;
     push({ type: "exit", code, signal });
     finished = true;
     if (wake) {
@@ -329,7 +345,10 @@ export async function* spawnProcess(
   try {
     for (;;) {
       if (queue.length > 0) {
-        yield queue.shift() as ProcEvent;
+        const event = queue.shift() as ProcEvent;
+        capacity?.();
+        capacity = undefined;
+        yield event;
         continue;
       }
       if (spawnError) throw spawnError;
@@ -355,6 +374,8 @@ export async function* spawnProcess(
       };
     }
   } finally {
+    lines.close();
+    capacity?.();
     if (timer) clearTimeout(timer);
     abortSignal?.removeEventListener("abort", onAbort);
     if (!finished) {
@@ -377,8 +398,6 @@ export async function* spawnProcess(
         unresolved: outcome.unresolved,
       });
     }
-    rlOut.close();
-    rlErr.close();
   }
 }
 
@@ -566,34 +585,4 @@ export async function runCaptureRaw(
   }
 }
 
-export interface OrphanExitOptions {
-  /** Poll cadence for the parent-death check (default 5s, unref'd). */
-  intervalMs?: number;
-  getppid?: () => number;
-  exit?: (code: number) => void;
-  /** Disclosed once, right before exiting (e.g. a stderr note). */
-  onOrphaned?: () => void;
-}
-
-/**
- * Orphaned-bridge watchdog (W3.5): a stdio bridge (mcp/acp serve) whose HOST
- * died without the pipe closing — grandchildren holding inherited fds, a
- * SIGKILLed host — reparents to pid 1 and would otherwise idle forever with
- * nobody on the other end. Polling ppid catches exactly that class; the
- * interval is unref'd so the watchdog never keeps a clean bridge alive.
- */
-export function armOrphanExit(options: OrphanExitOptions = {}): { stop: () => void } {
-  const getppid = options.getppid ?? (() => process.ppid);
-  const exit = options.exit ?? ((code: number) => process.exit(code));
-  const timer = setInterval(() => {
-    if (getppid() !== 1) return;
-    try {
-      options.onOrphaned?.();
-    } catch {
-      /* the disclosure must not block the exit */
-    }
-    exit(0);
-  }, options.intervalMs ?? 5_000);
-  timer.unref?.();
-  return { stop: () => clearInterval(timer) };
-}
+export { armOrphanExit, type OrphanExitOptions } from "./process-lifeline.js";

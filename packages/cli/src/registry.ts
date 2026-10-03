@@ -31,7 +31,7 @@ export interface RegistryOptions {
 }
 
 /**
- * Build the adapter registry. All six real adapters are always registered;
+ * Build the adapter registry. All real adapters are always registered;
  * the gateway only selects doctor-OK non-fake harnesses by default. Fakes are
  * registered for explicit `--harness`. An `openrouter` raw-API instance is the
  * direct-API path for explicitly requested auxiliary models when its key exists.
