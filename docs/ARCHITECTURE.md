@@ -619,8 +619,10 @@ they can refuse no more than the producer can. `advisory` (claude: the picker
 is an alias menu of one binary version plus the account's bootstrap rows;
 codex: `model/list` carries no provenance and the CLI substitutes a bundled
 default list when its remote fetch times out; cursor: `--list-models` is a
-fail-soft menu blind to routing variants) makes an unlisted EXPLICIT model
-undecidable, so every gate forwards it byte-identical and the vendor decides.
+fail-soft menu blind to routing variants; copilot: `session/new` config
+options are an optional per-session menu over unverified hint rows) makes
+an unlisted EXPLICIT model undecidable, so every gate forwards it
+byte-identical and the vendor decides.
 Each admitting consumer says so once: the settings write persists the model
 and its read-back carries the admission in `notes` (the CLI prints it), the
 doctor's configured-model row passes with the note in its detail, and the

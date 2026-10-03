@@ -916,21 +916,31 @@ The free doctor checks the binary, managed token, `initialize` and
 `session/new`, without sending a prompt. ACP authentication-required errors
 become a `not_logged_in` check. An explicit **adapter API** call
 `adapter.doctor({cwd, conformance: true})` permits one paid write prompt in a
-disposable workspace. Only an observed write permission callback changes
-that adapter instance's `write_mechanism` to `tool_policy`; otherwise it
-stays `none` with a disclosure. This observation is not persisted as proof
-for other installations or future instances. Default readiness is degraded,
-with paid capability verification `not_run`, so it is not an automatic
-doctor-OK default route.
+disposable workspace. No CLI, daemon or app surface calls it yet (stage 2),
+so product readiness always reports `write_mechanism: none`. Only an
+observed write permission callback changes that adapter instance's
+`write_mechanism` to `tool_policy`; otherwise it stays `none` with a
+disclosure. This observation is not persisted as proof for other
+installations or future instances. Default readiness is degraded, with paid
+capability verification `not_run`, so it is not an automatic doctor-OK
+default route. For the same reason a reviewer panel refuses an unpinned
+Copilot slot as not doctor-ok; a reviewer slot runs Copilot only with an
+explicit `copilot:<profile>` api_key profile, as for opencode.
 
 Copilot ACP is in preview and may execute writes without sending
 `session/request_permission` ([upstream #4537](https://github.com/github/copilot-cli/issues/4537)).
 The CLI tool allowlist is the readonly mechanism. Workspace commands are
 not an OS sandbox, and writes remain unfenced when callbacks are absent.
 `--no-remote` disables remote control, not network access: web policy is
-`uncontrolled`, and strict web-off requests refuse. Live input, session/load,
-MCP injection, cloud execution and Copilot as a main model source are not
-provided in stage 1.
+`uncontrolled`, and strict web-off requests refuse. The flag is passed
+unconditionally; its behavior on an account without the remote-sessions
+feature is unverified until live conformance (stage 2). The row does not
+pass `--no-remote-export`, so the harness does not disable session export
+to GitHub.com and GitHub Mobile in stage 1. The child environment allowlist
+does not forward Windows `APPDATA`, `LOCALAPPDATA` or `USERNAME`; Windows
+runs are unverified (stage 2). Live input, session/load, MCP injection,
+cloud execution and Copilot as a main model source are not provided in
+stage 1.
 
 Events: `agent_message_chunk` → delta `message`, `agent_thought_chunk` →
 `thinking`, `plan` → plan `status`, tool call/update → `tool_call`, typed
