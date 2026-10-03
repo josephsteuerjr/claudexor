@@ -152,6 +152,32 @@ describe("ACP event translation", () => {
     ]);
   });
 
+  // The ACP SDK treats a null field like an omitted one: it keeps the earlier value.
+  it("keeps the earlier facts when a later frame sends null fields", () => {
+    const events = new AcpEvents("s");
+    events.update({
+      sessionUpdate: "tool_call",
+      toolCallId: "t",
+      title: "Run tests",
+      kind: "execute",
+      status: "in_progress",
+    });
+    events.update({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t",
+      rawOutput: { exitCode: 7 },
+    });
+    expect(
+      events.update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "t",
+        status: "completed",
+        rawOutput: null,
+        title: null,
+      })[0]?.tool,
+    ).toEqual({ name: "Run tests", kind: "command", use_id: "t", status: "error", exit_code: 7 });
+  });
+
   it("names the result from fields that arrived after the tool call", () => {
     const events = new AcpEvents("s");
     events.update({ sessionUpdate: "tool_call", toolCallId: "t", title: "", status: "pending" });
