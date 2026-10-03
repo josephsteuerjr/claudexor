@@ -1003,8 +1003,8 @@ STRICT in the adapter — exactly the row's transport or a typed error event,
 never a fallback to
 default credentials (claude: config-dir login / stored token non-bare / stored
 key; codex: scoped `CODEX_HOME` login / scoped key `auth.json`; cursor: scoped
-file-store HOME login / namespaced key; opencode, raw-api: secret-ref keys
-only). Adapters stamp
+file-store HOME login / namespaced key; opencode, copilot, raw-api:
+secret-ref keys only). Adapters stamp
 `credential_profile_id` beside `credential_route` on stream events so quota
 and retry evidence stays profile-attributable, and the run's `auth_route`
 receipt carries `profile_id`; Control API projects it as `authRoute.profileId`
@@ -3016,7 +3016,7 @@ refused` lifecycle state before consumption is typed `live_input_refused`
 without failing the run. A one-shot argv run (no interaction channel; never
 the daemon's shape) has no live session and answers `not_active`/`no_live_session`. Cursor declares `none` (no
 persistent live-input channel: its prompt is piped once, then EOF); agy,
-opencode and raw-api declare `none`. There is no CLI verb or MCP tool for
+opencode, copilot and raw-api declare `none`. There is no CLI verb or MCP tool for
 messages in this release (`claudexor follow` is the later surface), and the
 ACP server's `session/prompt` on an active session is refused rather than
 bridged into a steer.

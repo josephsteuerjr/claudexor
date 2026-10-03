@@ -434,7 +434,7 @@ engine older than 3.16.0 omits both the field and the route): Codex declares
 `next_tool_boundary` (the message is queued on the live stream-json stdin and
 picked up right after the current tool batch, or as the next native turn of
 the same run when it arrives during the final text; recorded on Claude Code
-2.1.283); Cursor, Antigravity, OpenCode and raw-api declare `none` and answer
+2.1.283); Cursor, Antigravity, OpenCode, GitHub Copilot and raw-api declare `none` and answer
 `unsupported` without any native write. The message is admitted journal-first
 (`message.accepted`) and closed with `message.delivered` or `message.refused`
 on the run's event stream and timeline, where the text shows as the row detail;

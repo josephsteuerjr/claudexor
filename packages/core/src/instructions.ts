@@ -2,7 +2,7 @@ import type { HarnessRunSpec } from "@claudexor/schema";
 
 /**
  * Layer caller-supplied per-run instructions onto the prompt for harnesses with
- * NO native system-prompt flag (cursor, agy, opencode, raw-api). Claude and Codex use
+ * NO native system-prompt flag (cursor, agy, opencode, copilot, raw-api). Claude and Codex use
  * their native additive channels (`--append-system-prompt-file`, `developer_instructions`)
  * instead and never call this. The block is explicitly delimited so the model
  * reads it as system framing, not as part of the user's request.

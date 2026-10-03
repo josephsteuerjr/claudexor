@@ -400,8 +400,8 @@ export const HarnessCapabilityProfile = z
      * per adapter: codex declares mid_turn (turn/steer, recorded on 0.153.3 and
      * 0.156.1); claude declares next_tool_boundary (a uuid-bearing user frame on
      * the live stdin is folded into the running turn after the current tool
-     * batch, recorded on 2.1.283); cursor, agy, opencode and raw-api have no
-     * channel. Consumers: the agent-capability
+     * batch, recorded on 2.1.283); cursor, agy, opencode, copilot and raw-api have
+     * no channel. Consumers: the agent-capability
      * catalog row (`liveInput`) and the daemon's live-input registry, which
      * answers `unsupported` without a native write when this is none.
      */
