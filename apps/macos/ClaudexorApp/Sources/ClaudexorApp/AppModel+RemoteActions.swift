@@ -15,11 +15,11 @@ struct RemoteNativeLoginReadiness: Equatable {
 }
 
 /// The installable-harness allowlist — the ONE Swift copy, mirroring the
-/// CLI SSOT (`INSTALLABLE_HARNESSES` in
-/// packages/cli/src/harness-installer.ts). The remote CLI re-enforces the
+/// CLI SSOT (`INSTALLABLE_HARNESSES` in packages/cli/src/harness-command-specs.ts;
+/// RemoteInstallAllowlistTests pins the mirror). The remote CLI re-enforces the
 /// allowlist itself (usage exit 2 for anything else); this constant only
 /// feeds the Settings install menu and the pre-flight guard.
-let installableRemoteHarnesses = ["agy", "claude", "codex", "cursor", "opencode"]
+let installableRemoteHarnesses = ["agy", "claude", "codex", "copilot", "cursor", "opencode"]
 
 enum RemoteHarnessInstallVerification: String, Decodable, Equatable, Sendable {
     case releaseVerified = "release_verified"
