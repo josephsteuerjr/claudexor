@@ -31,7 +31,7 @@ export interface CredentialAccountProbeReceipt {
 
 export interface DoctorSpec {
   cwd: string;
-  /** Explicitly permit a paid conformance prompt. Default probes must never spend credits. */
+  /** ACP opt-in for one paid conformance prompt; other adapters may ignore it. */
   conformance?: boolean;
   /** Optional scoped env for probes that must mirror a concrete run route. */
   env?: Record<string, string | null | undefined>;

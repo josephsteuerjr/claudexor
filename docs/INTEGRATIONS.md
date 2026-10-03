@@ -885,6 +885,77 @@ asserted by the adapter's conformance test through
 re-record the `recorded-*` fixture and re-verify the expectations; the
 fixture-freshness gate discloses drift.
 
+**GitHub Copilot (ACP client)** — `packages/harness-acp` exports
+`createAcpAdapter(copilot)`. This runs Copilot as a Claudexor harness; the
+`plugins/copilot` integration above lets Copilot call Claudexor as a host.
+The data row pins `@github/copilot` for deterministic installation, without
+claiming live verification. Store a token with
+`claudexor secrets set copilot --from-env COPILOT_TOKEN`; an account profile
+uses an `api_key` secret named `copilot:<profile>`. The child receives only
+the selected managed secret as `COPILOT_GITHUB_TOKEN`, with `HOME` and
+`COPILOT_HOME` scoped to its lane. Ambient `GH_TOKEN` / `GITHUB_TOKEN` and
+other provider credentials are removed. Native/device-code login is stage 2.
+
+Wire: one `copilot --acp --stdio` process per attempt, using the stable v1
+client exported by `@agentclientprotocol/sdk` 1.5.1. Startup flags live in the
+vendor row and were checked against the [official CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference),
+not a locally installed Copilot binary. The client negotiates `initialize`,
+creates `session/new {cwd, mcpServers: []}`, then sends one `session/prompt`.
+`--model` and `--effort` preserve requested values. Readonly restricts
+`--available-tools` to `view,glob,grep`; tool allow/deny lists narrow the
+selected profile. Workspace permission callbacks admit typed read/search,
+edit and command requests within cwd; full selects `allow_always` when
+offered, while inherit-native declines new client permission grants.
+
+The free doctor checks the binary, managed token, `initialize` and
+`session/new`, without sending a prompt. ACP authentication-required errors
+become a `not_logged_in` check. An explicit **adapter API** call
+`adapter.doctor({cwd, conformance: true})` permits one paid write prompt in a
+disposable workspace. Only an observed write permission callback changes
+that adapter instance's `write_mechanism` to `tool_policy`; otherwise it
+stays `none` with a disclosure. This observation is not persisted as proof
+for other installations or future instances. Default readiness is degraded,
+with paid capability verification `not_run`, so it is not an automatic
+doctor-OK default route.
+
+Copilot ACP is in preview and may execute writes without sending
+`session/request_permission` ([upstream #4537](https://github.com/github/copilot-cli/issues/4537)).
+The CLI tool allowlist is the readonly mechanism. Workspace commands are
+not an OS sandbox, and writes remain unfenced when callbacks are absent.
+`--no-remote` disables remote control, not network access: web policy is
+`uncontrolled`, and strict web-off requests refuse. Live input, session/load,
+MCP injection, cloud execution and Copilot as a main model source are not
+provided in stage 1.
+
+Events: `agent_message_chunk` → delta `message`, `agent_thought_chunk` →
+`thinking`, `plan` → plan `status`, tool call/update → `tool_call`, typed
+`tool_result` and diff `file_change`. The first single-line
+`Info: Disabled tools: …` chunk is status. Root tool activity resets the
+candidate answer; child-agent text never becomes the final answer.
+`end_turn` produces a final message (`final_source: session/prompt`) only
+with a nonempty root answer and no unfinished tools. Refusal and limit stops
+produce `error` then `completed`; cancellation produces aborted completion
+after process-tree cleanup. Connection loss after prompt dispatch is never
+retried by this adapter. Cancellation sends `session/cancel` and uses the
+shared process-tree death proof; unconfirmed termination is an error.
+
+Frames are limited to 8 MiB, process and event queues to 16 entries each,
+and independently drained stderr to its last 64 KiB. Unknown updates retain
+their original wire line in the redacted transcript. ACP `usage_update`
+reports context occupancy, not billable token counts; cumulative USD cost
+is converted to deltas for run spend. Missing/non-USD cost stays unknown.
+Model choices come from `session/new.configOptions` with category `model`,
+or advisory `origin: hint` rows. No live verification stamp is fabricated.
+WorkReport transport is `validated`: the orchestrator supplies and validates
+its fenced final report without native JSON-schema support.
+
+`recorded-*.jsonl` fixtures in this package are explicitly **synthetic** ACP
+specification and ouroboros#769 scenarios. Tests replay them through real
+stdio and also exercise `harness-fake` and this repository's ACP server.
+They do not prove current Copilot behavior. Permission, environment, launch,
+translation and lifecycle semantics credit Róger Valderrama (@germago119);
+the Q00 MIT notice is retained in `packages/harness-acp/NOTICE`.
+
 **Claude Code** — wire: `claude -p … --output-format stream-json --verbose`
 (one-shot prompt uses `--input-format text` and stdin; interactive runs keep
 `stream-json` stdin with their `initialize` handshake). System additions use
@@ -1148,7 +1219,7 @@ subscription sessions are always preferred.
 | `CLAUDEXOR_CONFIG_DIR` | util | Relocates the whole config/state root (default `~/.claudexor/v3`; tests and CI use a disposable absolute path). |
 | `CLAUDEXOR_BUILD_SHA` | util | Build-time stamp of the engine's git commit SHA (packaging sets it); without it a dev checkout reads `git rev-parse HEAD` and packaged builds report `unknown`. Reported in the handshake build identity. |
 | `CLAUDEXOR_DISABLE_STORED_SECRETS` | secrets | Ignore v2 file-stored secret refs entirely (hermetic runs; native sessions still work). |
-| `CLAUDEXOR_CODEX_BIN` / `CLAUDEXOR_CLAUDE_BIN` / `CLAUDEXOR_CURSOR_BIN` / `CLAUDEXOR_OPENCODE_BIN` / `CLAUDEXOR_AGY_BIN` | adapters | Explicit vendor CLI binary when PATH discovery is not enough. |
+| `CLAUDEXOR_CODEX_BIN` / `CLAUDEXOR_CLAUDE_BIN` / `CLAUDEXOR_CURSOR_BIN` / `CLAUDEXOR_OPENCODE_BIN` / `CLAUDEXOR_AGY_BIN` / `CLAUDEXOR_COPILOT_BIN` | adapters | Explicit vendor CLI binary when PATH discovery is not enough. |
 | `CLAUDEXOR_CODEX_API_KEY` / `CLAUDEXOR_ANTHROPIC_API_KEY` / `CLAUDEXOR_CURSOR_API_KEY` | adapters | Claudexor-scoped API-key overrides (take precedence over provider env names). |
 | `CLAUDEXOR_CODEX_MODEL` | codex adapter | Default model override for the codex route. |
 | `CLAUDEXOR_CODEX_NATIVE_HOME` / `CLAUDEXOR_CLAUDE_NATIVE_DIR` | adapters | Explicit Claudexor-owned Codex profile or Claude native config directory overrides. |

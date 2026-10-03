@@ -1,6 +1,7 @@
 node_modules
 dist
 .turbo
+.wt-tmp
 coverage
 pnpm-lock.yaml
 packages/*/generated

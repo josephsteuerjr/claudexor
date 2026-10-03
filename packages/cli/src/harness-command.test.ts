@@ -29,7 +29,7 @@ describe("harnessCommand", () => {
     expect(harnessCommand(parseArgs(["harness", "list"]), true)).toBe(0);
     expect(mocks.printJson).toHaveBeenCalledTimes(1);
     const { harnesses } = mocks.printJson.mock.calls[0]?.[0] as { harnesses: string[] };
-    for (const id of ["codex", "claude", "cursor"]) expect(harnesses).toContain(id);
+    for (const id of ["codex", "claude", "cursor", "copilot"]) expect(harnesses).toContain(id);
     expect(harnesses.filter((id) => (FAKE_KINDS as readonly string[]).includes(id))).toEqual([]);
     expect(mocks.print).not.toHaveBeenCalled();
   });
@@ -73,7 +73,7 @@ describe("harnessCommand", () => {
     expect(harnessCommand(parseArgs(["harness", "bogus"]), false)).toBe(2);
     expect(mocks.printUsageError).toHaveBeenCalledWith(
       false,
-      "usage: claudexor harness list [--all] | install <agy|claude|codex|cursor|opencode> [--target <local|remote>] [--dry-run] [--yes]",
+      "usage: claudexor harness list [--all] | install <agy|claude|codex|copilot|cursor|opencode> [--target <local|remote>] [--dry-run] [--yes]",
     );
   });
 
