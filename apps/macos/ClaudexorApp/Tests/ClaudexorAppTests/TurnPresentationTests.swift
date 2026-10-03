@@ -337,9 +337,18 @@ import ClaudexorKit
     @Test func managedSecretSlotPinsTheEngineGrammarPerFamily() {
         #expect(AuthSheetPresentation.managedSecretSlot(for: .openrouter) == "openrouter")
         #expect(AuthSheetPresentation.managedSecretSlot(for: .raw) == "raw")
+        #expect(AuthSheetPresentation.managedSecretSlot(for: .copilot) == "copilot")
         // A family without an API-key fallback maps to nil: no key panel,
         // no Store-key CTA.
         #expect(AuthSheetPresentation.managedSecretSlot(for: .fake) == nil)
+    }
+
+    /// Copilot's only credential is the managed token: the sheet's Recheck and
+    /// the post-store verify both probe the api-key route, as for opencode.
+    @Test func copilotReadinessRequestsProbeTheManagedTokenRoute() {
+        let apiKey = AuthReadinessRefreshRequest(authRequest: .apiKey, source: .apiKeyEnvironment)
+        #expect(HarnessFamily.copilot.defaultAuthReadinessRequest == apiKey)
+        #expect(HarnessFamily.copilot.apiKeyAuthReadinessRequest == apiKey)
     }
 
     @Test func serverOwnedJobTargetWinsWithoutTreatingDefaultAsMissing() {

@@ -91,7 +91,7 @@ struct HarnessFamily: RawRepresentable, Identifiable, Hashable {
     var apiKeyAuthReadinessRequest: AuthReadinessRefreshRequest? {
         if self == .codex {
             AuthReadinessRefreshRequest(authRequest: .apiKey, source: .providerAuthFile)
-        } else if self == .claude || self == .cursor || self == .opencode || self == .raw || self == .openrouter {
+        } else if self == .claude || self == .cursor || self == .opencode || self == .copilot || self == .raw || self == .openrouter {
             AuthReadinessRefreshRequest(authRequest: .apiKey, source: .apiKeyEnvironment)
         } else {
             nil
