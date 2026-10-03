@@ -54,8 +54,8 @@ struct HarnessFamily: RawRepresentable, Identifiable, Hashable {
     static let copilot = Self(rawValue: "copilot")
     static let agy = Self(rawValue: "agy")
     static let raw = Self(rawValue: "raw-api")
-    /// OpenRouter is a meta-provider instance; it renders when the daemon
-    /// lists a configured route, rather than appearing among built-in rows.
+    /// The openrouter raw-API instance (registry.ts `createRawApiAdapter({ id: "openrouter" })`): a second api-key
+    /// meta-host, not a built-in family row — it renders only when its key is configured and the daemon lists it live.
     static let openrouter = Self(rawValue: "openrouter")
     static let fake = Self(rawValue: "fake")
     static let builtIns: [Self] = [.codex, .claude, .cursor, .opencode, .copilot, .agy, .raw]
