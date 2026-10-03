@@ -277,6 +277,37 @@ describe("ACP discovery and free/explicit probes", () => {
     const cwd = commands(peer.log).find((c) => c["method"] === "session/new")!["params"].cwd;
     expect(resolve(cwd)).not.toBe(root);
   });
+  // Remote install reads the `installed` check after the installer exits; the
+  // shared readiness table maps it (and `api_key`) for every surface.
+  it("keeps the installed check when a later doctor step fails", async () => {
+    const checks = async (target: ReturnType<typeof createAcpAdapter>) =>
+      (await target.doctor({ cwd: root })).checks.map((c) => [c.id, c.status, c.detail]);
+    expect(await checks(adapter().adapter)).toEqual([
+      ["installed", "pass", undefined],
+      ["api_key", "pass", undefined],
+      ["acp_session", "pass", expect.any(String)],
+      ["write_conformance", "skip", expect.any(String)],
+    ]);
+    expect(await checks(adapter("auth").adapter)).toEqual([
+      ["installed", "pass", undefined],
+      ["api_key", "pass", undefined],
+      ["not_logged_in", "fail", expect.stringContaining("not logged in")],
+    ]);
+    const missing = createAcpAdapter({
+      ...copilot,
+      binary: join(root, "missing"),
+      binaryEnv: "CLAUDEXOR_TEST_ACP_BIN",
+    });
+    expect(await checks(missing)).toEqual([
+      ["installed", "fail", expect.stringContaining("not installed")],
+    ]);
+    secrets.token = null;
+    expect(await checks(adapter().adapter)).toEqual([
+      ["installed", "pass", undefined],
+      ["api_key", "fail", expect.stringContaining("store the copilot secret")],
+    ]);
+  });
+
   it("types auth-required, missing binary/token, protocol mismatch and hint fallback", async () => {
     expect((await adapter("auth").adapter.doctor({ cwd: root })).reasons.join()).toContain(
       "not_logged_in",

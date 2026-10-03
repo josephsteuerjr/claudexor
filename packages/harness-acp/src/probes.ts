@@ -13,6 +13,7 @@ import {
   ConformanceReport,
   HarnessModel,
   HarnessRunSpec,
+  type ConformanceCheck,
   type HarnessCapabilityProfile,
   type Intent,
 } from "@claudexor/schema";
@@ -114,9 +115,21 @@ export function acpProbes(
       return acpManifest(entry, version, profile);
     },
     async doctor(spec: DoctorSpec) {
+      // Check ids follow the shared readiness table: `installed` is the binary
+      // check remote install reads, `api_key` the managed token. A passed check
+      // stays in the report when a later step fails.
+      const passed: ConformanceCheck[] = [];
+      let step = "acp_session";
       try {
         if (spec.authSource && spec.authSource !== "api_key_env")
           throw new HarnessUnavailableError("ACP supports only api_key_env authentication");
+        step = "installed";
+        binary();
+        passed.push({ id: "installed", status: "pass" });
+        step = "api_key";
+        acpToken(entry);
+        passed.push({ id: "api_key", status: "pass" });
+        step = "acp_session";
         if (spec.conformance) profile.access_control.write_mechanism = "none";
         const observation = await probe(spec, spec.conformance === true);
         if (spec.conformance && observation.writePermission)
@@ -127,8 +140,7 @@ export function acpProbes(
           enabled_intents: INTENTS,
           reasons: [ACP_DISCLOSURE],
           checks: [
-            { id: "binary", status: "pass" },
-            { id: "token", status: "pass" },
+            ...passed,
             {
               id: "acp_session",
               status: "pass",
@@ -152,14 +164,15 @@ export function acpProbes(
           ],
         });
       } catch (error) {
-        const code = error instanceof AcpFailure ? error.code : "acp_session";
-        const detail = error instanceof Error ? `${code}: ${error.message}` : String(error);
+        const code = error instanceof AcpFailure ? error.code : step;
+        const message = error instanceof Error ? error.message : String(error);
+        const detail = error instanceof Error ? `${code}: ${message}` : message;
         return ConformanceReport.parse({
           harness_id: entry.id,
           status: "unavailable",
           disabled_intents: INTENTS,
           reasons: [detail],
-          checks: [{ id: code, status: "fail", detail }],
+          checks: [...passed, { id: code, status: "fail", detail: message }],
           auth_sources: [
             { source: "api_key_env", availability: "unavailable", verification: "not_run", detail },
           ],
