@@ -22,7 +22,7 @@ export class AcpEvents {
   private answerBytes = 0;
   private firstChunk = true;
   private cost = 0;
-  private calls = new Map<string, { tool: ToolRef; terminal: boolean; child: boolean }>();
+  private calls = new Map<string, { tool: ToolRef; terminal: boolean }>();
 
   constructor(private readonly sessionId: string) {}
 
@@ -115,12 +115,11 @@ export class AcpEvents {
       };
       call = {
         tool: {
-          name: update.title ?? update.kind ?? "tool",
+          name: (update.title ?? update.kind ?? "tool").slice(0, 512),
           kind: kinds[update.kind ?? ""] ?? "other",
           use_id: id,
         },
         terminal: false,
-        child,
       };
       this.calls.set(id, call);
       if (!child) {
@@ -130,6 +129,16 @@ export class AcpEvents {
       events.push(this.event("tool_call", { tool: { ...call.tool } }));
     }
     if (call.terminal) return events;
+    // ACP may attach a diff before its terminal status update. Keep that
+    // evidence when it arrives; a file_change is not proof of a disk write.
+    for (const item of update.content ?? []) {
+      if (item.type === "diff")
+        events.push(
+          this.event("file_change", {
+            payload: { path: item.path, old_text: item.oldText, new_text: item.newText },
+          }),
+        );
+    }
     if (update.status !== "completed" && update.status !== "failed") return events;
     call.terminal = true;
     const output = record(update.rawOutput);
@@ -149,14 +158,6 @@ export class AcpEvents {
         },
       }),
     );
-    for (const item of update.content ?? []) {
-      if (item.type === "diff")
-        events.push(
-          this.event("file_change", {
-            payload: { path: item.path, old_text: item.oldText, new_text: item.newText },
-          }),
-        );
-    }
     return events;
   }
 

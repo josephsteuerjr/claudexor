@@ -66,6 +66,8 @@ describe("lane home paths", () => {
     expect(a1.env["HOME"]).toBe(a1.homeDir);
     expect(a1.env["CODEX_HOME"]).toBe(join(a1.homeDir, ".codex"));
     expect(a1.env["CLAUDE_CONFIG_DIR"]).toBe(join(a1.homeDir, ".claude"));
+    expect(a1.env["COPILOT_HOME"]).toBe(join(a1.homeDir, ".copilot"));
+    expect(existsSync(a1.env["COPILOT_HOME"] as string)).toBe(true);
     // Confinement (INV-063): the lane home lives under the project runtime
     // namespace's `lanes/` dir, outside every worktree.
     expect(a1.homeDir).toBe(laneHomeDir(projectRuntimeDir(repo), "th-1", "codex", "work"));

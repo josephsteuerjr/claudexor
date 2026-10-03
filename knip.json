@@ -1,6 +1,10 @@
 {
   "$schema": "https://unpkg.com/knip@latest/schema.json",
   "workspaces": {
+    "packages/harness-acp": {
+      "entry": ["fixtures/agent.mjs"],
+      "project": ["src/**/*.ts", "fixtures/*.mjs"]
+    },
     "packages/cli": {
       "project": ["src/**/*.ts"]
     },

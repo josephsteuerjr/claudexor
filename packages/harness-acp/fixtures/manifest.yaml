@@ -1,0 +1,29 @@
+# Names follow the requested recorded-*.jsonl convention; all streams are
+# SYNTHETIC ACP v1 / ouroboros#769 scenarios, never live Copilot evidence.
+cli: copilot
+fixtures:
+  recorded-basic.jsonl:
+    source: synthetic
+    expectations:
+      started_events: 1
+      final_messages: 1
+      final_source: session/prompt
+      final_is_last_message: true
+      thinking_events: 1
+      delta_messages: 1
+      tool_error_results: 0
+      typed_rate_limit: false
+  recorded-permission.jsonl:
+    source: synthetic
+    expectations:
+      started_events: 1
+      final_messages: 1
+      final_source: session/prompt
+      final_is_last_message: true
+      tool_error_results: 0
+  recorded-unfinished.jsonl:
+    source: synthetic
+    expectations:
+      started_events: 1
+      final_messages: 0
+      tool_error_results: 0

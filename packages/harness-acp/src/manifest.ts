@@ -39,7 +39,8 @@ export function acpManifest(entry: AcpEntry, version: string, profile: HarnessCa
       work_report_transport: "validated",
       model_inventory_absence: "advisory",
       effort_levels: entry.effortLevels,
-      known_models: entry.modelHints,
+      // Unverified fallback ids are models() rows with origin=hint, not a
+      // manifest known_models list (which requires a live verification stamp).
       web_policy: "uncontrolled",
     },
     auth_modes: ["api_key"],

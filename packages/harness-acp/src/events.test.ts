@@ -116,4 +116,24 @@ describe("ACP event translation", () => {
     });
     expect(result.at(-1)?.tool?.status).toBe("ok");
   });
+
+  it("retains a diff that arrives before the tool finishes", () => {
+    const events = new AcpEvents("s");
+    expect(
+      events
+        .update({
+          sessionUpdate: "tool_call",
+          toolCallId: "t",
+          kind: "edit",
+          status: "in_progress",
+          content: [{ type: "diff", path: "a", oldText: "old", newText: "new" }],
+        })
+        .map((e) => e.type),
+    ).toEqual(["tool_call", "file_change"]);
+    expect(
+      events
+        .update({ sessionUpdate: "tool_call_update", toolCallId: "t", status: "completed" })
+        .map((e) => e.type),
+    ).toEqual(["tool_result"]);
+  });
 });

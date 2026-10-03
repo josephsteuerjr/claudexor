@@ -30,6 +30,9 @@ export function connectAcp(input: {
   });
   let termination: string | undefined;
   let closing = false;
+  let replyId: acp.JsonRpcId | undefined;
+  let replyReady: Promise<void> | undefined;
+  let replied: (() => void) | undefined;
   const process = spawnProcess(input.binary, input.args, {
     cwd: spec.cwd,
     env: input.env,
@@ -59,12 +62,17 @@ export function connectAcp(input: {
         io.write(line);
         // Cancellation must reach the pipe even when the transcript is backpressured.
         if (!abort.signal.aborted) await wire("client", line);
+        if ("id" in message && !("method" in message) && message.id === replyId) replied?.();
       },
     }),
     readable: new ReadableStream<acp.AnyMessage>(
       {
         async pull(controller) {
           try {
+            // SDK handlers are concurrent. Wait for each inbound request's
+            // response before reading another, so its writer queue stays bounded.
+            await replyReady;
+            if (closing) return;
             for (;;) {
               const next = await process.next();
               if (closing) return;
@@ -99,6 +107,12 @@ export function connectAcp(input: {
                   }
                   // Preserve unknown updates/notifications without SDK filtering or console logging.
                   continue;
+                }
+                if (typeof envelope["method"] === "string") {
+                  replyId = envelope["id"] as acp.JsonRpcId;
+                  replyReady = new Promise<void>((resolve) => {
+                    replied = resolve;
+                  });
                 }
                 controller.enqueue(message as acp.AnyMessage);
                 return;
@@ -143,6 +157,7 @@ export function connectAcp(input: {
     close(): Promise<void> {
       cleanup ??= (async () => {
         closing = true;
+        replied?.();
         abort.abort();
         connection.close();
         stdin?.end();

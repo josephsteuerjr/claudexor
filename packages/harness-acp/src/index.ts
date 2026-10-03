@@ -1,29 +1,24 @@
-import { HarnessUnavailableError, type HarnessAdapter } from "@claudexor/core";
-import { ConformanceReport } from "@claudexor/schema";
+import type { HarnessAdapter } from "@claudexor/core";
 import type { AcpEntry } from "./entry.js";
 import { acpCapabilityProfile } from "./manifest.js";
 import { acpRunner } from "./run.js";
+import { acpProbes } from "./probes.js";
+import { probeAcpProfile } from "./env.js";
 export { copilot } from "./entry.js";
 
 /** A vendor identity over the shared ACP v1 transport. */
 export function createAcpAdapter(entry: AcpEntry): HarnessAdapter {
   const runner = acpRunner(entry);
-  const unavailable = () =>
-    new HarnessUnavailableError(`${entry.displayName} ACP transport is not ready`);
+  const profile = acpCapabilityProfile();
   return {
     id: entry.id,
-    capabilityProfile: acpCapabilityProfile(),
-    async discover() {
-      throw unavailable();
-    },
-    async doctor() {
-      return ConformanceReport.parse({
-        harness_id: entry.id,
-        status: "unavailable",
-        reasons: [unavailable().message],
-      });
-    },
+    effortParameter: "--effort",
+    capabilityProfile: profile,
+    ...acpProbes(entry, profile, runner),
     run: runner.run,
     cancel: runner.cancel,
+    async probeCredentialProfile(credential) {
+      return probeAcpProfile(entry, credential);
+    },
   };
 }

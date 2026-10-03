@@ -180,10 +180,12 @@ export function acpRunner(entry: AcpEntry) {
       try {
         for await (const event of queue.read()) {
           // Redact before storage, including unknown wire fields and error diagnostics.
-          const json = JSON.stringify(event);
-          yield JSON.parse(
-            redactSecrets(token ? json.split(token).join("[REDACTED]") : json),
-          ) as HarnessEvent;
+          const json = JSON.stringify(event, (_key, value: unknown) =>
+            typeof value === "string"
+              ? redactSecrets(token ? value.split(token).join("[REDACTED]") : value)
+              : value,
+          );
+          yield JSON.parse(json) as HarnessEvent;
         }
       } finally {
         queue.close();

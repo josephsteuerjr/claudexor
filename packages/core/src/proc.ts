@@ -585,4 +585,4 @@ export async function runCaptureRaw(
   }
 }
 
-export { armOrphanExit, type OrphanExitOptions } from "./process-lifeline.js";
+export { armOrphanExit } from "./process-lifeline.js";
