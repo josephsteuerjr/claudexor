@@ -890,7 +890,7 @@ fixture-freshness gate discloses drift.
 `plugins/copilot` integration above lets Copilot call Claudexor as a host.
 The data row pins `@github/copilot` for deterministic installation, without
 claiming live verification. Store a token with
-`claudexor secrets set copilot --from-env COPILOT_TOKEN`; an account profile
+`claudexor secrets set copilot --from-env COPILOT_GITHUB_TOKEN`; an account profile
 uses an `api_key` secret named `copilot:<profile>`. The child receives only
 the selected managed secret as `COPILOT_GITHUB_TOKEN`, with `HOME` and
 `COPILOT_HOME` scoped to its lane. Ambient `GH_TOKEN` / `GITHUB_TOKEN` and
