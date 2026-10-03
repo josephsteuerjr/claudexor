@@ -1,18 +1,40 @@
 import type { DaemonRunRecord } from "./daemon-server.js";
 
-/** Find a queued/running thread run that can mutate its project tree. */
-export function findActiveMutatingThreadRun(
-  records: DaemonRunRecord[],
+type ThreadRunRecord = Pick<DaemonRunRecord, "state" | "params">;
+
+function findQueuedOrRunningThreadRun<R extends ThreadRunRecord>(
+  records: readonly R[],
   threadId: string,
-): DaemonRunRecord | undefined {
+  mutatingOnly: boolean,
+): R | undefined {
   return records.find((record) => {
     if (record.state !== "queued" && record.state !== "running") return false;
     const params =
       record.params && typeof record.params === "object"
         ? (record.params as Record<string, unknown>)
         : {};
-    return params["threadId"] === threadId && params["mode"] === "agent";
+    return params["threadId"] === threadId && (!mutatingOnly || params["mode"] === "agent");
   });
+}
+
+/** Find a queued/running thread run that can mutate its project tree. */
+export function findActiveMutatingThreadRun(
+  records: DaemonRunRecord[],
+  threadId: string,
+): DaemonRunRecord | undefined {
+  return findQueuedOrRunningThreadRun(records, threadId, true);
+}
+
+/**
+ * Find ANY queued/running turn of a thread, read-only modes included. Purge
+ * needs this wider check: an ask/plan turn runs inside the durable lane home
+ * that purge deletes (INV-034), so only an idle thread may be purged.
+ */
+export function findActiveThreadRun<R extends ThreadRunRecord>(
+  records: readonly R[],
+  threadId: string,
+): R | undefined {
+  return findQueuedOrRunningThreadRun(records, threadId, false);
 }
 
 export function threadIdOfRun(record: DaemonRunRecord): string | null {

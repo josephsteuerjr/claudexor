@@ -38,25 +38,29 @@ extension AppModel {
         gateway(for: locationID) === requestClient
     }
 
+    /// Returns true when the cached list of the location now reflects the
+    /// engine; false when it kept the last-known rows.
+    @discardableResult
     func refreshRemoteThreads(
         _ locationID: ExecutionLocationID,
         using preparedClient: GatewayClient? = nil
-    ) async {
+    ) async -> Bool {
         guard let remote = remoteConnection(for: locationID),
               let client = preparedClient ?? remoteClients[locationID],
               isCurrentGateway(client, at: locationID)
-        else { return }
+        else { return false }
         do {
             let list = try await client.listThreads()
-            guard isCurrentGateway(client, at: locationID) else { return }
+            guard isCurrentGateway(client, at: locationID) else { return false }
             let now = Date()
             remoteThreadCache.removeAll { $0.locationID == locationID }
             remoteThreadCache.append(contentsOf: list.threads.map {
                 RemoteThreadCacheEntry(locationID: locationID, thread: $0, syncedAt: now)
             })
             persistRemoteThreadCache()
+            reconcileThreadStatus(at: locationID, listGaps: ThreadListGaps(list))
             await refreshRemoteRuns(locationID, using: client)
-            guard isCurrentGateway(client, at: locationID) else { return }
+            guard isCurrentGateway(client, at: locationID) else { return true }
             for thread in list.threads {
                 guard let runID = thread.headRunId,
                       remoteTasks[locationID]?.first(where: {
@@ -70,10 +74,12 @@ extension AppModel {
                 list.droppedThreads == 0
                 ? "Synced \(list.threads.count) thread(s)."
                 : "Synced with \(list.droppedThreads) incompatible thread row(s) hidden."
+            return true
         } catch {
-            guard isCurrentGateway(client, at: locationID) else { return }
+            guard isCurrentGateway(client, at: locationID) else { return false }
             remoteConnectionMessages[remote.id] =
                 "Could not sync; showing cached thread summaries."
+            return false
         }
     }
 

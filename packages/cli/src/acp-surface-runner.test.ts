@@ -431,6 +431,48 @@ describe("acpSessionQuery terminal RunFacts binding", () => {
   });
 });
 
+describe("ACP session/list", () => {
+  it("lists active and closed threads but never a trashed one", async () => {
+    const daemonRun = await import("./daemon-run.js");
+    const live = await import("./live.js");
+    const ensureSpy = vi.spyOn(daemonRun, "ensureDaemon").mockResolvedValue({
+      client: {},
+      addr,
+    } as never);
+    const row = (id: string, state: string) => ({
+      id,
+      repoRoot: "/repo",
+      title: id,
+      updatedAt: "2026-10-01T00:00:00.000Z",
+      state,
+    });
+    const controlSpy = vi.spyOn(live, "controlApiFetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        threads: [
+          row("th-active", "active"),
+          row("th-closed", "closed"),
+          row("th-trash", "trashed"),
+        ],
+      }),
+    } as Response);
+    try {
+      const result = (await acpSessionQuery(
+        { mode: "__acp_session_list" },
+        undefined,
+        {} as never,
+      )) as { sessions: Array<{ sessionId: string }> };
+      expect(result.sessions.map((session) => session.sessionId)).toEqual([
+        "th-active",
+        "th-closed",
+      ]);
+    } finally {
+      ensureSpy.mockRestore();
+      controlSpy.mockRestore();
+    }
+  });
+});
+
 describe("ACP terminal primary-output projection", () => {
   const unavailableDetail = {
     applyEligibility: null,

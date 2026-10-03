@@ -283,23 +283,7 @@ struct ThreadsScreen: View {
                 )
                 .frame(maxHeight: .infinity)
             } else {
-                List(selection: Binding(
-                    get: { model.selectedLocatedThreadID },
-                    set: { locatedID in
-                        guard let locatedID,
-                              let located = model.locatedThreads.first(where: {
-                                  $0.id == locatedID
-                              })
-                        else { return }
-                        Task {
-                            await model.openThread(
-                                locationID: located.locationID,
-                                id: located.thread.id)
-                        }
-                    }
-                )) { threadListRows }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)   // let the Liquid Glass panel show through
+                threadSections   // folders of active threads, then Archived and Trash (+Lifecycle)
             }
 
             SidebarFooter()
@@ -315,12 +299,15 @@ struct ThreadsScreen: View {
                 }
             }
         )) { renameSheet }
+        .threadDeleteNowConfirmation(target: $deleteNowTarget) { confirmDeleteNow($0) }
     }
 
     @State var folderEditor = ThreadFolderEditor()
     @State var renameDraft = ""
     @State var renameTargetId: String?
     @State var renameTargetLocation: ExecutionLocationID?
+    @State var deleteNowTarget: LocatedThread?
+    @State var sidebarDisclosure = ThreadSidebarDisclosure()
     // MARK: Conversation pane
 
     private var conversation: some View {

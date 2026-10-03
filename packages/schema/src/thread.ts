@@ -170,7 +170,9 @@ export const Thread = z
       .describe("When the thread entered recoverable trash."),
     purge_after: IsoTimestamp.nullable()
       .default(null)
-      .describe("Earliest automatic purge time; 30 days after trash."),
+      .describe(
+        "End of the 30-day trash window: restore is refused after it, and the daemon's next retention pass (startup or claudexor gc) purges the thread.",
+      ),
     pre_trash_state: z
       .enum(["active", "closed"])
       .nullable()

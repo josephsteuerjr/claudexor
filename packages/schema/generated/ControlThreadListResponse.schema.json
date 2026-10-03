@@ -148,7 +148,7 @@
                   "null"
                 ],
                 "default": null,
-                "description": "When trash retention expires."
+                "description": "Restore deadline, then auto-purge."
               },
               "runIds": {
                 "type": "array",

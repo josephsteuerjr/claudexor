@@ -593,6 +593,29 @@ describe("ProjectPartitions", () => {
     f.manager.close();
   });
 
+  it("lists the purged threads of every ready store for the retention pass", () => {
+    const f = fixture();
+    const root = join(f.root, "purge-project");
+    mkdirSync(root);
+    f.partitions.registerProject({ root, idempotencyKey: "register-purge", clientId: "test" });
+    const global = f.partitions.createThread({});
+    const scoped = f.partitions.createThread({ repoRoot: root });
+    const live = f.partitions.createThread({ repoRoot: root });
+    for (const thread of [global, scoped]) {
+      f.partitions.trashThread(thread.id);
+      f.partitions.purgeThread(thread.id);
+    }
+    expect(f.partitions.listThreads().map((thread) => thread.id)).toEqual([live.id]);
+    expect(
+      f.partitions
+        .listPurgedThreads()
+        .map((thread) => thread.id)
+        .sort(),
+    ).toEqual([global.id, scoped.id].sort());
+    f.partitions.close();
+    f.manager.close();
+  });
+
   it("refuses to remove a project that still has a non-purged thread (QA-049)", () => {
     const f = fixture();
     const root = join(f.root, "referenced");

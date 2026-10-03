@@ -10,7 +10,7 @@ export const OPERATION_SUMMARIES: Record<string, string> = {
   "POST /v2/uploads/:id/finalize": "Finalize an upload into a durable attachment resource.",
   "POST /v2/handshake": "Negotiate the control protocol major before product calls.",
   "GET /v2/operations": "List the implemented operations (this catalog).",
-  "POST /v2/maintenance/gc": "Run retention garbage collection over expired run trees.",
+  "POST /v2/maintenance/gc": "Run retention GC over expired run trees and expired trash threads.",
   "GET /v2/agent-capabilities": "List the agent capability catalog this engine advertises.",
   "GET /v2/run-applicability":
     "Project the root-scoped Git prerequisite for every run/workspace shape.",

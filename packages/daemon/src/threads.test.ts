@@ -326,6 +326,21 @@ describe("ThreadStore", () => {
     expect(() => restoredStore.restoreThread(thread.id)).toThrow(/purged/);
   });
 
+  it("lists purged threads only on request, and a repeated purge journals nothing", () => {
+    const { journal, s } = store();
+    const thread = s.createThread({ repoRoot: "/tmp/proj", workspace: "isolated" });
+    const live = s.createThread({ repoRoot: "/tmp/proj" });
+    s.trashThread(thread.id);
+    s.purgeThread(thread.id);
+    expect(s.listThreads().map((item) => item.id)).toEqual([live.id]);
+    expect(s.listThreads("purged").map((item) => item.id)).toEqual([thread.id]);
+    // The retention pass calls purge again to finish a failed cleanup: the
+    // reducer keeps the purged thread as it is and the journal gains nothing.
+    const before = journal.records(0).length;
+    expect(s.purgeThread(thread.id).state).toBe("purged");
+    expect(journal.records(0).length).toBe(before);
+  });
+
   it("persists a sticky eligible pool and primary, and survives a reload", () => {
     const { root, journal, s } = store();
     const t = s.createThread({

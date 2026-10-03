@@ -275,9 +275,9 @@ export class ThreadStore {
     );
   }
 
-  listThreads(): Thread[] {
+  listThreads(only?: "purged"): Thread[] {
     return this.state.threads
-      .filter((thread) => thread.state !== "purged")
+      .filter((thread) => (only ? thread.state === only : thread.state !== "purged"))
       .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
   }
 

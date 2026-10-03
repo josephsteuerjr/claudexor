@@ -181,6 +181,20 @@
           ],
           "additionalProperties": false,
           "description": "Model resource identifiers released (or would be under dry_run), plus cleanup failures; present only when model_payload_report was requested."
+        },
+        "purged_threads": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Ids of trashed threads whose purge_after had passed and that this pass purged (or would purge under dry_run). Present only when trash_purge_report was requested; a skipped (busy) or failed purge is disclosed in errors instead."
+        },
+        "purge_leftovers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Ids of already purged threads whose directory cleanup had failed after the purge was journaled (an isolated worktree or lane home still on disk) and that this pass finished (or would finish under dry_run). Present only when trash_purge_report was requested; a cleanup that fails again is disclosed in errors and retried by the next pass."
         }
       },
       "required": [

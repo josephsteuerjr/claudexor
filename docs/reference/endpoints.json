@@ -274,7 +274,7 @@
       "path": "/v2/maintenance/gc",
       "mutating": true,
       "applicability": "global",
-      "summary": "Run retention garbage collection over expired run trees.",
+      "summary": "Run retention GC over expired run trees and expired trash threads.",
       "auth": "loopback_bearer",
       "request_schema": "ControlGcRequest",
       "parameters": [],

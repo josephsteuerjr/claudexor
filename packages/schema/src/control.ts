@@ -1093,7 +1093,7 @@ export const ControlThread = z
       .describe("Sticky write scope for write turns; null = the repo trust default."),
     state: ThreadState.default("active"),
     trashedAt: z.string().nullable().default(null).describe("When the thread entered trash."),
-    purgeAfter: z.string().nullable().default(null).describe("When trash retention expires."),
+    purgeAfter: z.string().nullable().default(null).describe("Restore deadline, then auto-purge."),
     runIds: z.array(Id).default([]).describe("Ordered run lineage of the thread."),
     headRunId: Id.nullable()
       .default(null)

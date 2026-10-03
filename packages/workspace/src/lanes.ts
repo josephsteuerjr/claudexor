@@ -168,6 +168,12 @@ export function purgeThreadLanes(projectRoot: string, threadId: string): void {
   rmSync(threadDir, { recursive: true, force: true });
 }
 
+/** Whether a lane home of one thread is still on disk: `purgeThreadLanes`
+ * failed after the purge was journaled, and the next retention pass retries. */
+export function threadLanesExist(projectRoot: string, threadId: string): boolean {
+  return existsSync(join(lanesRootDir(projectRuntimeDir(projectRoot)), threadId));
+}
+
 /**
  * Lifecycle owner (b): invalidate a credential profile's lane homes. Called
  * from credential-profile deletion so a deleted account's durable read-only

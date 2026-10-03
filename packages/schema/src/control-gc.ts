@@ -34,6 +34,12 @@ export const ControlGcRequest = z
       .describe(
         "Opt in to the advisory data-root scan: when true, the receipt carries data_root_unrecognized. Capability negotiation for engine-version skew — a client omits this unless the serving daemon is the SAME engine version, so an older daemon never sees the unknown request key and an older client never receives the unknown receipt key.",
       ),
+    trash_purge_report: z
+      .boolean()
+      .optional()
+      .describe(
+        "Opt in to the thread-purge disclosure: when true, the receipt carries purged_threads and purge_leftovers. The purges themselves always run; the same lockstep capability negotiation as data_root_report keeps older strict receipt readers compatible.",
+      ),
   })
   .strict()
   .describe("Run one retention pass over engine-owned runtime artifacts.");
@@ -116,6 +122,18 @@ export const ControlGcReceipt = z
       .optional()
       .describe(
         "Model resource identifiers released (or would be under dry_run), plus cleanup failures; present only when model_payload_report was requested.",
+      ),
+    purged_threads: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Ids of trashed threads whose purge_after had passed and that this pass purged (or would purge under dry_run). Present only when trash_purge_report was requested; a skipped (busy) or failed purge is disclosed in errors instead.",
+      ),
+    purge_leftovers: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Ids of already purged threads whose directory cleanup had failed after the purge was journaled (an isolated worktree or lane home still on disk) and that this pass finished (or would finish under dry_run). Present only when trash_purge_report was requested; a cleanup that fails again is disclosed in errors and retried by the next pass.",
       ),
   })
   .strict()

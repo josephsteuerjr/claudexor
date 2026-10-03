@@ -3,3 +3,4 @@ export * from "./control-protocol.js";
 export * from "./operation-catalog.js";
 export * from "./retention.js";
 export { normalizeExistingProjectRoot } from "./run-start.js";
+export { findActiveThreadRun } from "./thread-mutation.js";
