@@ -111,7 +111,20 @@ describe("shared account evidence composition", () => {
       }).verification,
     ).toBe("passed");
   });
-  it("only fresh authenticated matching newer quota can cover an auth rejection", () => {
+  it("the production composition ignores expired and other-subject refusals", () => {
+    for (const observation of [
+      refusal({ expires_at: new Date(Date.now() - 1).toISOString() }),
+      refusal({ profile_id: "other" }),
+      refusal({ harness_id: "codex" }),
+    ])
+      expect(composeCredentialProfileEvidence(status, evidence([observation])).verification).toBe(
+        "passed",
+      );
+    expect(composeCredentialProfileEvidence(status, evidence([refusal()])).verification).toBe(
+      "failed",
+    );
+  });
+  it("full authenticated matching newer quota covers auth independently of numeric freshness", () => {
     const snapshot: QuotaSnapshot = {
       subject: {
         harness: "claude",
@@ -130,8 +143,10 @@ describe("shared account evidence composition", () => {
         quota: { snapshots: [{ ...snapshot, ...over }], absences: [] },
       });
     expect(composed({}).verification).toBe("passed");
-    expect(composed({ freshness: "stale" }).verification).toBe("failed");
+    expect(composed({ freshness: "stale" }).verification).toBe("passed");
     expect(composed({ source: "claude_statusline" }).verification).toBe("failed");
+    expect(composed({ source: "claude_rate_limit_event" }).verification).toBe("failed");
+    expect(composed({ source: "codex_app_server_event" }).verification).toBe("failed");
     expect(
       composeCredentialProfileEvidence(status, {
         ...evidence([refusal({ model: "model-a", code: "capability_refused" })]),

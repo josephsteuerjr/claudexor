@@ -282,13 +282,13 @@ export class OrchestratorCredentials {
         model: spec.model_hint ?? null,
         route: credentialExecutionSubject(adapter.id, spec).route,
         quota: this.vendorQuotaObservations(),
-        // Typed stream refusal was already retained by the execution observer.
-        // This conditional differential keeps only poller/local probe discovery.
-        transients: this.host.credentialObserverFactory?.() ? [] : transients,
+        transients,
         probe: adapter.probeCredentialProfile?.bind(adapter),
         // #363: a verdict about a credential the try no longer holds — a
         // login or profile change landed since it spawned — is not recorded.
         record: (obs) => {
+          // Keep the verdict/event, while its dispatch-bound observer owns storage.
+          if (obs.source === "attempt_stream" && this.host.credentialObserverFactory?.()) return;
           if (authority && binding)
             authority.recordBound(binding, {
               ...obs,

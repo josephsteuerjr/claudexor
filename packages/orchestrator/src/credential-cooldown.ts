@@ -1,39 +1,5 @@
-import type {
-  CredentialRoute,
-  CredentialUnusableObservation,
-  QuotaSnapshot,
-} from "@claudexor/schema";
+import type { CredentialUnusableObservation, QuotaSnapshot } from "@claudexor/schema";
 import { ControlProblem, quotaSnapshotAvailability } from "@claudexor/schema";
-
-/**
- * THE live-observation matcher (A7): does a typed `credential_unusable`
- * observation currently condemn this subject for this decision's model? One
- * owner, so rotation refusal, exhaustion rows, and the pool terminal can never
- * disagree about which observation is live. Expired observations never match
- * (the self-expiry half of the clearing contract); a model-scoped observation
- * matches only its own model, while a credential-wide one (model=null) matches
- * every route — the write side owns that scoping decision.
- */
-export function liveUnusableFor(
-  observations: readonly CredentialUnusableObservation[],
-  harnessId: string,
-  profileId: string | null,
-  model?: string | null,
-  now: Date = new Date(),
-  route?: CredentialRoute | null,
-): CredentialUnusableObservation | null {
-  for (const obs of observations) {
-    if (obs.harness_id !== harnessId) continue;
-    if (obs.profile_id !== profileId) continue;
-    if (obs.credential_route !== undefined && route !== undefined && obs.credential_route !== route)
-      continue;
-    if (obs.model !== null && obs.model !== (model ?? null)) continue;
-    const expires = Date.parse(obs.expires_at);
-    if (!Number.isFinite(expires) || expires <= now.getTime()) continue;
-    return obs;
-  }
-  return null;
-}
 
 /**
  * Typed verdict that a credential subject's own observed quota evidence blocks

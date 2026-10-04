@@ -13,6 +13,8 @@ import type { TransientFailureObservation } from "./transientClassify.js";
 import { CredentialUnusableLedger } from "../../daemon/src/credential-unusable-ledger.js";
 import { createCredentialExecutionObserver } from "./credential-execution.js";
 import type { CredentialExecutionSubject } from "@claudexor/core";
+import { rotateSpecOnTypedLimit } from "./credential-profile-rotation.js";
+import { newAttemptOutputMarkers } from "./attemptOutputMarkers.js";
 
 // #363: the A7 differential verdict about a try's CURRENT subject is recorded
 // only while the credential that try bound is still the account's current one.
@@ -75,6 +77,66 @@ function fixture() {
 }
 
 describe("OrchestratorCredentials differential verdict fence (#363)", () => {
+  it("keeps the typed rotation verdict and event with a managed observer, without duplicate storage", async () => {
+    const ledger = new CredentialUnusableLedger();
+    const recorded: CredentialUnusableObservation[] = [];
+    const host = {
+      quotaSnapshots: () => [],
+      quotaAbsences: () => [],
+      credentialUnusable: () => ledger.live(),
+      credentialEvidence: () => ledger,
+      credentialObserverFactory: () => (subject: CredentialExecutionSubject) =>
+        createCredentialExecutionObserver(ledger, ledger.bind(subject)),
+      recordCredentialUnusable: (obs: CredentialUnusableObservation) => recorded.push(obs),
+    } as unknown as CredentialResolutionHost;
+    const spec = {
+      model_hint: "model-a",
+      auth_preference: "subscription",
+      credential_profile: null,
+      extra: {},
+    } as unknown as HarnessRunSpec;
+    const observations = new OrchestratorCredentials(host).rotationObservations(
+      { id: "claude" } as HarnessAdapter,
+      spec,
+      [authRefusal],
+      null,
+    );
+    expect(await observations.probeCurrentSubject()).toMatchObject({
+      source: "attempt_stream",
+      code: "auth_revoked",
+    });
+    expect(ledger.live()).toEqual([]);
+    expect(recorded).toEqual([]);
+    const events: { type: string; payload: unknown }[] = [];
+    const result = await rotateSpecOnTypedLimit({
+      spec,
+      harnessId: "claude",
+      attemptId: "a01",
+      policy: { limit_action: "rotate", rotation_eligible: [], headroom_threshold: 1 },
+      registry: [],
+      snapshots: [],
+      probeReadyProfiles: async () => new Set(),
+      ...observations,
+      triedProfiles: new Set(),
+      markers: newAttemptOutputMarkers(),
+      sawTypedLimit: false,
+      sawRetryable: false,
+      attemptErrored: true,
+      deliverableEmpty: true,
+      lastLimit: null,
+      emit: (type, payload) => {
+        events.push({ type, payload });
+        return undefined as never;
+      },
+      newSessionId: () => "session-next",
+      defaultRouteWasVendorNative: true,
+    });
+    expect(
+      events.find((event) => event.type === "route.profile.credential_unusable")?.payload,
+    ).toMatchObject({ source: "attempt_stream", code: "auth_revoked" });
+    expect(result).toHaveProperty("poolExhausted");
+    expect(ledger.live()).toEqual([]);
+  });
   it("does not record an asynchronous local probe after native or API credential change", async () => {
     for (const api of [false, true]) {
       const ledger = new CredentialUnusableLedger();

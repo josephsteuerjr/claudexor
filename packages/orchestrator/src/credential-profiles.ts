@@ -149,19 +149,20 @@ export function vendorCredentialObservation(
         (!revoked || Date.parse(item.observed_at) > Date.parse(revoked.observed_at)),
     )
     .sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at))[0];
-  if (revoked && !honored) {
+  const snapshot = quota.snapshots.find(
+    (item) =>
+      owns(item.subject) &&
+      quotaSourceTraits(item.source).vendorAuthenticated &&
+      (!revoked || item.subject.credential_route === revoked.subject.credential_route) &&
+      (!revoked || Date.parse(item.observed_at) > Date.parse(revoked.observed_at)),
+  );
+  if (revoked && !honored && !snapshot) {
     return {
       outcome: "revoked",
       observed_at: revoked.observed_at,
       detail: revoked.detail ?? "the vendor rejected this profile's credential",
     };
   }
-  const snapshot = quota.snapshots.find(
-    (item) =>
-      owns(item.subject) &&
-      item.freshness === "fresh" &&
-      quotaSourceTraits(item.source).vendorAuthenticated,
-  );
   return honored
     ? { outcome: "honored", observed_at: honored.observed_at }
     : snapshot

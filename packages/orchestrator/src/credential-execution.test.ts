@@ -211,9 +211,11 @@ describe("dispatch-bound credential intake", () => {
     const ledger = new CredentialUnusableLedger();
     const older = ledger.bind(subject),
       newer = ledger.bind(subject);
+    const delayedAuth = observation(),
+      delayedCapability = observation({ model: "model-a", code: "capability_refused" });
     ledger.honorBound(newer, "model-a");
-    ledger.recordBound(older, observation());
-    ledger.recordBound(older, observation({ model: "model-a", code: "capability_refused" }));
+    ledger.recordBound(older, delayedAuth);
+    ledger.recordBound(older, delayedCapability);
     expect(ledger.live()).toEqual([]);
     ledger.recordBound(ledger.bind(subject), observation());
     expect(ledger.live()).toHaveLength(1);

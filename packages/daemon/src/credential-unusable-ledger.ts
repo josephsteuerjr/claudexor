@@ -83,9 +83,20 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
       value.credential_route !== binding.subject.route
     )
       return;
-    if ((this.orders.get(key(value)) ?? -1) > binding.order) return;
+    const previous = this.rows.get(key(value));
+    if (
+      (this.orders.get(key(value)) ?? -1) > binding.order &&
+      previous &&
+      Date.parse(previous.observed_at) >= Date.parse(value.observed_at)
+    )
+      return;
     const success = this.successes.get(key(value));
-    if (success && success.order > binding.order) return;
+    if (
+      success &&
+      success.order > binding.order &&
+      Date.parse(success.observation.observed_at) >= Date.parse(value.observed_at)
+    )
+      return;
     this.store(value, binding.order);
   }
 
@@ -109,6 +120,7 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
         model,
       });
       const previous = this.successes.get(k);
+      if (this.refusesPositive(binding, model, observedTime)) continue;
       if (
         !previous ||
         (previous.order <= binding.order &&
@@ -185,8 +197,43 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
   honored(): readonly CredentialHonoredObservation[] {
     this.prune();
     return [...this.successes.values()]
-      .filter((entry) => this.current(entry.binding))
+      .filter(
+        (entry) =>
+          this.current(entry.binding) &&
+          !this.refusesPositive(
+            entry.binding,
+            entry.observation.model,
+            Date.parse(entry.observation.observed_at),
+          ),
+      )
       .map((entry) => ({ ...entry.observation }));
+  }
+
+  /** Exported proof obeys the same scope/order checks as row clearing. */
+  private refusesPositive(
+    binding: CredentialExecutionBinding,
+    model: string | null,
+    observedTime: number,
+  ): boolean {
+    for (const [k, refusal] of this.rows) {
+      if (
+        refusal.harness_id !== binding.subject.harnessId ||
+        refusal.profile_id !== binding.subject.profileId
+      )
+        continue;
+      if (
+        refusal.credential_route !== undefined &&
+        refusal.credential_route !== binding.subject.route
+      )
+        continue;
+      if (refusal.model !== null && refusal.model !== model) continue;
+      if (
+        (this.orders.get(k) ?? Infinity) > binding.order ||
+        Date.parse(refusal.observed_at) > observedTime
+      )
+        return true;
+    }
+    return false;
   }
 
   /** Credential generation changed wholesale (login/logout): every verdict

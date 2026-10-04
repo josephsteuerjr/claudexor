@@ -65,7 +65,7 @@ describe("quota window identity", () => {
     for (const source of ["claude_rate_limit_event", "codex_app_server_event"] as const) {
       expect(quotaSourceTraits(source)).toEqual({
         snapshotMode: "window",
-        vendorAuthenticated: true,
+        vendorAuthenticated: false,
         refreshDemandHarness: null,
         producedByRefresher: false,
       });

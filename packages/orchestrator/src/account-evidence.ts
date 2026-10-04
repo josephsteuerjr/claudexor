@@ -16,7 +16,7 @@ export interface CredentialProfileEvidence {
   route?: CredentialRoute | null;
 }
 
-/** Only a genuinely fresh authenticated observation can cover an auth rejection. */
+/** Full vendor contact can recover auth independently of its numeric quota age. */
 export function applicableCredentialUnusable(
   status: Pick<CredentialProfileStatus, "harness_id" | "profile_id">,
   evidence: CredentialProfileEvidence,
@@ -51,7 +51,6 @@ export function applicableCredentialUnusable(
             snapshot.subject.subject_id === status.profile_id &&
             (observation.credential_route === undefined ||
               snapshot.subject.credential_route === observation.credential_route) &&
-            snapshot.freshness === "fresh" &&
             quotaSourceTraits(snapshot.source).vendorAuthenticated &&
             Date.parse(snapshot.observed_at) > Date.parse(observation.observed_at),
         ));

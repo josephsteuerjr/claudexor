@@ -86,13 +86,14 @@ export const QUOTA_SOURCE_TRAITS = {
   },
   claude_rate_limit_event: {
     snapshotMode: "window",
-    vendorAuthenticated: true,
+    // Measured quota telemetry is not a standalone fresh authentication receipt.
+    vendorAuthenticated: false,
     refreshDemandHarness: null,
     producedByRefresher: false,
   },
   codex_app_server_event: {
     snapshotMode: "window",
-    vendorAuthenticated: true,
+    vendorAuthenticated: false,
     refreshDemandHarness: null,
     producedByRefresher: false,
   },
