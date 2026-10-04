@@ -1,5 +1,13 @@
 # claudexor
 
+## 3.20.1
+
+### Patch Changes
+
+- Updated dependencies [eb506c1]
+- Updated dependencies [dc30eda]
+  - @claudexor/cli@3.20.1
+
 ## 3.20.0
 
 ### Minor Changes

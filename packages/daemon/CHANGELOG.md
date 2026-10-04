@@ -1,5 +1,18 @@
 # @claudexor/daemon
 
+## 3.20.1
+
+### Patch Changes
+
+- eb506c1: Keep account refusal and recovery evidence consistent across execution, account selection and Accounts, with managed credential generations protecting newer state from late results. Preserve independently measured Claude Code and Codex quota windows from running sessions without treating partial observations as a complete refresh. Retain safe native refusal and refresh diagnostics.
+- Updated dependencies [eb506c1]
+- Updated dependencies [dc30eda]
+- Updated dependencies [705c2c1]
+  - @claudexor/schema@3.20.1
+  - @claudexor/core@3.20.1
+  - @claudexor/journal@3.20.1
+  - @claudexor/util@3.20.1
+
 ## 3.20.0
 
 ### Patch Changes

@@ -1,5 +1,17 @@
 # @claudexor/core
 
+## 3.20.1
+
+### Patch Changes
+
+- eb506c1: Keep account refusal and recovery evidence consistent across execution, account selection and Accounts, with managed credential generations protecting newer state from late results. Preserve independently measured Claude Code and Codex quota windows from running sessions without treating partial observations as a complete refresh. Retain safe native refusal and refresh diagnostics.
+- dc30eda: Complete managed CLI and remote sign-in flows, preserve actionable Claude CLI version failures, and resolve native and standard npm Node entrypoints consistently across launch, probes and login.
+- 705c2c1: Preserve received assistant text and cancelled Git effects without changing completion authority or starting another generation. Show retained Markdown beneath the real failure or cancellation cause, recover interrupted output from its existing event log, and bind manual Revert to the captured execution tree.
+- Updated dependencies [eb506c1]
+- Updated dependencies [dc30eda]
+  - @claudexor/schema@3.20.1
+  - @claudexor/util@3.20.1
+
 ## 3.20.0
 
 ### Minor Changes

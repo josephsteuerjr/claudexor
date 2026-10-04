@@ -1,5 +1,17 @@
 # @claudexor/harness-raw-api
 
+## 3.20.1
+
+### Patch Changes
+
+- Updated dependencies [eb506c1]
+- Updated dependencies [dc30eda]
+- Updated dependencies [705c2c1]
+  - @claudexor/schema@3.20.1
+  - @claudexor/core@3.20.1
+  - @claudexor/secrets@3.20.1
+  - @claudexor/util@3.20.1
+
 ## 3.20.0
 
 ### Patch Changes
