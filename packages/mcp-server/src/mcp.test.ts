@@ -1014,15 +1014,25 @@ describe("Claudexor MCP server (SDK v2)", () => {
     });
     const accounts = tools.find((tool) => tool.name === "claudexor_accounts");
     expect(accounts?.annotations?.readOnlyHint).toBe(true);
-    // Contract change (owner decision 11=A): the DEFAULT read is the cached
-    // credential-profiles listing; fresh:true opts into the expensive atomic
-    // snapshot. The declared output schema is the honest union of both forms.
+    // The default read combines current quota/registry facts with retained
+    // readiness after one cold acquisition. Only fresh:true requests the
+    // expensive atomic snapshot; the output schema retains both wire forms.
     expect(accounts?.inputSchema).toMatchObject({
       type: "object",
       additionalProperties: false,
       properties: { fresh: { type: "boolean" } },
     });
-    expect(accounts?.description).toContain("CACHED");
+    expect(accounts?.description).toContain(
+      "current quota and registry facts with retained readiness observations",
+    );
+    expect(accounts?.description).toContain(
+      "one coalesced cold acquisition, including failure, then passive reads with the original check time",
+    );
+    expect(accounts?.description).toContain("Viewing does not renew old evidence");
+    expect(accounts?.description).toContain(
+      "fresh:true requests the atomic snapshot instead — an EXPENSIVE explicit refresh",
+    );
+    expect(accounts?.description).toContain("never poll with it");
     const members = accounts?.outputSchema?.anyOf as Array<Record<string, unknown>>;
     expect(members).toHaveLength(2);
     const [listing, atomic] = members.map((member) => member.properties as Record<string, unknown>);
