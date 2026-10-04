@@ -1,5 +1,18 @@
 # @claudexor/harness-cursor
 
+## 3.20.1
+
+### Patch Changes
+
+- 705c2c1: Preserve received assistant text and cancelled Git effects without changing completion authority or starting another generation. Show retained Markdown beneath the real failure or cancellation cause, recover interrupted output from its existing event log, and bind manual Revert to the captured execution tree.
+- Updated dependencies [eb506c1]
+- Updated dependencies [dc30eda]
+- Updated dependencies [705c2c1]
+  - @claudexor/schema@3.20.1
+  - @claudexor/core@3.20.1
+  - @claudexor/secrets@3.20.1
+  - @claudexor/util@3.20.1
+
 ## 3.20.0
 
 ### Patch Changes

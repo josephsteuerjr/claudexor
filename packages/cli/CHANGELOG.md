@@ -1,5 +1,39 @@
 # @claudexor/cli
 
+## 3.20.1
+
+### Patch Changes
+
+- eb506c1: Keep account refusal and recovery evidence consistent across execution, account selection and Accounts, with managed credential generations protecting newer state from late results. Preserve independently measured Claude Code and Codex quota windows from running sessions without treating partial observations as a complete refresh. Retain safe native refusal and refresh diagnostics.
+- dc30eda: Complete managed CLI and remote sign-in flows, preserve actionable Claude CLI version failures, and resolve native and standard npm Node entrypoints consistently across launch, probes and login.
+- Updated dependencies [eb506c1]
+- Updated dependencies [dc30eda]
+- Updated dependencies [705c2c1]
+  - @claudexor/schema@3.20.1
+  - @claudexor/core@3.20.1
+  - @claudexor/daemon@3.20.1
+  - @claudexor/orchestrator@3.20.1
+  - @claudexor/review@3.20.1
+  - @claudexor/harness-claude@3.20.1
+  - @claudexor/harness-codex@3.20.1
+  - @claudexor/harness-cursor@3.20.1
+  - @claudexor/control-api@3.20.1
+  - @claudexor/acp-server@3.20.1
+  - @claudexor/config@3.20.1
+  - @claudexor/delivery@3.20.1
+  - @claudexor/gateway@3.20.1
+  - @claudexor/harness-acp@3.20.1
+  - @claudexor/harness-agy@3.20.1
+  - @claudexor/harness-fake@3.20.1
+  - @claudexor/harness-opencode@3.20.1
+  - @claudexor/harness-raw-api@3.20.1
+  - @claudexor/mcp-server@3.20.1
+  - @claudexor/workspace@3.20.1
+  - @claudexor/artifact-store@3.20.1
+  - @claudexor/journal@3.20.1
+  - @claudexor/secrets@3.20.1
+  - @claudexor/util@3.20.1
+
 ## 3.20.0
 
 ### Minor Changes

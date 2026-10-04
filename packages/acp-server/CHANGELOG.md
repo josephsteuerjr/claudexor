@@ -1,5 +1,14 @@
 # @claudexor/acp-server
 
+## 3.20.1
+
+### Patch Changes
+
+- Updated dependencies [eb506c1]
+- Updated dependencies [dc30eda]
+  - @claudexor/schema@3.20.1
+  - @claudexor/util@3.20.1
+
 ## 3.20.0
 
 ### Patch Changes
