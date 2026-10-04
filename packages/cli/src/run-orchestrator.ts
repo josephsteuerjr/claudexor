@@ -82,8 +82,9 @@ export function buildRunOrchestrator(args: {
         observe: (event) =>
           maintain(() => {
             observer.observe(event);
-            // A late native event cannot restore quota from before a managed
-            // credential change. The stream itself remains fully observable.
+            // Numeric quota and cooldown observations remain useful while
+            // sessions run across managed login changes. Authentication proof
+            // has its separate generation/order authority in the observer.
             const sameProfile =
               event.credential_profile_id === undefined ||
               event.credential_profile_id === subject.profileId;
@@ -91,10 +92,10 @@ export function buildRunOrchestrator(args: {
               subject.route === null ||
               event.credential_route === undefined ||
               event.credential_route === subject.route;
-            if (sameProfile && sameRoute && credentialUnusableLedger.current(binding)) {
+            if (sameProfile && sameRoute) {
               quotaStore().ingest(subject.harnessId, {
                 ...event,
-                credential_profile_id: subject.profileId,
+                ...(subject.profileId !== null ? { credential_profile_id: subject.profileId } : {}),
                 ...(event.credential_route === undefined && subject.route !== null
                   ? { credential_route: subject.route }
                   : {}),

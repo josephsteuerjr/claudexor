@@ -258,8 +258,10 @@ is `claudexor quota [--refresh] --json`.
 Control quota snapshots also carry a server-derived `snapshot_id` for stable
 presentation identity. Native incremental sources (`claude_rate_limit_event`,
 `codex_app_server_event`) report single windows with their own timestamps; they
-are not complete inventory and do not satisfy full-refresh demand or hide a
-failed refresh. Existing clients may keep their legacy identity fallback when
+are not complete inventory and do not satisfy full-refresh demand, hide a failed
+refresh or independently certify current authentication. Running-session quota
+remains available through managed login changes; credential refusal and recovery
+use the separate bound observation authority. Existing clients may keep their legacy identity fallback when
 that additive field is absent. Source replacement and journal semantics live in
 [ARCHITECTURE](ARCHITECTURE.md#7-control-api).
 

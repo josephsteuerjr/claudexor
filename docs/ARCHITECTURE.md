@@ -1174,15 +1174,19 @@ An unresolved typed terminal auth or capability refusal enters the daemon's
 bounded, in-memory `CredentialUnusableLedger`. A pin records evidence without
 rotating. A transport failure or cancellation alone is not an auth verdict;
 served usage can recover an intermediate refusal. The existing differential
-probe still reads local/poller evidence when rotation needs it, without adding a
-probe to every completion or spawning a miniature generation.
+probe still reads typed stream and local/poller evidence when rotation needs it,
+retains the `route.profile.credential_unusable` event and terminal provenance, and
+leaves stream recording to the bound observer. It adds no probe to every completion
+and spawns no miniature generation.
 
 `CredentialGeneration`, extracted from the existing pre-progress ledger, is the
 shared managed-lifecycle authority. Dispatch captures subject, effective route,
 requested model, generation and ordering. Both recording and success clearing
 respect that binding: old-generation results cannot affect a newer login, and
-out-of-order results cannot undo a later dispatch's relevant evidence. A bounded
-success watermark keeps an older refusal from reappearing after recovery.
+a success from an older dispatch cannot erase a newer dispatch's refusal. A
+negative observation made after the last successful contact remains meaningful
+even when it comes from a session that started earlier. A bounded success
+watermark suppresses a delayed refusal that was actually observed before recovery.
 An actual observed model is required to heal a model-scoped refusal; the request
 is not proof of which model was served. Credential mutation windows still make
 observations ineligible while the vendor may be changing the store. External
@@ -1195,13 +1199,22 @@ Accounts and `next_up`. Accounts retains its compact status and detailed reason,
 identity and last-known quota. Only credential-wide failures affect an unqualified
 account row; `next_up` considers the configured model. Only expensive probes are
 cached, so a new refusal, recovery or expiry is composed on the next read without
-re-probing every account. Local verification failure stays local. A fresh,
-covering authenticated observation may supersede an older auth refusal but cannot
-heal unrelated model restrictions or a locally failed probe.
+re-probing every account. Local verification failure stays local. A covering
+successful full-reader vendor observation may supersede an older auth refusal
+without losing that recovery when its numeric quota ages. Its original
+contact time remains visible; it cannot heal unrelated model restrictions or a
+locally failed probe. Bound served-model proof also respects dispatch ordering.
+Passive window notifications alone are numeric evidence, not an independent
+authentication recovery receipt.
 
 Hard credential evidence, soft pool ordering, quota windows and poll pacing stay
-separate. Run refusals never become poller `auth_revoked` absences and never retire
-last-known numeric quota. A profile-level refusal does not suppress quota discovery:
+separate. The bound native observer is the single quota intake owner; projected
+run events never write a second profile-less observation. Numeric measurements and
+explicit cooldowns from an already-running session remain observable through an
+unrelated managed login or a mutation window. The generation fence governs auth
+refusal and recovery, not whether an ongoing session may report its quota. Run
+refusals never become poller `auth_revoked` absences and never retire last-known
+numeric quota. A profile-level refusal does not suppress quota discovery:
 the Claude poller retains its existing present-token rejection memo, so external
 replacement remains discoverable. The hard ledger is non-durable, expires within
 its existing bounded TTLs, and clears through managed credential changes.
@@ -3474,9 +3487,12 @@ auth-route evidence: verified included ordinary service proves
 `paid_fallback: never` and ranks with a real economy tuple instead of reading as
 unknown/paid. Surfaces project the rationale verbatim (run detail) and never
 reconstruct the order from prose. A named account's ordinary billing evidence
-requires its fresh vendor-backed verification: an authenticated adapter response,
-or the existing exact-profile vendor observation over a passing local probe.
-Local store presence and stale readiness do not prove subscription entitlement.
+requires vendor-backed verification: an authenticated adapter response, or the
+existing exact-profile full-reader vendor observation over a passing local probe.
+Numeric quota expiry does not erase the fact or time of that authenticated contact;
+a newer applicable refusal still overrides it.
+Local store presence alone and stale local readiness do not prove subscription
+entitlement. Passive window notifications alone do not establish that proof.
 Default-store doctor evidence applies only to a profile-less route. The admission
 probe is reused for ranking and the initial reservation. Each physical dispatch
 reads its actual account's current verification again, including when the account
