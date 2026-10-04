@@ -355,43 +355,47 @@ export async function refreshClaudeOauthUsageQuota(
     );
   bindCredentials();
   const throttledTokens = new Set<string>();
-  for (const item of prepared) {
-    const { candidate } = item;
-    let { credential } = item;
-    const subject = subjectOf(candidate.subjectId);
+  const skipPacedCredential = (subject: QuotaSubject, credential: ClaudeOauthCredential) => {
     const pacedUntil = cycle?.pacing?.cooldownUntil(subject, now().getTime());
     if (pacedUntil !== null && pacedUntil !== undefined) {
-      report(candidate.subjectId, {
+      report(subject.subject_id, {
         stage: "poll",
         outcome: "skipped",
         reason: "subject_rate_limited",
       });
       absences.push(
         claudeOauthAbsence(
-          candidate.subjectId,
+          subject.subject_id,
           "poll_paced",
           `quota poll paused by rate-limit cooldown until ${new Date(pacedUntil).toISOString()}`,
           now(),
         ),
       );
-      continue;
+      return true;
     }
     if (throttledTokens.has(sha256(credential.accessToken))) {
-      report(candidate.subjectId, {
+      report(subject.subject_id, {
         stage: "poll",
         outcome: "skipped",
         reason: "same_token_rate_limited",
       });
       absences.push(
         claudeOauthAbsence(
-          candidate.subjectId,
+          subject.subject_id,
           "probe_skipped_rate_limited",
           "this token's oauth/usage probe hit the rate limit earlier in this cycle",
           now(),
         ),
       );
-      continue;
+      return true;
     }
+    return false;
+  };
+  for (const item of prepared) {
+    const { candidate } = item;
+    let { credential } = item;
+    const subject = subjectOf(candidate.subjectId);
+    if (skipPacedCredential(subject, credential)) continue;
     // Retain the existing snapshot and its observation time when another
     // account's retry caused this background lane cycle. All current aliases
     // were bound above, and poll floors have already been honored.
@@ -442,6 +446,8 @@ export async function refreshClaudeOauthUsageQuota(
           native: nativeResult,
         });
         beforeRequest = now();
+        // Refresh may have joined a token alias whose poll floor is already active.
+        if (skipPacedCredential(subject, credential)) continue;
       } catch (error) {
         report(candidate.subjectId, {
           stage: "native_refresh",

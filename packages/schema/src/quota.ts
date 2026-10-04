@@ -282,7 +282,7 @@ export const QuotaAbsenceReason = z
     "platform_unsupported",
     "refresh_failed",
     "no_source",
-    /** The vendor REJECTED the subject's own credential (401/403). Distinct
+    /** The vendor REJECTED the subject's own credential. Distinct
      * from `refresh_failed` (which cannot tell a dead token from a dead
      * network) and from `not_logged_in` (there IS a stored login): the local
      * store looks healthy while the token behind it is no longer honored. */

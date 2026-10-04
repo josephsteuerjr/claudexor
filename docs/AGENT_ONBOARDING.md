@@ -18,13 +18,17 @@ It is strict: skipping a step is how the 2026-07-21 incident happened.
    from a host/default login.
 2. **Read the Accounts doorway before choosing a reviewer account.** Run
    `claudexor accounts --json` (or call the read-only `claudexor_accounts` MCP
-   tool; its default is the CACHED listing — pass `fresh: true` only when
+   tool; its default retains the first readiness observation with its original
+   check time and composes current quota and registry facts. Viewing does not
+   renew that evidence; actual execution performs independent admission checks.
+   Pass `fresh: true` only when
    acting on staleness matters, since the atomic snapshot probes every
    profile and fans out to the vendors). It is one daemon-authored view of
    registered profiles, readiness,
    quota freshness, and `next_up`; do not reconstruct a pool by joining
    `doctor`, `quota`, and profile-list responses yourself. `available/passed`
-   on the exact named row is usable route evidence, while `unknown/not_run` or
+   on the exact named row describes its last observation; check its age before
+   relying on it for account selection. `unknown/not_run` or
    stale data is an honest uncertainty, not proof that an account is absent. Do
    not substitute aggregate doctor status, another profile's probe, or the host
    vendor login for that row. An agent may inspect and select an existing

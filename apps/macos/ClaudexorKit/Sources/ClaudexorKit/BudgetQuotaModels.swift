@@ -186,8 +186,8 @@ public struct QuotaAbsence: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// One vendor lane a refresh cycle did not re-fetch because its poll
-/// rate-limit cooldown is active; its snapshots/absences in the same response
+/// One subject (or a retained legacy vendor floor) a refresh did not re-fetch
+/// because its poll cooldown is active; its snapshots/absences in the same response
 /// are last-known registry data.
 public struct QuotaRefreshSkipped: Codable, Sendable, Equatable, Identifiable {
     public let vendor: String
