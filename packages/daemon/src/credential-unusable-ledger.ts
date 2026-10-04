@@ -184,8 +184,12 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
       this.rows.delete(earliest[0]);
       this.orders.delete(earliest[0]);
     }
-    this.rows.set(key(obs), { ...obs, expires_at: new Date(expires).toISOString() });
-    this.orders.set(key(obs), order);
+    const previous = this.rows.get(key(obs));
+    // A delayed completion cannot lower either independent negative boundary.
+    // Provenance and expiry belong to the latest actual observation, not arrival.
+    if (!previous || Date.parse(previous.observed_at) <= observed)
+      this.rows.set(key(obs), { ...obs, expires_at: new Date(expires).toISOString() });
+    this.orders.set(key(obs), Math.max(this.orders.get(key(obs)) ?? order, order));
   }
 
   /** Every un-expired observation (the read side of the orchestrator deps). */
