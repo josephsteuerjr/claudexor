@@ -78,16 +78,19 @@ public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
     /// nil/empty means the window applies to every model. A non-empty list is
     /// the server-authored scope; clients render it but never infer account-wide
     /// exhaustion from a scoped ratio.
+    public let appliesToModelPrefixes: [String]?
     public let appliesToModels: [String]?
     public let appliesToUnspecifiedModel: Bool?
     public let usedRatio: Double?
     public let windowSeconds: Double?
     public let resetsAt: String?
     public let cooldownUntil: String?
+    public var modelScope: [String] { quotaModelScopeDisplay(appliesToModels ?? [], appliesToModelPrefixes ?? []) }
 
     private enum CodingKeys: String, CodingKey {
         case id, label
         case appliesToModels = "applies_to_models"
+        case appliesToModelPrefixes = "applies_to_model_prefixes"
         case appliesToUnspecifiedModel = "applies_to_unspecified_model"
         case usedRatio = "used_ratio"
         case windowSeconds = "window_seconds"
@@ -99,8 +102,12 @@ public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
     /// reset or display label. Distinct applicability must remain visible.
     public var presentationID: String {
         let scope: Any = appliesToModels.map { Array(Set($0)).sorted() as Any } ?? NSNull()
-        let fields: [Any] = [id, windowSeconds as Any? ?? NSNull(), scope,
+        var fields: [Any] = [id, windowSeconds as Any? ?? NSNull(), scope,
                              appliesToUnspecifiedModel == true]
+        // Match the schema identity while preserving existing no-prefix ids.
+        if let prefixes = appliesToModelPrefixes, !prefixes.isEmpty {
+            fields.append(Array(Set(prefixes)).sorted())
+        }
         let data = try? JSONSerialization.data(withJSONObject: fields)
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? id
     }
@@ -108,12 +115,15 @@ public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
 
 public struct QuotaModelScopedExhaustion: Codable, Sendable, Equatable, Hashable {
     public let constraintId: String
+    public let appliesToModelPrefixes: [String]?
     public let appliesToModels: [String]
+    public var modelScope: [String] { quotaModelScopeDisplay(appliesToModels, appliesToModelPrefixes ?? []) }
     public let resetsAt: String?
 
     private enum CodingKeys: String, CodingKey {
         case constraintId = "constraint_id"
         case appliesToModels = "applies_to_models"
+        case appliesToModelPrefixes = "applies_to_model_prefixes"
         case resetsAt = "resets_at"
     }
 }
@@ -176,24 +186,26 @@ public struct QuotaAbsence: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// One vendor lane a refresh cycle did not re-fetch because its poll
-/// rate-limit cooldown is active; its snapshots/absences in the same response
+/// One subject (or a retained legacy vendor floor) a refresh did not re-fetch
+/// because its poll cooldown is active; its snapshots/absences in the same response
 /// are last-known registry data.
 public struct QuotaRefreshSkipped: Codable, Sendable, Equatable, Identifiable {
     public let vendor: String
     public let notBefore: String
+    public let subject: QuotaSubject?
 
     private enum CodingKeys: String, CodingKey {
-        case vendor
+        case vendor, subject
         case notBefore = "not_before"
     }
 
-    public init(vendor: String, notBefore: String) {
+    public init(vendor: String, notBefore: String, subject: QuotaSubject? = nil) {
         self.vendor = vendor
         self.notBefore = notBefore
+        self.subject = subject
     }
 
-    public var id: String { vendor }
+    public var id: String { subject.map { [vendor, $0.credentialRoute, $0.subjectId ?? ""].joined(separator: ":") } ?? vendor }
 }
 
 public struct ControlQuotaResponse: Codable, Sendable, Equatable {
@@ -233,4 +245,11 @@ public struct ControlQuotaResponse: Codable, Sendable, Equatable {
         refreshSkipped =
             try c.decodeIfPresent([QuotaRefreshSkipped].self, forKey: .refreshSkipped)
     }
+}
+
+// A declared family already names every covered exact model. Preserve only
+// uncovered aliases beside it, so catalog growth never expands the label.
+private func quotaModelScopeDisplay(_ models: [String], _ prefixes: [String]) -> [String] {
+    models.filter { model in !prefixes.contains(where: { model.hasPrefix($0) }) }
+        + prefixes.map { $0 + "*" }
 }

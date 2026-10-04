@@ -542,6 +542,38 @@ describe("claudexor accounts snapshot (read-only agent doorway)", () => {
     expect(code).toBe(2);
     expect(get).not.toHaveBeenCalled();
   });
+
+  it("names only the paused account while preserving a healthy next-up account", async () => {
+    let stdout = "";
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      stdout += String(chunk);
+      return true;
+    }) as never);
+    const code = await accountsCommandWithDeps(parseArgs(["accounts"]), false, {
+      daemonGet: async () => ({
+        ...snapshot,
+        quota: {
+          ...snapshot.quota,
+          refresh_skipped: [
+            {
+              vendor: "claude",
+              not_before: "2026-10-04T15:00:00Z",
+              subject: {
+                harness: "claude",
+                subject_id: "limited",
+                credential_route: "vendor_native",
+                plan_label: null,
+              },
+            },
+          ],
+        },
+      }),
+    });
+    expect(code).toBe(0);
+    expect(stdout).toContain("quota refresh skipped for claude/limited (vendor_native):");
+    expect(stdout).toContain("next up claude: work");
+    expect(stdout).not.toContain("quota refresh skipped for claude/work");
+  });
 });
 
 describe("removeProfileFromRegistry (INV-135 removal owner)", () => {

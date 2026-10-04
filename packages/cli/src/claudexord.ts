@@ -124,7 +124,7 @@ export async function main(): Promise<void> {
         ),
         quotaSubjectUniverseFromConfig,
         undefined,
-        // Daemon-private per-vendor rate-limit floors (never in the journal).
+        // Daemon-private subject and legacy vendor floors (never in the journal).
         quotaPacerFileStore(daemonDir()),
       ),
     );

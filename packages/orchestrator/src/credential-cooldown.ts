@@ -217,12 +217,16 @@ export function credentialPoolExhausted(args: {
         ),
     ),
   ];
+  if (args.subjectUnusable?.code === "auth_revoked" && !poolCauses.includes("auth"))
+    poolCauses.push("auth");
+  const cause =
+    poolCauses.length === 1 && poolCauses[0] === "auth"
+      ? "the available credentials were rejected"
+      : poolCauses.length === 1 && poolCauses[0] === "quota"
+        ? "the available accounts have an active quota limit"
+        : "the available accounts cannot serve this request";
   const error = new Error(
-    `credential pool exhausted for "${args.harnessId}": ${subject} hit ${
-      args.reason === "structural_pre_progress_failure"
-        ? "a terminal pre-progress failure"
-        : "a vendor limit"
-    } and none of ${args.candidates.length} registered candidate(s) can take over` +
+    `credential pool exhausted for "${args.harnessId}": ${cause}; ${subject} has no eligible replacement` +
       (args.subjectUnusable
         ? `; the subject's credential itself was observed unusable (${args.subjectUnusable.code})`
         : "") +

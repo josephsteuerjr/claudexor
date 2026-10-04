@@ -7,7 +7,11 @@
 import {
   REACTIVE_COOLDOWN_SOURCE,
   legacyV320QuotaSource,
+  quotaSourceTraits,
   quotaSnapshotIdentity,
+  quotaConstraintIdentity,
+  type QuotaWindowSupersession,
+  QuotaWindowObservation,
   vendorResetDayCooldownEnd,
   type CredentialRoute,
   type HarnessEvent,
@@ -72,6 +76,35 @@ export function reactiveCooldownSnapshot(
   };
 }
 
+/** Snapshots older than this are pruned from every projection read (W17):
+ * a day-old observation is not quota truth, just footer clutter. */
+const MAX_SNAPSHOT_AGE_MS = 24 * 60 * 60_000;
+
+/** Freshness-annotated snapshots with expired (>24h) observations pruned.
+ * An old observation whose constraint still EXTENDS into the future (a
+ * weekly cooldown/reset seen once) is kept and stale-marked: pruning it
+ * would hide a live cap from both the footer and the router's ledger. */
+export function activeQuotaSnapshots(
+  snapshots: readonly QuotaSnapshot[],
+  now: number,
+): QuotaSnapshot[] {
+  return snapshots
+    .map((snapshot) => withoutExpiredScopedCooldowns(snapshot, now))
+    .filter((snapshot): snapshot is QuotaSnapshot => snapshot !== null)
+    .filter((snapshot) => {
+      const observed = Date.parse(snapshot.observed_at);
+      if (!Number.isFinite(observed)) return false;
+      if (now - observed <= MAX_SNAPSHOT_AGE_MS) return true;
+      return snapshot.constraints.some((constraint) =>
+        [constraint.cooldown_until, constraint.resets_at].some((raw) => {
+          const at = raw ? Date.parse(raw) : Number.NaN;
+          return Number.isFinite(at) && at > now;
+        }),
+      );
+    })
+    .map((snapshot) => staleAt(snapshot, now));
+}
+
 export const QUOTA_FRESHNESS_TTL_MS = 5 * 60_000;
 
 /** Same quota EVIDENCE: everything but the observation time (a freshness flip
@@ -79,6 +112,169 @@ export const QUOTA_FRESHNESS_TTL_MS = 5 * 60_000;
  * `observed_at` in memory without a journal frame. */
 export function sameQuotaEvidence(a: QuotaSnapshot, b: QuotaSnapshot): boolean {
   return hashJson({ ...a, observed_at: null }) === hashJson({ ...b, observed_at: null });
+}
+
+/** Retire only restrictions superseded by a later authenticated primary read.
+ * The registry must journal a changed result even when the primary read only
+ * changed its timestamp. Keep the old observation's time and unrelated facts. */
+export function withoutSupersededQuotaConstraints(
+  existing: QuotaSnapshot,
+  observation: QuotaSnapshot,
+  now: Date,
+): QuotaSnapshot {
+  const traits = quotaSourceTraits(observation.source);
+  if (
+    !traits.vendorAuthenticated ||
+    traits.refreshDemandHarness !== observation.subject.harness ||
+    staleAt(observation, now.getTime()).freshness !== "fresh" ||
+    REACTIVE_COOLDOWN_SOURCE[existing.subject.harness] !== existing.source ||
+    existing.subject.harness !== observation.subject.harness ||
+    existing.subject.credential_route !== observation.subject.credential_route ||
+    existing.subject.subject_id !== observation.subject.subject_id ||
+    !(Date.parse(observation.observed_at) > Date.parse(existing.observed_at))
+  ) {
+    return existing;
+  }
+  const constraints = existing.constraints.filter((constraint) => {
+    // A generic refusal retained no window identity. A successful recognized
+    // read permits the next requested attempt, including unknown/empty quota;
+    // it does not promise that the provider will accept that attempt.
+    if (
+      constraint.id === "cooldown" &&
+      !constraint.applies_to_models?.length &&
+      !constraint.applies_to_model_prefixes?.length
+    ) {
+      return false;
+    }
+    // Independently identified windows require a measured replacement of the
+    // same window and scope. Absence/unknown usage cannot disprove one.
+    return !observation.constraints.some(
+      (current) =>
+        current.used_ratio !== null &&
+        sameQuotaWindow(existing.source, constraint.id, current.id) &&
+        sameModelScope(constraint, current),
+    );
+  });
+  return constraints.length === existing.constraints.length
+    ? existing
+    : { ...existing, constraints };
+}
+
+function sameQuotaWindow(source: QuotaSource, oldId: string, newId: string): boolean {
+  const id = oldId.startsWith("cooldown:") ? oldId.slice("cooldown:".length) : oldId;
+  if (id === newId) return true;
+  // Codex rollout omits the native default bucket id that app-server includes.
+  // A different bucket (for example review) is an independent constraint.
+  return source === "codex_rollout" && (newId === `codex:${id}` || newId === `default:${id}`);
+}
+
+function sameModelScope(a: QuotaConstraint, b: QuotaConstraint): boolean {
+  return hashJson(quotaModelScope(a)) === hashJson(quotaModelScope(b));
+}
+
+function quotaModelScope(constraint: QuotaConstraint) {
+  const { id, label, used_ratio, window_seconds, resets_at, cooldown_until, ...scope } = constraint;
+  return {
+    ...scope,
+    applies_to_models: [...(scope.applies_to_models ?? [])].sort(),
+    applies_to_unspecified_model: scope.applies_to_unspecified_model ?? false,
+  };
+}
+
+/** Match only a measured replacement of the exact known window, never an
+ * absent window, unknown usage, another credential or a different scope. */
+function windowSupersession(
+  existing: QuotaSnapshot,
+  observation: QuotaSnapshot,
+  now: Date,
+): QuotaWindowSupersession | null {
+  if (
+    quotaSourceTraits(existing.source).snapshotMode !== "window" ||
+    !quotaSourceTraits(observation.source).vendorAuthenticated ||
+    quotaSourceTraits(observation.source).refreshDemandHarness !== observation.subject.harness ||
+    staleAt(observation, now.getTime()).freshness !== "fresh" ||
+    existing.subject.harness !== observation.subject.harness ||
+    existing.subject.credential_route !== observation.subject.credential_route ||
+    existing.subject.subject_id !== observation.subject.subject_id ||
+    Date.parse(observation.observed_at) <= Date.parse(existing.observed_at)
+  )
+    return null;
+  const identity = quotaConstraintIdentity(existing.constraints[0]!);
+  if (
+    !observation.constraints.some(
+      (constraint) =>
+        constraint.used_ratio !== null && quotaConstraintIdentity(constraint) === identity,
+    )
+  )
+    return null;
+  return {
+    version: 1,
+    subject: existing.subject,
+    snapshot_id: snapshotKey(existing),
+    observed_at: observation.observed_at,
+  };
+}
+
+/** One reconciliation over the current raw snapshots; the registry commits all
+ * returned facts together before updating any in-memory projection. */
+export function reconcileQuotaSnapshot(
+  value: QuotaSnapshot,
+  existing: readonly QuotaSnapshot[],
+  now: Date,
+) {
+  let snapshot = value;
+  const witnesses: QuotaSnapshot[] = [];
+  const supersessions: QuotaWindowSupersession[] = [];
+  for (const observation of existing) {
+    const atObservation = new Date(observation.observed_at);
+    const reduced = withoutSupersededQuotaConstraints(snapshot, observation, atObservation);
+    const supersession = windowSupersession(snapshot, observation, atObservation);
+    if (reduced !== snapshot || supersession) witnesses.push(observation);
+    if (supersession) supersessions.push(supersession);
+    snapshot = reduced;
+  }
+  const retired = existing.flatMap((prior) => {
+    const supersession = windowSupersession(prior, snapshot, now);
+    if (supersession) supersessions.push(supersession);
+    const next = withoutSupersededQuotaConstraints(prior, snapshot, now);
+    return next === prior ? [] : [next];
+  });
+  return {
+    snapshot,
+    updates: [...witnesses, snapshot, ...retired],
+    supersessions,
+    reconciled: witnesses.length > 0 || retired.length > 0 || supersessions.length > 0,
+  };
+}
+
+/** Existing prepare/upsert wire shape, reusable for an atomic reconciliation. */
+export function quotaSnapshotRecords(
+  snapshot: QuotaSnapshot,
+): Array<{ type: string; payload: unknown }> {
+  if (quotaSourceTraits(snapshot.source).snapshotMode === "window") {
+    return [
+      {
+        type: "quota.window.observed",
+        payload: QuotaWindowObservation.parse({ version: 1, snapshot }),
+      },
+    ];
+  }
+  const legacy = legacyV320Snapshot(snapshot);
+  const upsert = { type: "quota.snapshot.upserted", payload: legacy };
+  if (
+    legacy.source === snapshot.source &&
+    !snapshot.constraints.some(
+      (c) => c.applies_to_models !== undefined || c.applies_to_model_prefixes !== undefined,
+    )
+  )
+    return [upsert];
+  return [
+    {
+      type: "quota.snapshot.scoped_prepared",
+      payload: { version: 1, base_hash: hashJson(legacy), snapshot },
+    },
+    upsert,
+  ];
 }
 
 export function snapshotKey(snapshot: QuotaSnapshot): string {

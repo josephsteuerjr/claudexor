@@ -6,8 +6,8 @@ export function accountsTool(runner: RunnerFn, outputSchema: Record<string, unkn
     name: "claudexor_accounts",
     description:
       "Return the read-only Accounts view: registered profiles, readiness, quota freshness, and routing identity. " +
-      "Default reads the server's CACHED listing (cheap; at most ~15s stale). " +
-      "fresh:true requests the atomic snapshot instead — an EXPENSIVE explicit refresh (a live probe per registered profile, a full harness doctor sweep, and the vendor quota fan-out, which honors per-vendor rate-limit cooldowns and discloses skipped vendors in quota.refresh_skipped). " +
+      "Default combines current quota and registry facts with retained readiness observations: one coalesced cold acquisition, including failure, then passive reads with the original check time. Viewing does not renew old evidence; actual execution performs its own checks. " +
+      "fresh:true requests the atomic snapshot instead — an EXPENSIVE explicit refresh (a live probe per registered profile, a full harness doctor sweep, and the vendor quota fan-out, which honors account/route rate-limit cooldowns and existing broad floors and discloses paused subjects in quota.refresh_skipped). " +
       "Use fresh:true only when acting on staleness matters; never poll with it. This tool never starts login or changes account state.",
     inputSchema: {
       type: "object",
@@ -16,7 +16,7 @@ export function accountsTool(runner: RunnerFn, outputSchema: Record<string, unkn
         fresh: {
           type: "boolean",
           description:
-            "true = the expensive atomic Accounts snapshot (fresh probes + doctor + vendor quota fan-out); false/absent = the cached listing.",
+            "true = the expensive atomic Accounts snapshot (fresh probes + doctor + vendor quota fan-out); false/absent = current quota/registry facts with retained readiness observations and their age.",
         },
       },
     },

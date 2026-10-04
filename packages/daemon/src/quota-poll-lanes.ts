@@ -26,6 +26,17 @@ export interface QuotaRefreshResult {
  * ignores the argument keeps the pre-existing contract. */
 export interface QuotaRefreshCycle {
   readonly foreground: boolean;
+  /** Background cycles fetch only due primary evidence. Explicit refreshes
+   * still ask every eligible subject; floor and alias checks remain separate. */
+  readonly shouldRefresh?: (subject: QuotaSubject) => boolean;
+  /** Host-only callbacks; token identity is an ephemeral hash, never wire data. */
+  readonly pacing?: {
+    bindCredentials(
+      bindings: ReadonlyArray<{ subject: QuotaSubject; credentialHash: string }>,
+    ): void;
+    cooldownUntil(subject: QuotaSubject, now: number): number | null;
+    noteRateLimited(subject: QuotaSubject, observedAt: number, retryAfterMs: number | null): void;
+  };
 }
 
 export type QuotaRefresher = (cycle?: QuotaRefreshCycle) => Promise<QuotaRefreshResult>;
@@ -168,7 +179,14 @@ export function laneDemand(
   now: number,
   dueBefore: number,
   since: number,
+  lanes: readonly PacingLane[] = [],
 ): LaneDemand {
+  // A paced subject contributes neither demand nor a renewal horizon until
+  // its floor expires, so healthy siblings keep their ordinary cadence.
+  subjects = subjects?.filter((subject) => {
+    const lane = lanes.find((item) => item.vendor === subject.harness);
+    return lane?.pacer.rateLimitCooldownUntil(now, subject) == null;
+  });
   const laneSnapshots =
     vendor === null
       ? snapshots
@@ -187,13 +205,13 @@ export function laneDemand(
 
 export interface LaneCycleSelection {
   readonly running: ReadonlyArray<{ lane: PacingLane; refresh: QuotaRefresher }>;
-  readonly skipped: Array<{ vendor: string; not_before: string }>;
+  readonly skipped: Array<{ vendor: string; not_before: string; subject?: QuotaSubject }>;
 }
 
 /** Select which refreshers one cycle runs. A full (foreground) cycle honors
- * each vendor lane's rate-limit floor: a vendor that just said 429 is not
- * re-fanned-out by an explicit refresh — its skip is returned for additive
- * disclosure. A poll-scoped cycle was already gated by the sweep. Anonymous
+ * legacy vendor floors and current subject floors. Fully paced lanes stay
+ * idle; a partially paced source receives the same floor callbacks and
+ * continues its serial sweep for eligible accounts. Skips are disclosed. A poll-scoped cycle was already gated by the sweep. Anonymous
  * lanes never carry a floor and always run. Every running refresher is bound
  * to the cycle kind (foreground vs poll), so a source can honor an explicit
  * refresh while the registry keeps calling `refresh()`. */
@@ -201,6 +219,9 @@ export function selectCycleEntries(
   refresherLanes: RefresherLanes,
   scope: PacingLane | null,
   nowMs: number,
+  isCurrent: () => boolean = () => true,
+  subjects: readonly QuotaSubject[] = [],
+  snapshots: readonly QuotaSnapshot[] = [],
 ): LaneCycleSelection {
   const skipped =
     scope === null
@@ -212,15 +233,103 @@ export function selectCycleEntries(
         })
       : [];
   const skippedVendors = new Set(skipped.map((row) => row.vendor));
-  const cycle: QuotaRefreshCycle = { foreground: scope === null };
+  const subjectSkips = subjects.flatMap((subject) => {
+    if (skippedVendors.has(subject.harness) || (scope !== null && scope.vendor !== subject.harness))
+      return [];
+    const lane = refresherLanes.lanes.find((item) => item.vendor === subject.harness);
+    const until = lane?.pacer.rateLimitCooldownUntil(nowMs, subject) ?? null;
+    return until === null
+      ? []
+      : [{ vendor: subject.harness, subject, not_before: new Date(until).toISOString() }];
+  });
+  for (const lane of refresherLanes.lanes) {
+    if (lane.vendor === null) continue;
+    const owned = subjects.filter((subject) => subject.harness === lane.vendor);
+    if (
+      owned.length > 0 &&
+      owned.every((subject) => lane.pacer.rateLimitCooldownUntil(nowMs, subject) !== null)
+    ) {
+      skippedVendors.add(lane.vendor);
+    }
+  }
   const running = refresherLanes.entries
     .filter((entry) =>
       scope === null
         ? entry.lane.vendor === null || !skippedVendors.has(entry.lane.vendor)
-        : entry.lane === scope,
+        : entry.lane === scope &&
+          (entry.lane.vendor === null || !skippedVendors.has(entry.lane.vendor)),
     )
-    .map((entry) => ({ lane: entry.lane, refresh: () => entry.refresh(cycle) }));
-  return { running, skipped };
+    .map((entry) => ({
+      lane: entry.lane,
+      refresh: () =>
+        entry.refresh({
+          foreground: scope === null,
+          shouldRefresh: (subject) =>
+            scope === null ||
+            remainingQuotaRefreshDemand(
+              snapshots.filter(
+                (snapshot) => snapshot.subject.credential_route === subject.credential_route,
+              ),
+              [subject],
+              nowMs + QUOTA_POLL_INTERVAL_MS,
+            ).size > 0,
+          pacing: {
+            bindCredentials: (bindings) => {
+              if (isCurrent()) entry.lane.pacer.bindCredentials(bindings);
+            },
+            cooldownUntil: (subject, now) => entry.lane.pacer.rateLimitCooldownUntil(now, subject),
+            noteRateLimited: (subject, observedAt, retryAfterMs) => {
+              if (isCurrent()) entry.lane.pacer.noteRateLimited(observedAt, retryAfterMs, subject);
+            },
+          },
+        }),
+    }));
+  return { running, skipped: [...skipped, ...subjectSkips] };
+}
+
+/** Commit validated source pacing independently of quota facts. Immediate
+ * producer callbacks already protect token aliases in the serial source pass;
+ * re-stating the same 429 here is idempotent. Sources without such callbacks
+ * still receive the subject floor after their batch validates. */
+export function noteRefreshPacing(
+  lanes: readonly PacingLane[],
+  snapshots: readonly QuotaSnapshot[],
+  claims: readonly QuotaAbsence[],
+  skipped: LaneCycleSelection["skipped"],
+  now: number,
+): void {
+  for (const snapshot of snapshots) {
+    if (quotaSourceTraits(snapshot.source).refreshDemandHarness !== snapshot.subject.harness)
+      continue;
+    lanes
+      .find((lane) => lane.vendor === snapshot.subject.harness)
+      ?.pacer.noteSubjectSuccess(snapshot.subject);
+  }
+  for (const claim of claims) {
+    const lane = lanes.find((item) => item.vendor === claim.subject.harness);
+    if (claim.reason === "rate_limited") {
+      lane?.pacer.noteRateLimited(
+        Date.parse(claim.observed_at),
+        claim.retry_after_ms ?? null,
+        claim.subject,
+      );
+    }
+    if (claim.reason !== "poll_paced" && claim.reason !== "probe_skipped_rate_limited") continue;
+    const until = lane?.pacer.rateLimitCooldownUntil(now, claim.subject);
+    const alreadySkipped = skipped.some(
+      (row) =>
+        row.subject &&
+        row.subject.harness === claim.subject.harness &&
+        row.subject.subject_id === claim.subject.subject_id &&
+        row.subject.credential_route === claim.subject.credential_route,
+    );
+    if (until && !alreadySkipped)
+      skipped.push({
+        vendor: claim.subject.harness,
+        subject: claim.subject,
+        not_before: new Date(until).toISOString(),
+      });
+  }
 }
 
 /** Absence recomputation covers exactly the lanes that RAN: an anonymous
@@ -234,8 +343,8 @@ export function recomputeScopeFor(
     : new Set(ranLanes.map((lane) => lane.vendor as string));
 }
 
-/** Derived `poll_paced` gap rows: while a vendor lane's rate-limit floor is
- * active, every universe subject of that vendor lacking FRESH snapshot cover
+/** Derived `poll_paced` gap rows: while a subject or legacy vendor floor is
+ * active, each affected universe subject lacking FRESH snapshot cover
  * and lacking a stored absence row is stated as paused — a live projection
  * (never journaled), stable per floor so the projection signature does not
  * churn markers on every read. Keeps a suppressed vendor's subjects from
@@ -252,18 +361,18 @@ export function derivePollPacedRows(
   const rows: QuotaAbsence[] = [];
   for (const lane of lanes) {
     if (lane.vendor === null) continue;
-    const until = lane.pacer.rateLimitCooldownUntil(now);
-    if (until === null) continue;
     for (const subject of subjects) {
       if (subject.harness !== lane.vendor) continue;
+      const until = lane.pacer.rateLimitCooldownUntil(now, subject);
+      if (until === null) continue;
       const key = quotaSubjectIdentity(subject);
       if (freshCovered.has(key) || present.has(key)) continue;
       present.add(key);
       rows.push({
         subject,
         reason: "poll_paced",
-        detail: `vendor poll paused by rate-limit cooldown until ${new Date(until).toISOString()}`,
-        observed_at: new Date(lane.pacer.rateLimitObservedAt(now)).toISOString(),
+        detail: `quota poll paused by rate-limit cooldown until ${new Date(until).toISOString()}`,
+        observed_at: new Date(lane.pacer.rateLimitObservedAt(now, subject)).toISOString(),
       });
     }
   }

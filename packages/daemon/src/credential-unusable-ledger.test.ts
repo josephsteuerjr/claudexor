@@ -21,7 +21,7 @@ function obs(over: Partial<CredentialUnusableObservation>): CredentialUnusableOb
     profile_id: "work",
     model: null,
     code: "auth_revoked",
-    source: "vendor_poller",
+    source: "attempt_stream",
     detail: null,
     observed_at: new Date(T0).toISOString(),
     expires_at: new Date(T0 + 60 * 60_000).toISOString(),
@@ -64,6 +64,23 @@ describe("CredentialUnusableLedger (A7 bounded typed evidence)", () => {
     ledger.record(obs({}));
     expect(ledger.live()).toHaveLength(1);
     expect(ledger.live()[0]).toMatchObject({ code: "auth_revoked", profile_id: "work" });
+  });
+
+  it("keeps independent refusals but never stores a duplicate poller verdict", () => {
+    const { ledger } = ledgerAt();
+    ledger.record(obs({ source: "vendor_poller" }));
+    ledger.recordBound(
+      ledger.bind(subject),
+      obs({ source: "vendor_poller", credential_route: "vendor_native" }),
+    );
+    expect(ledger.live()).toEqual([]);
+    ledger.record(obs({ source: "attempt_stream" }));
+    expect(ledger.live()).toHaveLength(1);
+    ledger.recordBound(
+      ledger.bind({ ...subject, requestedModel: "only-model" }),
+      obs({ source: "local_probe", model: "only-model", credential_route: "vendor_native" }),
+    );
+    expect(ledger.live()).toHaveLength(2);
   });
 
   it("rejects a malformed observation loudly (schema-parsed, never silently stored)", () => {

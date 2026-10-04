@@ -239,7 +239,7 @@ function skillText(host: PluginHost, runtime: RuntimePaths): string {
     "",
     "- MCP tool `claudexor_status` to inspect the aggregate/default harness projection.",
     "- MCP tool `claudexor_capabilities` for the full machine-readable catalog (harness health, modes, mutability matrix).",
-    "- MCP tool `claudexor_accounts` for the read-only Accounts view (profiles, readiness, quota freshness, and next-up routing identity); the default call is the cached listing, `fresh: true` is the expensive atomic snapshot.",
+    "- MCP tool `claudexor_accounts` for the read-only Accounts view: current quota/registry facts with retained readiness and its original check time after one coalesced cold acquisition. Viewing does not renew evidence; actual execution checks readiness independently. `fresh: true` is the expensive atomic snapshot.",
     "- MCP tool `claudexor_ask` for read-only answers (deepScan:true for bounded multi-scout research synthesis).",
     "- MCP tool `claudexor_plan` for read-only implementation plans.",
     "- MCP tool `claudexor_run` for a single agent run.",

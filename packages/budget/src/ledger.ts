@@ -9,10 +9,12 @@ import type {
   Intent,
   PaidBudget,
   QuotaSnapshot,
+  QuotaConstraint,
 } from "@claudexor/schema";
 import {
   BudgetLease as BudgetLeaseSchema,
   CostEvidence as CostEvidenceSchema,
+  quotaModelPrefixMatches,
   quotaSnapshotIdentity,
 } from "@claudexor/schema";
 import { newId, nowIso, sha256 } from "@claudexor/util";
@@ -31,22 +33,20 @@ export type CircuitTier = "ok" | "soft" | "downgrade" | "hard";
  * reasons — the old status words exhausted/exhausted_overshoot are gone. */
 export type BudgetTerminal = "budget_exhausted" | "budget_overshoot" | "cost_unverifiable" | null;
 
-/** One model-applicability predicate for every quota consumer.
- * Omitted/null scope is a vendor-wide window. A null model is the deliberate
- * vendor-native default: its concrete model is unknowable before spawn, so a
- * model-scoped window alone cannot refuse the route. Undefined means the
- * caller supplied no model context and preserves conservative matching. */
+/** Canonical admission predicate. Null model uses the vendor default's scope;
+ * undefined has no model context and preserves conservative matching. */
 export function quotaConstraintAppliesToModel(
-  constraint: { applies_to_models?: string[] | null; applies_to_unspecified_model?: boolean },
+  constraint: Pick<
+    QuotaConstraint,
+    "applies_to_models" | "applies_to_model_prefixes" | "applies_to_unspecified_model"
+  >,
   model?: string | null,
 ): boolean {
   const scopedModels = constraint.applies_to_models;
-  if (scopedModels == null || model === undefined) return true;
-  // A source may declare that its scoped window ALSO governs the
-  // unspecified-model route; without that, a harness whose windows are all
-  // model-scoped could never refuse an exhausted account on a bare run.
+  const prefixes = constraint.applies_to_model_prefixes;
+  if ((scopedModels == null && !prefixes?.length) || model === undefined) return true;
   if (model === null) return constraint.applies_to_unspecified_model === true;
-  return scopedModels.includes(model);
+  return scopedModels?.includes(model) === true || quotaModelPrefixMatches(prefixes, model);
 }
 
 export interface CircuitThresholds {

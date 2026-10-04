@@ -1,8 +1,8 @@
+import type { ClaudeOauthCredential } from "./claude-oauth-credential.js";
 import {
   claudeOauthKeychainItem,
   parseClaudeOauthCredential,
   readClaudeOauthCredential,
-  type ClaudeOauthCredential,
 } from "./claude-oauth-credential.js";
 import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -463,7 +463,7 @@ describe("claude oauth/usage quota source (W5.3, INV-062)", () => {
   });
 
   it("parses RFC 9110 Retry-After forms: delta-seconds, HTTP-date, junk, absent", async () => {
-    const { parseRetryAfterHeaderMs } = await import("./claude-oauth-usage.js");
+    const { parseRetryAfterHeaderMs } = await import("./claude-oauth-fetch.js");
     const now = Date.parse("2026-07-18T00:00:00Z");
     expect(parseRetryAfterHeaderMs("60", now)).toBe(60_000);
     expect(parseRetryAfterHeaderMs(" 5 ", now)).toBe(5_000);
@@ -479,7 +479,7 @@ describe("claude oauth/usage quota source (W5.3, INV-062)", () => {
     // typed rate_limited observation and drop the refresher's batch — the
     // floor would never arm exactly when the vendor asked for the longest
     // pause. The parser owns the bound: 7 days.
-    const { parseRetryAfterHeaderMs } = await import("./claude-oauth-usage.js");
+    const { parseRetryAfterHeaderMs } = await import("./claude-oauth-fetch.js");
     const now = Date.parse("2026-07-18T00:00:00Z");
     const sevenDaysMs = 7 * 24 * 60 * 60_000;
     // Delta-seconds far past the ceiling (finite but enormous).
@@ -558,10 +558,9 @@ describe("claude oauth/usage quota source (W5.3, INV-062)", () => {
     }
   });
 
-  it("short-circuits the candidate loop on the first 429: siblings get probe_skipped_rate_limited, never rate_limited", async () => {
-    // The vendor throttled the cycle — probing the remaining candidates would
-    // hammer the endpoint that just said stop, and a sibling's 429 proves
-    // nothing about THEIR windows (their reason must stay distinct).
+  it("does not re-present a token that already returned429 through another row in the same cycle", async () => {
+    // These rows present the same token, so one refusal paces every alias.
+    // The alias was not itself probed: retain the distinct skip reason.
     const { mkdirSync, writeFileSync: writeSync, mkdtempSync } = await import("node:fs");
     const dir = mkdtempSync(join(tmpdir(), "claudexor-oauth-429-"));
     const prev = process.env.CLAUDEXOR_CONFIG_DIR;

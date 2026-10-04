@@ -146,7 +146,7 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Bounded print-mode owner for `/model` and `/quota`. The child gets pipe EOF
+ * Bounded discovery owner for `/model`, `/quota` and the plain `models` listing. The child gets pipe EOF
  * and no controlling terminal: POSIX starts a new session; Windows uses
  * DETACHED_PROCESS because CREATE_NO_WINDOW still exposes a windowless
  * CONIN$. Child exit is completion authority; descendant-held pipes receive
@@ -154,7 +154,7 @@ function delay(ms: number): Promise<void> {
  */
 export async function runAgyPrintCommand(
   bin: string,
-  command: "/model" | "/quota",
+  command: "/model" | "/quota" | "models",
   envPatch: EnvMap,
   options: AgyPrintCommandOptions = {},
 ): Promise<AgyPrintCommandResult> {
@@ -182,7 +182,8 @@ export async function runAgyPrintCommand(
 
   let child: ChildProcessByStdio<Writable, Readable, Readable>;
   try {
-    child = (options.spawnProcess ?? spawn)(resolved, ["-p", command, "--output-format", "json"], {
+    const args = command === "models" ? ["models"] : ["-p", command, "--output-format", "json"];
+    child = (options.spawnProcess ?? spawn)(resolved, args, {
       ...agyPrintSpawnOptions(platform, env),
       stdio: ["pipe", "pipe", "pipe"],
     });

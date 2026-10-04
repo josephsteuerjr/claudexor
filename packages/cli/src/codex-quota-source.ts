@@ -250,6 +250,9 @@ async function readCodexCandidate(
         error ? reject(error) : resolve(),
       );
     });
+    // Bind the evidence to the request, not its eventual delivery: a poll
+    // already in flight must not erase a refusal observed while it awaited I/O.
+    const observedAt = new Date();
     report("started", "account/rateLimits/read");
     let response: Record<string, unknown>;
     try {
@@ -265,7 +268,7 @@ async function readCodexCandidate(
     }
     const result = response["result"];
     if (!result || typeof result !== "object") throw new Error("Codex quota response is missing");
-    return parseCodexRateLimitsResponse(result, new Date(), subjectId);
+    return parseCodexRateLimitsResponse(result, observedAt, subjectId);
   } catch (error) {
     const raw =
       error instanceof CodexRpcError

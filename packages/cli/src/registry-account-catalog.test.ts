@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessAdapter, HarnessModelSpec } from "@claudexor/core";
 import { createFakeHarness } from "@claudexor/harness-fake";
 import { CredentialProfile, GlobalConfig, type HarnessModel } from "@claudexor/schema";
+import { accountObservations } from "./account-observations.js";
+
+beforeEach(() => accountObservations.invalidate());
+
 import { harnessAccountModels } from "./registry.js";
 
 function fixture() {
@@ -67,7 +71,7 @@ describe("account-scoped harness model inventory", () => {
     f.models.mockClear();
     const pinned = await harnessAccountModels({ ...f.input, credentialProfileId: "b" });
     expect(pinned.accounts.map((row) => row.credentialProfileId)).toEqual(["b"]);
-    expect(f.models).toHaveBeenCalledTimes(1);
+    expect(f.models).not.toHaveBeenCalled();
     await expect(
       harnessAccountModels({ ...f.input, credentialProfileId: "absent" }),
     ).rejects.toMatchObject({ code: "model_account_unavailable" });
@@ -226,6 +230,7 @@ it("uses API-key manifest provenance while native accounts retain their own live
   expect(f.models).toHaveBeenCalledTimes(1);
   expect(f.models.mock.calls[0][0]?.credentialProfile?.profile_id).toBe("a");
   f.models.mockResolvedValue([]);
+  accountObservations.invalidate(); // Explicit refresh requests new evidence.
   const failed = await harnessAccountModels(f.input);
   expect(failed.accounts[0]).toMatchObject({
     catalog: null,

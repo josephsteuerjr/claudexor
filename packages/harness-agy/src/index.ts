@@ -32,6 +32,7 @@ import {
   resolveAgyProfileRoute,
 } from "./profile.js";
 import { AGY_VENDOR_CLI_VERSION } from "./vendor-cli-version.js";
+import { listAgyModels } from "./models.js";
 // The package publishes only what other packages consume. The profile probe,
 // the route resolver and the stream parser are reached through the adapter
 // this file returns, so re-exporting them would be a dead public surface.
@@ -71,23 +72,13 @@ async function detectVersion(): Promise<string | null> {
   }
 }
 
-/**
- * Manifest model truth (INV-104): the vendor's own list, captured live from
- * `agy models` on the pinned version (evidence: PLAN §1.2 F9 and the sprint
- * evidence dir; the vendor emits TSV, not JSON, in 1.1.13). Slugs
- * carry the reasoning effort (`-high`/`-medium`/`-low`) exactly like Cursor's
- * inventory, so the effort ladder is deliberately empty and an effort hint is
- * disclosed as ignored rather than mapped (Л-21). No live `models()`:
- * `agy models --output-format json` is rejected by 1.1.13 (upstream #777) and
- * the unauthenticated plain listing fails — an empty live list would refuse
- * every explicit model (PLAN §2.6).
- */
-// gemini-3.8-flash-{high,medium,low}: confirmed live on 2026-10-03 with
-// `agy models` under a Claudexor profile HOME. The host binary answered
-// 1.1.13 right before the listing and self-updated to 1.2.16 while it ran,
-// so this is evidence of the ids on the vendor backend for that account and
-// moment, not a re-verification of the 1.1.13 fixtures; the ids follow the
-// same `-effort` suffix shape as the 3.7 entries.
+/** Historical menu hints; account-specific presence comes from `models()`.
+ * Effort rides the vendor slug and the separate effort ladder stays empty.
+ * New Claude ids come from the profile listing instead of extending this
+ * version-stamped fallback. Inherited Gemini 3.8 hints were recorded on
+ * 2026-10-03 while the binary self-updated from 1.1.13 to 1.2.16, so those
+ * additions did not re-verify the fixture pin. Older 4.6 routes remain hints:
+ * one account's absence cannot retire them. */
 const AGY_KNOWN_MODELS = [
   "gemini-3.8-flash-high",
   "gemini-3.8-flash-medium",
@@ -108,14 +99,21 @@ const AGY_KNOWN_MODELS = [
   "gpt-oss-120b-medium",
 ] as const;
 
-/**
- * The vendor's two quota GROUPS map onto disjoint halves of the same
- * inventory: "Gemini Models" and "Claude and GPT models" (PLAN §1.2 F8). The
- * split is DERIVED from the one model list so a slug the vendor adds cannot
- * land in neither half and silently escape window scoping (INV-138).
- */
-export const AGY_GEMINI_MODELS = AGY_KNOWN_MODELS.filter((m) => m.startsWith("gemini-"));
-export const AGY_THIRD_PARTY_MODELS = AGY_KNOWN_MODELS.filter((m) => !m.startsWith("gemini-"));
+/** The vendor names these two quota groups explicitly. Declare known family
+ * prefixes alongside historical ids so newly enumerated siblings keep their
+ * actual quota without assigning arbitrary unknown ids to either group. */
+export const AGY_QUOTA_MODEL_GROUPS = {
+  gemini: {
+    applies_to_models: AGY_KNOWN_MODELS.filter((id) => id.startsWith("gemini-")),
+    applies_to_model_prefixes: ["gemini-"],
+  },
+  thirdParty: {
+    applies_to_models: AGY_KNOWN_MODELS.filter(
+      (id) => id.startsWith("claude-") || id.startsWith("gpt-"),
+    ),
+    applies_to_model_prefixes: ["claude-", "gpt-"],
+  },
+};
 
 /** One manifest-owned declaration of the managed login's stdin contract. */
 export const AGY_MANAGED_LOGIN = { stdin: "terminal" } as const;
@@ -263,6 +261,7 @@ export function createAgyAdapter(options: AgyAdapterOptions = {}): HarnessAdapte
           work_report_transport: "validated",
           // Effort rides the model slug (`-high`), not a flag (Л-21).
           effort_levels: [],
+          model_inventory_absence: "advisory",
           known_models: [...AGY_KNOWN_MODELS],
           known_models_verified_against: AGY_VENDOR_CLI_VERSION,
         },
@@ -270,6 +269,21 @@ export function createAgyAdapter(options: AgyAdapterOptions = {}): HarnessAdapte
         auth_modes: ["local_session"],
         access_profiles_supported: ["readonly", "workspace_write", "full", "inherit_native"],
       });
+    },
+
+    async models(spec) {
+      if (!spec?.credentialProfile) {
+        // There is no default AGY account. These rows are historical hints,
+        // never another profile's live inventory or admission authority.
+        return AGY_KNOWN_MODELS.map((id) => ({
+          id,
+          label: null,
+          context_window: null,
+          routes: ["local_session" as const],
+          origin: "hint" as const,
+        }));
+      }
+      return listAgyModels(spec, prepareProfileKeychain);
     },
 
     async doctor(spec: DoctorSpec): Promise<ConformanceReport> {

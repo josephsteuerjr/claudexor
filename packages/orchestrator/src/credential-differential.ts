@@ -24,6 +24,7 @@ import type {
   CredentialProfile,
   CredentialProfileStatus,
   CredentialUnusableObservation,
+  QuotaAbsence,
   CredentialRoute,
 } from "@claudexor/schema";
 import { staticRotationCandidates, type ProfilePolicy } from "./credential-profile-rotation.js";
@@ -38,7 +39,7 @@ import type { TransientFailureObservation } from "./transientClassify.js";
 import { composeCredentialProfileEvidence } from "./account-evidence.js";
 
 /** Bounded per-code TTLs (clearing contract, half one: self-expiry). A vendor
- * 401/403 is high-confidence and worth hours; an entitlement/probe verdict can
+ * credential rejection is high-confidence and worth hours; an entitlement/probe verdict can
  * be model- or configuration-shaped, so it self-heals within the hour even if
  * nothing clears it earlier. The ledger clamps every write to 24h max. */
 const UNUSABLE_TTL_MS: Record<CredentialUnusableObservation["code"], number> = {
@@ -64,6 +65,45 @@ function observation(
     observed_at: args.now.toISOString(),
     expires_at: new Date(args.now.getTime() + UNUSABLE_TTL_MS[code]).toISOString(),
   };
+}
+
+/** Derived decision evidence, never a second stored credential verdict. */
+function pollerRejection(absence: QuotaAbsence): CredentialUnusableObservation {
+  return {
+    ...observation(
+      {
+        harnessId: absence.subject.harness,
+        profileId: absence.subject.subject_id,
+        now: new Date(absence.observed_at),
+      },
+      "auth_revoked",
+      "vendor_poller",
+      null,
+      absence.detail,
+    ),
+    credential_route: absence.subject.credential_route,
+    expires_at: new Date(Date.now() + UNUSABLE_TTL_MS.auth_revoked).toISOString(),
+  };
+}
+
+export function pollerCredentialRejections(
+  quota: VendorQuotaObservations,
+): CredentialUnusableObservation[] {
+  return quota.absences
+    .filter((row) => {
+      if (row.reason !== "auth_revoked") return false;
+      const route = row.subject.credential_route;
+      const evidence = {
+        snapshots: quota.snapshots.filter((item) => item.subject.credential_route === route),
+        absences: quota.absences.filter((item) => item.subject.credential_route === route),
+        honored: quota.honored?.filter((item) => item.credential_route === route),
+      };
+      return (
+        vendorCredentialObservation(evidence, row.subject.harness, row.subject.subject_id)
+          ?.outcome === "revoked"
+      );
+    })
+    .map(pollerRejection);
 }
 
 /** The cheap typed stream intake. No profile probing or routing policy. */
@@ -144,15 +184,10 @@ export async function differentialSubjectVerdict(args: {
         honored: args.quota.honored?.filter((item) => item.credential_route === route),
       }
     : args.quota;
-  const vendor = vendorCredentialObservation(quota, args.harnessId, profileId);
-  if (vendor?.outcome === "revoked")
-    return observation(
-      { ...ctx, now: new Date(vendor.observed_at) },
-      "auth_revoked",
-      "vendor_poller",
-      null,
-      vendor.detail,
-    );
+  const rejected = pollerCredentialRejections(quota).find(
+    (item) => item.harness_id === args.harnessId && item.profile_id === profileId,
+  );
+  if (rejected) return rejected;
   // 3. The local doctor probe (pinned profiles only — the default subject has
   // no per-profile probe surface): a FAILED verification, vendor overlay
   // included, is a dead-credential fact the quota path cannot see.

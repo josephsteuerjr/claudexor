@@ -18,6 +18,7 @@ import { credentialUnusableLedger } from "./run-orchestrator.js";
 import { accountPoolsProjection, profileAccountProjection } from "./accounts-projection.js";
 import { buildGateway, buildRegistry, checkHarnessModel } from "./registry.js";
 import { delegationCapabilityFor } from "./delegation-capability.js";
+import { accountObservations } from "./account-observations.js";
 import { effectiveSetupLoginCapability } from "./setup-login-capability.js";
 
 const NO_PROJECT_ROOT = noProjectRepoRoot();
@@ -65,42 +66,43 @@ export async function projectHarnessStatuses(statuses: readonly HarnessStatus[])
  * Returns the listing service plus the pool-authority read
  * (`GET /v2/account-pools`) so both share one cached projection. */
 export function createCredentialProfilesService(quotaRegistry: () => QuotaRegistry) {
-  const projectProfiles = () => {
+  const projectProfiles = (fresh = false) => {
     const profiles = loadConfig(NO_PROJECT_ROOT).global.credential_profiles;
-    return Promise.all(profiles.map((profile) => profileAccountProjection(profile, profiles)));
+    return Promise.all(
+      profiles.map((profile) =>
+        profileAccountProjection(profile, profiles, process.platform, fresh),
+      ),
+    );
   };
-  // The plain (non-snapshot) form is the UI's poll target: without a cache it
-  // ran a doctor probe per registered profile plus a full harness sweep
-  // inside harnessAccountsProjection on EVERY tick — the daemon-starving load
-  // behind the 2026-08-04 "Daemon unreachable: ReadTimeout" login failure.
-  // The snapshot form is the explicit refresh action, not the poll path; its
-  // profile probes and doctor sweep are always fresh, while the QUOTA leg
-  // rides the registry cycle, which skips a vendor inside its poll
-  // rate-limit cooldown and discloses that additively
-  // (quota.refresh_skipped) instead of re-hammering a 429ing endpoint.
-  // A login/logout invalidates this cache immediately
-  // (invalidateStatusProjections), so freshness lags at most the short TTL.
-  const probeAccounts = async () => {
-    const harnessIds = [...buildRegistry({ includeFakes: false }).keys()].sort();
-    const [profiles, statuses] = await Promise.all([
-      projectProfiles(),
-      buildGateway({ includeFakes: false })
-        .statusAll({ cwd: NO_PROJECT_ROOT }, harnessIds)
-        .catch(() => [] as HarnessStatus[]),
-    ]);
-    return { profiles, statuses };
-  };
-  // Only native probes are cached. A refusal, recovery or expiry must be
-  // visible on the next read without starting another vendor process.
-  const pollCache = new StatusProjectionCache<Awaited<ReturnType<typeof probeAccounts>>>({
+  // Ordinary reads re-project current quota/config around the retained cold
+  // observation. Expiry never starts another profile or catalog acquisition.
+  const harnessCache = new StatusProjectionCache<HarnessStatus[]>({
+    ttlMs: Infinity,
     versionOf: globalConfigVersion,
   });
+  const readHarnesses = (fresh = false) =>
+    harnessCache.read(
+      async () => {
+        try {
+          return (
+            await buildGateway({ includeFakes: false }).statusAllForAccounts({
+              cwd: NO_PROJECT_ROOT,
+              fresh,
+            })
+          ).map((receipt) => receipt.status);
+        } catch (error) {
+          if (fresh) throw error;
+          return [];
+        }
+      },
+      { fresh },
+    );
   const buildPollResponse = async () => {
-    const probed = await pollCache.read(probeAccounts);
+    const [probed, statuses] = await Promise.all([projectProfiles(), readHarnesses()]);
     const quota = quotaRegistry().read();
     const unusable = credentialUnusableLedger.live();
     const evidence = { ...quota, honored: credentialUnusableLedger.honored() };
-    const out = withAccountEvidence(probed.profiles, evidence, unusable);
+    const out = withAccountEvidence(probed, evidence, unusable);
     return {
       profiles: out,
       // Unified account model: the legacy carrier stays PRESENT and empty for
@@ -108,7 +110,7 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
       harnessAccounts: [],
       accountPools: await accountPoolsProjection(NO_PROJECT_ROOT, quota.snapshots, {
         profiles: out,
-        statuses: probed.statuses,
+        statuses,
         quota: evidence,
         unusable,
       }),
@@ -116,24 +118,18 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
   };
   const credentialProfiles = async (input?: { snapshot?: boolean }) => {
     if (input?.snapshot === true) {
-      const [probed, accountStatuses, git, fencedQuota] = await Promise.all([
-        projectProfiles(),
-        buildGateway({ includeFakes: false }).statusAllForAccounts({
-          cwd: NO_PROJECT_ROOT,
-          fresh: true,
-        }),
+      accountObservations.invalidateCatalogs();
+      const [probed, statuses, git, fencedQuota] = await Promise.all([
+        projectProfiles(true),
+        readHarnesses(true),
         probeGitCapability(),
         quotaRegistry().refreshWithCursor(),
       ]);
-      const statuses = accountStatuses.map((receipt) => receipt.status);
       const rawQuota = fencedQuota.response;
       const unusable = credentialUnusableLedger.live();
       const evidence = { ...rawQuota, honored: credentialUnusableLedger.honored() };
       const out = withAccountEvidence(probed, evidence, unusable);
-      // The explicit refresh proved the live state — drop the stale poll
-      // cache so the next ordinary poll recomputes from it (re-priming with a
-      // snapshot-derived projection was explicitly declined, wave-3 decision).
-      pollCache.invalidate();
+      // Explicit acquisition refreshes the display observation, not just TTL.
       return {
         profiles: out,
         harnessAccounts: [],

@@ -1,3 +1,10 @@
+# The separate models.tsv is recorded stdout from `agy models`, 2026-10-03.
+# Its command exited 0; "Fetching available models..." was stderr. The CLI
+# reported 1.1.13 before this listing and self-updated to 1.2.16 during it.
+# Exact serving version is therefore unknown; this fixture proves only the
+# two-column table shape and presence for that account at that time, not a
+# refreshed 1.1.13 stream/transport proof. No fixture pin was moved.
+#
 # Fixture provenance manifest. All four streams were RECORDED from live
 # authenticated agy 1.1.13 sessions on macOS (2026-08-16) except
 # session-resume.jsonl, which is synthesized from those exact recorded shapes

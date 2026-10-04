@@ -1,8 +1,42 @@
 import type { HarnessEvent, QuotaConstraint, QuotaSnapshot } from "@claudexor/schema";
 import { nowIso, redactSecrets } from "@claudexor/util";
 
-/** Native bucket/window codec shared by full reads and incremental notifications. */
+/** Full inventory reads may clear old restrictions, so malformed/unknown
+ * envelopes cannot acquire the authority of a successful empty inventory. */
 export function parseCodexRateLimitsResponse(
+  value: unknown,
+  observedAt: Date,
+  subjectId: string | null = null,
+): QuotaSnapshot[] {
+  const response = objectOrNull(value);
+  if (!response) throw new Error("Codex quota response is not an object");
+  const buckets = fullRateLimitBuckets(response);
+  for (const [, bucket] of buckets) {
+    for (const [windowName, candidate] of Object.entries(bucket)) {
+      const window = objectOrNull(candidate);
+      if (
+        (windowName === "primary" || windowName === "secondary") &&
+        candidate !== null &&
+        (!window || !isRateLimitWindow(window))
+      ) {
+        throw new Error("Codex quota response contains an unrecognized window");
+      }
+      if (!window || !isRateLimitWindow(window)) continue;
+      for (const key of ["usedPercent", "windowDurationMins", "resetsAt"]) {
+        if (key in window && window[key] !== null && finiteNumber(window[key]) === null)
+          throw new Error("Codex quota response contains a malformed window");
+      }
+    }
+  }
+  return parseCodexRateLimits(
+    { ...response, rateLimitsByLimitId: Object.fromEntries(buckets) },
+    observedAt,
+    subjectId,
+  );
+}
+
+/** Numeric codec shared by validated full reads and tolerant notifications. */
+function parseCodexRateLimits(
   value: unknown,
   observedAt: Date,
   subjectId: string | null = null,
@@ -50,7 +84,6 @@ export function parseCodexRateLimitsResponse(
       cooldown_until: null,
     });
   }
-  if (buckets.length === 0) return [];
   return [
     {
       subject: {
@@ -75,7 +108,7 @@ export function codexRateLimitEvents(value: unknown, sessionId: string): Harness
   const ts = nowIso();
   return rateLimitBuckets(response).flatMap(([fallbackId, bucket]) => {
     const id = textOrNull(bucket["limitId"]) ?? fallbackId;
-    const [snapshot] = parseCodexRateLimitsResponse(
+    const [snapshot] = parseCodexRateLimits(
       { rateLimits: { ...bucket, limitId: id } },
       new Date(ts),
     );
@@ -105,6 +138,46 @@ export function codexRateLimitEvents(value: unknown, sessionId: string): Harness
       return event;
     });
   });
+}
+
+function fullRateLimitBuckets(
+  response: Record<string, unknown>,
+): Array<[string, Record<string, unknown>]> {
+  const byId = response["rateLimitsByLimitId"];
+  if (byId !== undefined && byId !== null) {
+    const buckets = objectOrNull(byId);
+    if (!buckets) throw new Error("Codex quota response contains a malformed bucket map");
+    if (Object.keys(buckets).length > 0) {
+      return Object.entries(buckets).map(([id, value]) => [id, recognizedRateLimitBucket(value)]);
+    }
+    if (response["rateLimits"] === undefined || response["rateLimits"] === null) return [];
+  }
+  if (response["rateLimits"] === null) return [];
+  if (response["rateLimits"] !== undefined) {
+    const bucket = recognizedRateLimitBucket(response["rateLimits"]);
+    return [[textOrNull(bucket["limitId"]) ?? "default", bucket]];
+  }
+  throw new Error("Codex quota response contains no recognized rate limits");
+}
+
+function recognizedRateLimitBucket(value: unknown): Record<string, unknown> {
+  const bucket = objectOrNull(value);
+  if (
+    !bucket ||
+    !(
+      "primary" in bucket ||
+      "secondary" in bucket ||
+      textOrNull(bucket["limitId"]) ||
+      textOrNull(bucket["planType"]) ||
+      Object.values(bucket).some((item) => {
+        const window = objectOrNull(item);
+        return window !== null && isRateLimitWindow(window);
+      })
+    )
+  ) {
+    throw new Error("Codex quota response contains an unrecognized bucket");
+  }
+  return bucket;
 }
 
 function rateLimitBuckets(response: Record<string, unknown>) {

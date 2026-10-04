@@ -161,7 +161,7 @@ export const CredentialProfileStatus = z
 export type CredentialProfileStatus = z.infer<typeof CredentialProfileStatus>;
 
 /** Why an observed credential is unusable, in the OBSERVER's typed vocabulary:
- * `auth_revoked` = the vendor rejected the credential itself (401/403);
+ * `auth_revoked` = the vendor rejected the credential itself (a credential-specific rejection);
  * `capability_refused` = a typed non-retryable entitlement refusal was observed
  * on the attempt stream (org-disabled, model-not-entitled — model-scoped when
  * the attempt carried a model hint); `verification_failed` = the profile's own

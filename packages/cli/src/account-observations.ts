@@ -1,0 +1,186 @@
+import { globalConfigPath } from "@claudexor/config";
+import type { CredentialAccountProbeReceipt, HarnessAdapter } from "@claudexor/core";
+import { probeCredentialProfileStatus } from "@claudexor/orchestrator";
+import {
+  AccountIdentity as AccountIdentitySchema,
+  CredentialProfileStatus as ProfileStatusSchema,
+  type CredentialProfile,
+} from "@claudexor/schema";
+import { claudeAccountIdentity } from "@claudexor/harness-claude";
+import { codexAccountIdentity } from "@claudexor/harness-codex";
+import { registerStatusProjection, STATUS_PROJECTION_TTL_MS } from "./status-projection-cache.js";
+
+interface Observation<T> {
+  value: T;
+  at: number;
+}
+interface Entry {
+  fingerprint: string;
+  promise: Promise<Observation<unknown>>;
+  pending: boolean;
+}
+
+/** Display acquisition is cold-once, including failure. TTL ages evidence; it
+ * never schedules another vendor call. Credential invalidation and explicit
+ * Refresh discard it. Run admission does not read this display cache. */
+class AccountObservations {
+  private entries = new Map<string, Entry>();
+  generation = 0;
+
+  constructor() {
+    registerStatusProjection(this);
+  }
+
+  invalidate(): void {
+    this.entries.clear();
+    this.generation += 1;
+  }
+
+  invalidateCatalogs(): void {
+    for (const key of this.entries.keys())
+      if (key.split("\0")[1] !== "profile") this.entries.delete(key);
+  }
+
+  observeProfile(
+    profile: CredentialProfile,
+    receipt: CredentialAccountProbeReceipt,
+    generation: number,
+  ): void {
+    if (generation !== this.generation) return;
+    const key = [globalConfigPath(), "profile", profile.harness_id, profile.profile_id].join("\0");
+    // The display acquisition already receives this same adapter response.
+    if (this.entries.get(key)?.pending) return;
+    const status = ProfileStatusSchema.safeParse(receipt.status);
+    if (
+      !status.success ||
+      status.data.profile_id !== profile.profile_id ||
+      status.data.harness_id !== profile.harness_id
+    )
+      return;
+    this.entries.set(key, {
+      fingerprint: JSON.stringify(profile),
+      pending: false,
+      promise: Promise.resolve({ value: { ...receipt, status: status.data }, at: Date.now() }),
+    });
+  }
+
+  read<T>(
+    kind: string,
+    profile: CredentialProfile,
+    acquire: () => Promise<T>,
+    fresh = false,
+  ): Promise<Observation<T>> {
+    const key = [globalConfigPath(), kind, profile.harness_id, profile.profile_id].join("\0");
+    const fingerprint = JSON.stringify(profile);
+    const current = this.entries.get(key);
+    if (current?.fingerprint === fingerprint && (!fresh || current.pending))
+      return current.promise as Promise<Observation<T>>;
+    const entry: Entry = { fingerprint, pending: true, promise: Promise.resolve(null as never) };
+    entry.promise = Promise.resolve()
+      .then(acquire)
+      .then((value) => {
+        if (this.entries.get(key) !== entry)
+          throw new Error("Account observation changed during acquisition; refresh again");
+        return { value, at: Date.now() };
+      })
+      .finally(() => {
+        entry.pending = false;
+      });
+    this.entries.set(key, entry);
+    return entry.promise as Promise<Observation<T>>;
+  }
+}
+
+export const accountObservations = new AccountObservations();
+
+/** Non-secret identity from this binding's owned store, never an ambient login. */
+export function profileAccountIdentity(profile: CredentialProfile) {
+  if (!profile.isolation_locator) return null;
+  if (profile.harness_id === "codex") return codexAccountIdentity(profile.isolation_locator);
+  if (profile.harness_id === "claude") return claudeAccountIdentity(profile.isolation_locator);
+  return null;
+}
+
+/** One acquisition shared by profile hydration and account-catalog display. */
+export async function displayAccountObservation(
+  profile: CredentialProfile,
+  adapter?: HarnessAdapter,
+  fresh = false,
+): Promise<CredentialAccountProbeReceipt> {
+  const observed = await accountObservations.read(
+    "profile",
+    profile,
+    async () => {
+      let identity = profileAccountIdentity(profile);
+      const status = await probeCredentialProfileStatus(
+        profile,
+        adapter?.probeCredentialAccount
+          ? async (candidate) => {
+              const receipt = await adapter.probeCredentialAccount!(candidate);
+              if (
+                receipt.status.profile_id !== candidate.profile_id ||
+                receipt.status.harness_id !== candidate.harness_id
+              )
+                throw new Error("Account probe returned a different profile");
+              identity =
+                receipt.identity === null ? null : AccountIdentitySchema.parse(receipt.identity);
+              return receipt.status;
+            }
+          : adapter?.probeCredentialProfile?.bind(adapter),
+      );
+      return { status, identity };
+    },
+    fresh,
+  );
+  const age = Math.max(0, Date.now() - observed.at);
+  if (age <= STATUS_PROJECTION_TTL_MS) return observed.value;
+  return {
+    ...observed.value,
+    status: {
+      ...observed.value.status,
+      // Retain what the probe observed. Display age does not revoke that fact
+      // or decide whether the binding may make its first catalog read. Actual
+      // run admission performs its own probe outside this display cache.
+      detail:
+        `Last checked ${new Date(observed.at).toISOString()}; refresh to verify current readiness. ${observed.value.status.detail ?? ""}`.trim(),
+    },
+  };
+}
+
+/** Existing necessary probes feed the same display owner; observing a run
+ * never starts an extra probe. A credential mutation rejects late receipts. */
+export function retainAccountProbeObservations(adapter: HarnessAdapter): HarnessAdapter {
+  const profileProbe = adapter.probeCredentialProfile?.bind(adapter);
+  const accountProbe = adapter.probeCredentialAccount?.bind(adapter);
+  return {
+    ...adapter,
+    ...(profileProbe
+      ? {
+          probeCredentialProfile: async (
+            ...args: Parameters<NonNullable<HarnessAdapter["probeCredentialProfile"]>>
+          ) => {
+            const generation = accountObservations.generation;
+            const status = await profileProbe(...args);
+            accountObservations.observeProfile(
+              args[0],
+              { status, identity: profileAccountIdentity(args[0]) },
+              generation,
+            );
+            return status;
+          },
+        }
+      : {}),
+    ...(accountProbe
+      ? {
+          probeCredentialAccount: async (
+            ...args: Parameters<NonNullable<HarnessAdapter["probeCredentialAccount"]>>
+          ) => {
+            const generation = accountObservations.generation;
+            const receipt = await accountProbe(...args);
+            accountObservations.observeProfile(args[0], receipt, generation);
+            return receipt;
+          },
+        }
+      : {}),
+  };
+}

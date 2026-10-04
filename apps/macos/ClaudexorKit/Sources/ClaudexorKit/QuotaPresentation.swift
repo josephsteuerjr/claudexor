@@ -125,7 +125,7 @@ public enum QuotaPresentation {
                     for scoped in availability.modelScopedExhaustions {
                         let value = ScopedExhaustion(
                             constraintId: scoped.constraintId,
-                            appliesToModels: scoped.appliesToModels,
+                            appliesToModels: scoped.modelScope,
                             resetsAt: scoped.resetsAt)
                         // Newest snapshot wins an exact duplicate; distinct model
                         // scopes remain visible and are sorted below.
@@ -149,7 +149,7 @@ public enum QuotaPresentation {
                         label: constraint.label,
                         usedRatio: constraint.usedRatio,
                         resetsAt: constraint.resetsAt,
-                        appliesToModels: constraint.appliesToModels,
+                        appliesToModels: constraint.modelScope.isEmpty ? nil : constraint.modelScope,
                         freshness: snapshot.freshness
                     ))
                 }
@@ -205,6 +205,9 @@ public enum QuotaPresentation {
 }
 
 private func humanizeModelScope(_ raw: String) -> String {
+    if raw.hasSuffix("*") {
+        return raw.dropLast().trimmingCharacters(in: CharacterSet(charactersIn: "-_ ")).capitalized
+    }
     let cleaned = raw
         .replacingOccurrences(of: "claude-", with: "")
         .replacingOccurrences(of: "_", with: " ")

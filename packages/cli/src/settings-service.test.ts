@@ -33,8 +33,8 @@ writeFileSync(
 );
 chmodSync(stubBin, 0o755);
 process.env["CLAUDEXOR_CODEX_BIN"] = stubBin;
-// Same shape for agy: its manifest hint list is the AUTHORITATIVE truth source
-// the strict refusal test needs now that codex declares absence advisory.
+// AGY has no unscoped account; its dated manifest hints admit listed models
+// while the accepted advisory contract discloses unlisted explicit requests.
 const agyBin = join(stubDir, "agy");
 writeFileSync(
   agyBin,
@@ -139,17 +139,18 @@ describe("assertSettingsPatchValid", () => {
     ).rejects.toThrow(/not persistable/);
   });
 
-  it("refuses a model outside an AUTHORITATIVE harness's truth source with the actionable message (HTTP 400 path)", async () => {
-    // agy declares nothing about absence, so its manifest hint list is a
-    // complete enumeration and a miss is a typed refusal (INV-104).
+  it("keeps an unlisted AGY setting with explicit unverified evidence (INV-104)", async () => {
+    const notes: string[] = [];
     await expect(
       assertSettingsPatchValid(
         ControlSettingsUpdateRequest.parse({
           harnesses: { agy: { defaultModel: "ghost-model-9000" } },
         }),
         AUTO_NO_TIERS,
+        notes,
       ),
-    ).rejects.toThrow(/refused defaultModel 'ghost-model-9000'.*truth source: manifest/s);
+    ).resolves.toBeDefined();
+    expect(notes).toEqual([expect.stringContaining("forwarded to the vendor")]);
     // A truth-listed model passes.
     await expect(
       assertSettingsPatchValid(

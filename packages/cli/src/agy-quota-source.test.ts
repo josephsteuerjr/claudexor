@@ -11,7 +11,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { QuotaConstraint, harnessHasDefaultCredentialStore } from "@claudexor/schema";
+import {
+  QuotaConstraint,
+  harnessHasDefaultCredentialStore,
+  quotaSnapshotAvailability,
+} from "@claudexor/schema";
+import { BudgetLedger } from "../../budget/src/ledger.js";
 import { parseAgyQuotaEnvelope, refreshAgyQuota } from "./agy-quota-source.js";
 
 const FIXTURES = fileURLToPath(new URL("./__fixtures__", import.meta.url));
@@ -520,19 +525,106 @@ describe("refreshAgyQuota bare-route scoping", () => {
     expect(await flags(null)).toEqual({ "gemini-weekly": true, "3p-weekly": false });
   });
 
-  it("falls back rather than leaving EVERY window ungoverned for an unknown slug", async () => {
-    // The vendor ships new slugs between our releases and the user picks them
-    // in its own TUI. Matching none must not read as a healthy account: that
-    // would make an exhausted subscription unrefusable and rotation dead.
+  it("follows known vendor families and leaves a truly unknown model unverified", async () => {
     expect(await flags("gemini-4.0-flash-high")).toEqual({
       "gemini-weekly": true,
       "3p-weekly": false,
     });
-    // A slug we cannot place at ALL is governed by every window, so an
-    // exhausted account is refused rather than reading as healthy.
-    expect(await flags("some-future-vendor-model")).toEqual({
-      "gemini-weekly": true,
+    expect(await flags("claude-opus-5-5-high")).toEqual({
+      "gemini-weekly": false,
       "3p-weekly": true,
+    });
+    expect(await flags("claude-new-model-high")).toEqual({
+      "gemini-weekly": false,
+      "3p-weekly": true,
+    });
+    // Neither window is evidence about an entirely unknown vendor family.
+    expect(await flags("some-future-vendor-model")).toEqual({
+      "gemini-weekly": false,
+      "3p-weekly": false,
+    });
+  });
+});
+
+describe("AGY group scope across quota consumers", () => {
+  it("keeps future Claude IDs bound to their spent group in display and budget", () => {
+    const now = new Date("2026-10-04T00:00:00Z");
+    const reset = "2026-10-05T00:00:00Z";
+    const parsed = parseAgyQuotaEnvelope(
+      JSON.stringify({
+        status: "SUCCESS",
+        command: {
+          data: {
+            groups: [
+              {
+                name: "Gemini Models",
+                buckets: [
+                  {
+                    id: "gemini",
+                    name: "Weekly",
+                    remaining_fraction: 1,
+                    window: "weekly",
+                    reset_time: reset,
+                  },
+                ],
+              },
+              {
+                name: "Claude and GPT models",
+                buckets: [
+                  {
+                    id: "third-party",
+                    name: "Weekly",
+                    remaining_fraction: 0,
+                    window: "weekly",
+                    reset_time: reset,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    );
+    expect(parsed.kind).toBe("constraints");
+    if (parsed.kind !== "constraints") return;
+    const snapshot = {
+      subject: {
+        harness: "agy",
+        credential_route: "vendor_native" as const,
+        subject_id: "account-a",
+        plan_label: null,
+      },
+      constraints: parsed.constraints,
+      source: "agy_command_usage" as const,
+      observed_at: now.toISOString(),
+      freshness: "fresh" as const,
+    };
+    const ledger = new BudgetLedger();
+    ledger.observeQuotaSnapshot(snapshot);
+    for (const model of ["claude-opus-5-5-high", "claude-future-high", "gpt-future"]) {
+      expect(quotaSnapshotAvailability(snapshot, { now, model }).state).toBe("exhausted");
+      expect(ledger.cooldownActive("agy", "vendor_native", "account-a", +now, model)).toBe(true);
+      expect(ledger.cooldownActive("agy", "vendor_native", "account-b", +now, model)).toBe(false);
+    }
+    for (const model of [
+      "gemini-3.8-flash-high",
+      "gemini-future-high",
+      "some-future-vendor-model",
+    ]) {
+      expect(quotaSnapshotAvailability(snapshot, { now, model }).state).toBe("available");
+      expect(ledger.cooldownActive("agy", "vendor_native", "account-a", +now, model)).toBe(false);
+    }
+    expect(
+      ledger.bindingPaceSlack(
+        "agy",
+        "vendor_native",
+        "account-a",
+        +now,
+        "some-future-vendor-model",
+      ),
+    ).toBeNull();
+    expect(quotaSnapshotAvailability(snapshot, { now }).model_scoped_exhaustions[0]).toMatchObject({
+      applies_to_model_prefixes: ["claude-", "gpt-"],
     });
   });
 });

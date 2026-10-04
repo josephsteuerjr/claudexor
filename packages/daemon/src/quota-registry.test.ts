@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DurableJournal } from "@claudexor/journal";
-import { withQuotaAvailability } from "@claudexor/schema";
+import { withQuotaAvailability, type QuotaSubject } from "@claudexor/schema";
 import { hashJson, sha256 } from "@claudexor/util";
 import { JournalManager } from "./journal-manager.js";
 import { quotaProjection } from "./quota-projection.js";
@@ -2478,6 +2478,16 @@ describe("QuotaRegistry per-vendor pacing lanes", () => {
       save: (vendor: string, notBeforeMs: number) => {
         saved.set(vendor, notBeforeMs);
       },
+      loadSubject: (subject: QuotaSubject) =>
+        saved.get(
+          JSON.stringify([subject.harness, subject.credential_route, subject.subject_id]),
+        ) ?? 0,
+      saveSubject: (subject: QuotaSubject, until: number) => {
+        saved.set(
+          JSON.stringify([subject.harness, subject.credential_route, subject.subject_id]),
+          until,
+        );
+      },
     };
     let calls = 0;
     const refresher = {
@@ -2508,7 +2518,8 @@ describe("QuotaRegistry per-vendor pacing lanes", () => {
     );
 
     await expect(registry.pollStale()).resolves.toBe(true);
-    expect(saved.get("claude")).toBe(nowMs + 45 * 60_000);
+    expect(saved.get(JSON.stringify(["claude", "vendor_native", null]))).toBe(nowMs + 45 * 60_000);
+    expect(saved.has("claude")).toBe(false);
     // Owner decision 7=A: the floor never becomes a quota fact — no snapshot
     // or cooldown upsert reaches the journal (the typed absence itself rides
     // only the ephemeral projection, whose markers are the sole records here).
@@ -2692,6 +2703,7 @@ describe("QuotaRegistry per-vendor pacing lanes", () => {
     expect(second.refresh_skipped).toEqual([
       {
         vendor: "claude",
+        subject: subjectOf("claude"),
         not_before: new Date(Date.parse("2026-08-28T00:20:00.000Z")).toISOString(),
       },
     ]);
@@ -2939,7 +2951,7 @@ describe("QuotaRegistry gap-absence honesty (suppressed polls stay stated)", () 
     },
   );
 
-  it("derives stable poll_paced rows for a floor-suppressed vendor's unstated subjects, restart included", async () => {
+  it("derives stable poll_paced rows for a floor-suppressed token aliases, restart included", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "claudexor-quota-gap-paced-")));
     const journal = new DurableJournal({ rootDir: root, partition: "global" });
     let nowMs = Date.parse("2026-08-28T00:00:00.000Z");
@@ -2949,30 +2961,46 @@ describe("QuotaRegistry gap-absence honesty (suppressed polls stay stated)", () 
       save: (vendor: string, notBeforeMs: number) => {
         saved.set(vendor, notBeforeMs);
       },
+      loadSubject: (subject: QuotaSubject) =>
+        saved.get(
+          JSON.stringify([subject.harness, subject.credential_route, subject.subject_id]),
+        ) ?? 0,
+      saveSubject: (subject: QuotaSubject, until: number) => {
+        saved.set(
+          JSON.stringify([subject.harness, subject.credential_route, subject.subject_id]),
+          until,
+        );
+      },
     };
     const a = subjectOf("claude", "acc-a");
     const b = subjectOf("claude", "acc-b");
     const subjects = () => [a, b];
     const refresher = {
       vendor: "claude",
-      refresh: async () => ({
-        snapshots: [],
-        absences: [
-          {
-            subject: a,
-            reason: "rate_limited" as const,
-            detail: null,
-            observed_at: new Date(nowMs).toISOString(),
-            retry_after_ms: 30 * 60_000,
-          },
-          {
-            subject: b,
-            reason: "probe_skipped_rate_limited" as const,
-            detail: null,
-            observed_at: new Date(nowMs).toISOString(),
-          },
-        ],
-      }),
+      refresh: async (cycle?: import("./quota-poll-lanes.js").QuotaRefreshCycle) => {
+        cycle?.pacing?.bindCredentials([
+          { subject: a, credentialHash: "same-token-hash" },
+          { subject: b, credentialHash: "same-token-hash" },
+        ]);
+        return {
+          snapshots: [],
+          absences: [
+            {
+              subject: a,
+              reason: "rate_limited" as const,
+              detail: null,
+              observed_at: new Date(nowMs).toISOString(),
+              retry_after_ms: 30 * 60_000,
+            },
+            {
+              subject: b,
+              reason: "probe_skipped_rate_limited" as const,
+              detail: null,
+              observed_at: new Date(nowMs).toISOString(),
+            },
+          ],
+        };
+      },
     };
     const registry = new QuotaRegistry(
       journal,
@@ -3029,26 +3057,37 @@ describe("QuotaRegistry gap-absence honesty (suppressed polls stay stated)", () 
 });
 
 describe("quotaPacerFileStore", () => {
-  it("round-trips per-vendor floors, survives junk, and writes atomically", async () => {
+  it("round-trips subject floors, retains old vendor deadlines, survives junk and writes atomically", async () => {
     const { quotaPacerFileStore } = await import("./quota-poll-pacer.js");
     const { writeFileSync, readFileSync, readdirSync } = await import("node:fs");
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "claudexor-pacer-store-")));
     const store = quotaPacerFileStore(dir);
     expect(store.load("claude")).toBe(0);
     const at = Date.parse("2026-08-28T00:45:00.000Z");
-    store.save("claude", at);
-    store.save("codex", at + 1000);
+    writeFileSync(
+      join(dir, "quota-pacer-state.json"),
+      JSON.stringify({
+        version: 1,
+        vendors: {
+          claude: { not_before: new Date(at).toISOString() },
+          codex: { not_before: new Date(at + 1000).toISOString() },
+        },
+      }),
+    );
+    const subject = quotaSnapshot("claude", "one-account", 0).subject;
+    store.saveSubject?.(subject, at + 2000);
+    expect(store.loadSubject?.(subject)).toBe(at + 2000);
     expect(store.load("claude")).toBe(at);
     expect(store.load("codex")).toBe(at + 1000);
     // The file is daemon-private state, not a journal record.
     const raw = JSON.parse(readFileSync(join(dir, "quota-pacer-state.json"), "utf8"));
-    expect(raw).toMatchObject({ version: 1 });
+    expect(raw).toMatchObject({ version: 2 });
     expect(readdirSync(dir).filter((name) => name.includes(".tmp."))).toEqual([]);
     // Corrupt file: fail-open to no floor, and the next save repairs it.
     writeFileSync(join(dir, "quota-pacer-state.json"), "{not json");
     expect(store.load("claude")).toBe(0);
-    store.save("agy", at);
-    expect(store.load("agy")).toBe(at);
+    store.saveSubject?.(subject, at);
+    expect(store.loadSubject?.(subject)).toBe(at);
     rmSync(dir, { recursive: true, force: true });
   });
 });

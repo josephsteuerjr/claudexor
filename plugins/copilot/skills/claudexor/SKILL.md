@@ -31,10 +31,13 @@ Start read-only unless the user explicitly asked to change or create files.
 2. Call `claudexor_accounts` before choosing an account or reviewer identity.
    It is the read-only Accounts view of registered profiles, readiness, quota
    freshness, and the daemon's `next_up` routing projection; the default call
-   returns the server's cached listing (at most about 15 s stale), and
+   combines current quota and registry facts with retained readiness observations.
+   One coalesced cold acquisition, including failure, is followed by passive reads
+   with the original check time; viewing does not renew old evidence.
    `fresh: true` requests the atomic snapshot, an expensive explicit refresh
-   to use only when acting on staleness matters. `available/passed`
-   on the exact selected row is the usable route evidence; `unknown`,
+   to use only when acting on staleness matters. Check the selected row's age:
+   retained `available/passed` describes its last observation, while actual
+   execution performs its own current admission checks. `unknown`,
    `not_run`, or stale quota means uncertain, not absent. Never substitute
    aggregate doctor status, another profile's probe, or a host/default login.
    Never initiate login or OAuth merely because a row is unknown; ask the user

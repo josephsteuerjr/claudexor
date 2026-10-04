@@ -7,6 +7,7 @@ import {
   QuotaAbsence as QuotaAbsenceSchema,
   QuotaSnapshot as QuotaSnapshotSchema,
   QuotaWindowObservation,
+  QuotaWindowSupersession,
   REACTIVE_COOLDOWN_SOURCE,
   quotaSourceTraits,
   type CredentialRoute,
@@ -16,17 +17,19 @@ import {
 } from "@claudexor/schema";
 import {
   legacyV320Snapshot,
+  quotaSnapshotRecords,
+  reconcileQuotaSnapshot,
   reactiveCooldownSnapshot,
   sameQuotaEvidence,
   snapshotKey,
-  staleAt,
-  withoutExpiredScopedCooldowns,
+  activeQuotaSnapshots,
 } from "./quota-registry-support.js";
 import {
   buildRefresherLanes,
   derivePollPacedRows,
   foldAbsenceClaims,
   laneDemand,
+  noteRefreshPacing,
   performPollSweep,
   recomputeScopeFor,
   selectCycleEntries,
@@ -42,13 +45,18 @@ import { quotaSubjectIdentity } from "./quota-refresh-demand.js";
 
 const UPSERTED = "quota.snapshot.upserted";
 const WINDOW_OBSERVED = "quota.window.observed";
+const WINDOW_SUPERSEDED = "quota.window.superseded";
 const SCOPED_PREPARED = "quota.snapshot.scoped_prepared";
 const REMOVED = "quota.subject.removed";
 const PROJECTION_UPDATED = "quota.projection.updated";
-const REPLAY_TYPES = [SCOPED_PREPARED, UPSERTED, WINDOW_OBSERVED, REMOVED, PROJECTION_UPDATED];
-/** Snapshots older than this are pruned from every projection read (W17):
- * a day-old observation is not quota truth, just footer clutter. */
-const MAX_SNAPSHOT_AGE_MS = 24 * 60 * 60_000;
+const REPLAY_TYPES = [
+  SCOPED_PREPARED,
+  UPSERTED,
+  WINDOW_OBSERVED,
+  WINDOW_SUPERSEDED,
+  REMOVED,
+  PROJECTION_UPDATED,
+];
 
 /** The registered subject UNIVERSE: every subject the daemon expects to hear
  * about, so a subject with neither snapshot nor a source claim still surfaces
@@ -58,6 +66,7 @@ export type QuotaSubjectUniverse = () => QuotaSubject[];
 /** Global-journal authority for vendor-owned quota snapshots. */
 export class QuotaRegistry {
   private readonly snapshots = new Map<string, QuotaSnapshot>();
+  private readonly supersededWindows = new Map<string, QuotaWindowSupersession>();
   /** Ephemeral typed-absence state, recomputed each refresh/poll cycle — NOT
    * journaled: an absence is a live derivation of "who reported nothing this
    * cycle", never a durable fact to replay. */
@@ -130,6 +139,11 @@ export class QuotaRegistry {
         rawMutationAfterMarker = true;
         continue;
       }
+      if (record.type === WINDOW_SUPERSEDED) {
+        this.applyWindowSupersession(QuotaWindowSupersession.parse(record.payload));
+        rawMutationAfterMarker = true;
+        continue;
+      }
       if (record.type === REMOVED) {
         const payload = record.payload as { harness?: unknown; subject_id?: unknown };
         // subject_id is null for a harness's default/native subject, which is
@@ -174,26 +188,8 @@ export class QuotaRegistry {
     });
   }
 
-  /** Freshness-annotated snapshots with expired (>24h) observations pruned.
-   * An old observation whose constraint still EXTENDS into the future (a
-   * weekly cooldown/reset seen once) is kept and stale-marked: pruning it
-   * would hide a live cap from both the footer and the router's ledger. */
   private activeSnapshots(now: number): QuotaSnapshot[] {
-    return [...this.snapshots.values()]
-      .map((snapshot) => withoutExpiredScopedCooldowns(snapshot, now))
-      .filter((snapshot): snapshot is QuotaSnapshot => snapshot !== null)
-      .filter((snapshot) => {
-        const observed = Date.parse(snapshot.observed_at);
-        if (!Number.isFinite(observed)) return false;
-        if (now - observed <= MAX_SNAPSHOT_AGE_MS) return true;
-        return snapshot.constraints.some((constraint) =>
-          [constraint.cooldown_until, constraint.resets_at].some((raw) => {
-            const at = raw ? Date.parse(raw) : Number.NaN;
-            return Number.isFinite(at) && at > now;
-          }),
-        );
-      })
-      .map((snapshot) => staleAt(snapshot, now));
+    return activeQuotaSnapshots([...this.snapshots.values()], now);
   }
 
   async refresh() {
@@ -242,6 +238,9 @@ export class QuotaRegistry {
       this.refresherLanes,
       scope,
       this.now().getTime(),
+      () => this.refreshCoordinator.isCurrent(credentialGeneration),
+      this.subjects?.(),
+      this.activeSnapshots(this.now().getTime()),
     );
     const settled = await Promise.allSettled(running.map(async ({ refresh }) => refresh()));
     const batches: Array<{ snapshots: QuotaSnapshot[]; absences: QuotaAbsence[] } | null> = [];
@@ -296,15 +295,13 @@ export class QuotaRegistry {
     }
     const now = this.now().getTime();
     if (running.length > 0) this.recomputeAbsences(claims, now, recomputeScopeFor(running));
-    // A typed rate_limited absence is PACING evidence (owner decision 7=A):
-    // arm the vendor lane's persisted floor — foreground cycles included, so
-    // an explicit refresh that got throttled also cools later fan-outs — and
-    // never journal it as a quota cooldown.
-    for (const claim of claims) {
-      if (claim.reason !== "rate_limited") continue;
-      const lane = this.refresherLanes.lanes.find((item) => item.vendor === claim.subject.harness);
-      lane?.pacer.noteRateLimited(now, claim.retry_after_ms ?? null);
-    }
+    noteRefreshPacing(
+      this.refresherLanes.lanes,
+      batches.flatMap((batch) => batch?.snapshots ?? []),
+      claims,
+      skipped,
+      now,
+    );
     const refreshedAt = this.now().toISOString();
     const response = ControlQuotaResponse.parse({
       snapshots: this.activeSnapshots(now),
@@ -409,7 +406,15 @@ export class QuotaRegistry {
       now: this.now,
       publishClockTransition: () => this.publishClockTransitionIfNeeded(),
       laneDemand: (vendor, now, dueBefore, since) =>
-        laneDemand(vendor, this.activeSnapshots(now), this.subjects?.(), now, dueBefore, since),
+        laneDemand(
+          vendor,
+          this.activeSnapshots(now),
+          this.subjects?.(),
+          now,
+          dueBefore,
+          since,
+          this.refresherLanes.lanes,
+        ),
       currentGeneration: () => this.refreshCoordinator.currentGeneration(),
       isCurrentGeneration: (generation) => this.refreshCoordinator.isCurrent(generation),
       runLaneCycle: (lane) => this.refreshCycle(false, lane),
@@ -462,48 +467,29 @@ export class QuotaRegistry {
   }
 
   private recordUpsert(value: QuotaSnapshot): void {
-    const snapshot = QuotaSnapshotSchema.parse(value);
-    // Upsert-on-change: a poll that re-observed unchanged evidence moves only
-    // the observation time, which stays live in memory (the projection marker
-    // still publishes it) without a journal frame. After a restart the replayed
-    // snapshot therefore carries the time of its last journaled change until
-    // the first admission poll re-observes it.
-    const current = this.snapshots.get(snapshotKey(snapshot));
-    if (current && sameQuotaEvidence(current, snapshot)) {
+    const valueSnapshot = QuotaSnapshotSchema.parse(value);
+    const key = snapshotKey(valueSnapshot);
+    const cutoff = this.supersededWindows.get(key);
+    if (cutoff && Date.parse(cutoff.observed_at) > Date.parse(valueSnapshot.observed_at)) return;
+    const current = this.snapshots.get(key);
+    if (current && Date.parse(current.observed_at) > Date.parse(valueSnapshot.observed_at)) return;
+    const { snapshot, updates, supersessions, reconciled } = reconcileQuotaSnapshot(
+      valueSnapshot,
+      [...this.snapshots.values()],
+      this.now(),
+    );
+    if (!reconciled && current && sameQuotaEvidence(current, snapshot)) {
       this.apply(snapshot);
       return;
     }
-    if (quotaSourceTraits(snapshot.source).snapshotMode === "window") {
-      this.journal.append(WINDOW_OBSERVED, QuotaWindowObservation.parse({ version: 1, snapshot }));
-      this.apply(snapshot);
-      return;
-    }
-    // Runtime updates share this journal with the prior installed engine during
-    // rollback. v3.2.0's strict schemas predate applies_to_models AND the
-    // cursor_rate_limit source. Prepare the exact current snapshot under a new
-    // record type an older runtime safely ignores, then commit it with the
-    // established v3.2.0-shaped upsert; current replay applies a prepare only
-    // when its matching base follows (one recovery intent, one fsync).
-    const legacy = legacyV320Snapshot(snapshot);
-    if (
-      snapshot.constraints.some((constraint) => constraint.applies_to_models !== undefined) ||
-      legacy.source !== snapshot.source
-    ) {
-      this.journal.appendBatch([
-        {
-          type: SCOPED_PREPARED,
-          payload: {
-            version: 1,
-            base_hash: hashJson(legacy),
-            snapshot,
-          },
-        },
-        { type: UPSERTED, payload: legacy },
-      ]);
-    } else {
-      this.journal.append(UPSERTED, legacy);
-    }
-    this.apply(snapshot);
+    const records = [
+      ...updates.flatMap(quotaSnapshotRecords),
+      ...supersessions.map((payload) => ({ type: WINDOW_SUPERSEDED, payload })),
+    ];
+    if (records.length === 1) this.journal.append(records[0]!.type, records[0]!.payload);
+    else this.journal.appendBatch(records);
+    for (const update of updates) this.apply(update);
+    for (const supersession of supersessions) this.applyWindowSupersession(supersession);
   }
 
   /** `subjectId: null` retires a harness's legacy default/native subject —
@@ -579,10 +565,26 @@ export class QuotaRegistry {
   }
 
   private apply(snapshot: QuotaSnapshot): void {
-    this.snapshots.set(snapshotKey(snapshot), snapshot);
+    const key = snapshotKey(snapshot);
+    const cutoff = this.supersededWindows.get(key);
+    if (!cutoff || Date.parse(snapshot.observed_at) >= Date.parse(cutoff.observed_at))
+      this.snapshots.set(key, snapshot);
+  }
+
+  private applyWindowSupersession(value: QuotaWindowSupersession): void {
+    const current = this.supersededWindows.get(value.snapshot_id);
+    if (current && Date.parse(current.observed_at) >= Date.parse(value.observed_at)) return;
+    this.supersededWindows.set(value.snapshot_id, value);
+    const snapshot = this.snapshots.get(value.snapshot_id);
+    if (snapshot && Date.parse(snapshot.observed_at) < Date.parse(value.observed_at))
+      this.snapshots.delete(value.snapshot_id);
   }
 
   private remove(harness: string, subjectId: string | null): number {
+    for (const [key, value] of this.supersededWindows) {
+      if (value.subject.harness === harness && value.subject.subject_id === subjectId)
+        this.supersededWindows.delete(key);
+    }
     let removed = 0;
     for (const [key, snapshot] of this.snapshots) {
       if (snapshot.subject.harness === harness && snapshot.subject.subject_id === subjectId) {

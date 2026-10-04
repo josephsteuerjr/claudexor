@@ -128,7 +128,12 @@ Quota is read per account from the vendor's own
 surfaces, model-scoped windows and typed model-family rejections apply only to
 their declared aliases, advisory warnings do not become cooldowns, absence is
 typed and explained, and unknown never renders as zero. A failed refresh remains
-explainable alongside stale last-known data without presenting it as a fresh observation.
+explainable alongside stale last-known data without presenting it as a fresh observation. Older unclassified refusals may yield to a recognized newer
+vendor observation, including early quota resets, while separately established
+limits remain applicable. The retirement survives replay. Usage-statistics failures
+never imply that every subscription is spent; unrelated account polling continues.
+Observing Accounts reuses the first acquisition until an explicit or credential-driven
+refresh, without a client view continuously spawning vendor checks.
 
 A saved login and a vendor accepting that credential are different facts.
 Observations from ordinary work should improve the same account view and selection

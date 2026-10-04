@@ -15,12 +15,12 @@ afterEach(() => {
 
 describe("settings canary golden stories", () => {
   it("[INV-104:settings-write-strict] refuses settings outside an authoritative harness's truth and persists nothing", () => {
-    // agy's manifest known_models is the offline truth source here, and agy
-    // declares nothing about absence: its list is complete, a miss is refused.
+    // OpenCode declares authoritative absence and has no model inventory.
+    // An explicit model must be refused, never silently persisted.
     const bad = cli(sb, [
       "settings",
       "set",
-      "harness.agy.default_model",
+      "harness.opencode.default_model",
       "ghost-model-9000",
       "--json",
     ]);
@@ -32,7 +32,10 @@ describe("settings canary golden stories", () => {
       code: "invalid_request",
       retryable: false,
     });
-    expect(bad.stdout + bad.stderr).toMatch(/refused|not in the harness/i);
+    expect(bad.stdout).toContain(
+      "harness 'opencode' refused defaultModel 'ghost-model-9000' (truth source: none)",
+    );
+    expect(bad.stdout).toContain("cannot verify models");
 
     const invalidGoal = cli(sb, ["settings", "set", "routing_goal", "quality", "--json"]);
     expect(invalidGoal.code).toBe(2);
@@ -59,45 +62,47 @@ describe("settings canary golden stories", () => {
     expect(fake.stdout + fake.stderr).toMatch(/fake-success.*(?:not persistable|not a real)/i);
   });
 
-  it("[INV-104:settings-write-advisory] persists a model an advisory harness's list lacks and says so once", () => {
-    // codex declares absence advisory: its lists prove presence, never absence.
-    // An unlisted explicit model is persisted (it will be forwarded to the
-    // vendor at run time) and the write's read-back carries the note.
-    const set = cli(sb, [
-      "settings",
-      "set",
-      "harness.codex.default_model",
-      "gpt-ghost-9000",
-      "--json",
-    ]);
-    expect(set.code).toBe(0);
-    expect(set.stderr).toBe("");
-    const snapshot = set.json() as {
-      notes: string[];
-      harnesses: Record<string, { defaultModel: string | null }>;
-    };
-    expect(snapshot.harnesses["codex"]?.defaultModel).toBe("gpt-ghost-9000");
-    expect(snapshot.notes).toEqual([
-      expect.stringMatching(
-        /^harness 'codex' defaultModel 'gpt-ghost-9000' \(truth source: manifest\): model "gpt-ghost-9000" is not in this harness's manifest known-model list; .*forwarded to the vendor$/,
-      ),
-    ]);
-    // The human form prints the same note once; a plain read carries none.
-    const plain = cli(sb, ["settings", "set", "harness.codex.default_model", "gpt-ghost-9000"]);
-    expect(plain.code).toBe(0);
-    expect(plain.stdout).toMatch(
-      /^updated harness\.codex\.default_model\nnote: harness 'codex' defaultModel 'gpt-ghost-9000'/,
-    );
-    const show = cli(sb, ["settings", "show", "--json"]);
-    expect(show.json()).toMatchObject({
-      notes: [],
-      harnesses: { codex: { defaultModel: "gpt-ghost-9000" } },
-    });
-    // A listed model passes silently: presence is proof.
-    const listed = cli(sb, ["settings", "set", "harness.codex.default_model", "gpt-5.5", "--json"]);
-    expect(listed.code).toBe(0);
-    expect((listed.json() as { notes: string[] }).notes).toEqual([]);
-  });
+  it.each([
+    { harness: "codex", unknown: "gpt-ghost-9000", listed: "gpt-5.5" },
+    {
+      harness: "agy",
+      unknown: "claude-opus-5-5-high",
+      listed: "claude-opus-4-6-thinking",
+    },
+  ])(
+    "[INV-104:settings-write-advisory] $harness persists an unlisted model and says so once",
+    ({ harness, unknown, listed }) => {
+      // Both adapters return advisory hints without a selected account. Presence
+      // admits silently; an unknown explicit id is persisted with one disclosure.
+      const setting = `harness.${harness}.default_model`;
+      const note =
+        `harness '${harness}' defaultModel '${unknown}' (truth source: manifest): ` +
+        `model "${unknown}" is not in this harness's manifest known-model list; ` +
+        "this harness's list cannot prove a model is absent, so the request is forwarded to the vendor";
+      const set = cli(sb, ["settings", "set", setting, unknown, "--json"]);
+      expect(set.code).toBe(0);
+      expect(set.stderr).toBe("");
+      const snapshot = set.json() as {
+        notes: string[];
+        harnesses: Record<string, { defaultModel: string | null }>;
+      };
+      expect(snapshot.harnesses[harness]?.defaultModel).toBe(unknown);
+      expect(snapshot.notes).toEqual([note]);
+      // The human form prints the same note once; a plain read carries none.
+      const plain = cli(sb, ["settings", "set", setting, unknown]);
+      expect(plain.code).toBe(0);
+      expect(plain.stdout).toBe(`updated ${setting}\nnote: ${note}\n`);
+      const show = cli(sb, ["settings", "show", "--json"]);
+      expect(show.json()).toMatchObject({
+        notes: [],
+        harnesses: { [harness]: { defaultModel: unknown } },
+      });
+      // A listed model passes silently: presence is proof.
+      const known = cli(sb, ["settings", "set", setting, listed, "--json"]);
+      expect(known.code).toBe(0);
+      expect((known.json() as { notes: string[] }).notes).toEqual([]);
+    },
+  );
 
   it("[INV-103:no-global-model] validates retired local input before daemon bootstrap", () => {
     const r = cli(sb, ["settings", "set", "default_model", "gpt-5.5"]);

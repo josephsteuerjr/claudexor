@@ -4,8 +4,7 @@ import type { QuotaRefreshResult } from "@claudexor/daemon";
 import {
   AGY_BIN,
   AGY_CAPABILITY_PROFILE,
-  AGY_GEMINI_MODELS,
-  AGY_THIRD_PARTY_MODELS,
+  AGY_QUOTA_MODEL_GROUPS,
   agyProfileRunEnv,
   canonicalAgyProfileHome,
   classifyAgyPrintResult,
@@ -14,7 +13,10 @@ import {
   runAgyPrintCommand,
   type AgyPrintClassification,
 } from "@claudexor/harness-agy";
-import { QuotaConstraint as QuotaConstraintSchema } from "@claudexor/schema";
+import {
+  QuotaConstraint as QuotaConstraintSchema,
+  quotaModelPrefixMatches,
+} from "@claudexor/schema";
 import type { QuotaAbsence, QuotaConstraint, QuotaSnapshot } from "@claudexor/schema";
 import { noProjectRepoRoot, redactSecrets } from "@claudexor/util";
 
@@ -195,27 +197,18 @@ function scopeUnspecifiedModel(
   constraints: QuotaConstraint[],
   selectedModel: string | null,
 ): QuotaConstraint[] {
-  const scoped = constraints.filter((c) => c.applies_to_models && c.applies_to_models.length > 0);
-  // A model the pinned inventory does not know — the vendor ships new slugs
-  // between releases and the user picks them in its own TUI — must not leave
-  // EVERY window ungoverned: that reads as a healthy account no matter how
-  // spent it is, and rotation never fires. The Gemini group is the documented
-  // fallback, the same one an unreadable `/model` gets.
-  const known =
-    selectedModel !== null && scoped.some((c) => c.applies_to_models!.includes(selectedModel));
-  const governs = known
-    ? (c: QuotaConstraint) => c.applies_to_models!.includes(selectedModel!)
-    : selectedModel === null || selectedModel.startsWith("gemini-")
-      ? // Unreadable, or a Gemini slug newer than the pinned inventory: the
-        // vendor's own group governs, as it does for a fresh profile.
-        (c: QuotaConstraint) => c.applies_to_models!.some((m) => m.startsWith("gemini-"))
-      : // A slug we cannot place at all: EVERY window governs, so an exhausted
-        // account is refused rather than reading as healthy. Over-refusing a
-        // bare run costs a rotation; under-refusing costs the whole feature.
-        () => true;
+  // The unreadable default retains the vendor's documented Gemini default.
+  // A known family uses the same predicate as admission/budget. An explicit
+  // unknown family remains unverified, never assigned every group's quota.
+  const selected = selectedModel ?? "gemini-";
   return constraints.map((constraint) =>
-    constraint.applies_to_models && constraint.applies_to_models.length > 0
-      ? { ...constraint, applies_to_unspecified_model: governs(constraint) }
+    constraint.applies_to_models || constraint.applies_to_model_prefixes?.length
+      ? {
+          ...constraint,
+          applies_to_unspecified_model:
+            constraint.applies_to_models?.includes(selected) === true ||
+            quotaModelPrefixMatches(constraint.applies_to_model_prefixes, selected),
+        }
       : constraint,
   );
 }
@@ -363,7 +356,7 @@ function parseAgyQuotaSuccessEnvelope(parsed: Record<string, unknown>): AgyQuota
   if (!Array.isArray(groups)) return { kind: "failed", detail: "agy quota envelope had no groups" };
   const constraints: QuotaConstraint[] = [];
   for (const group of groups) {
-    const models = modelsForGroup(String(group?.name ?? ""));
+    const scope = modelsForGroup(String(group?.name ?? ""));
     for (const bucket of Array.isArray(group?.buckets) ? group.buckets : []) {
       const remaining =
         typeof bucket?.remaining_fraction === "number" ? bucket.remaining_fraction : null;
@@ -375,7 +368,7 @@ function parseAgyQuotaSuccessEnvelope(parsed: Record<string, unknown>): AgyQuota
         // and a blank id/label fails the schema's min(1) (review Ф2 #3).
         id: nonBlank(bucket?.id) ?? `${groupName}-${window || "window"}`,
         label: nonBlank(bucket?.name) ?? nonBlank(window) ?? "Requests",
-        applies_to_models: models,
+        ...scope,
         // Which window governs a run that NAMES NO MODEL is stamped by
         // scopeUnspecifiedModel from the profile's actually selected model —
         // one owner, so the parser never guesses it.
@@ -418,17 +411,13 @@ const WINDOW_SECONDS: Record<string, number> = {
   weekly: 7 * 24 * 60 * 60,
 };
 
-/**
- * The vendor groups map to disjoint model families. Gemini models carry the
- * Gemini window; Claude/GPT-OSS the other. Any slug not matched stays
- * vendor-wide (null) so a future group cannot silently escape scoping.
- */
-const geminiModels: string[] = [...AGY_GEMINI_MODELS];
-const thirdPartyModels: string[] = [...AGY_THIRD_PARTY_MODELS];
-
-function modelsForGroup(groupName: string): string[] | null {
+/** Group names are vendor fields. Keep the existing account-wide treatment
+ * for an unrecognized quota group; model ids themselves never pick a group. */
+function modelsForGroup(
+  groupName: string,
+): Pick<QuotaConstraint, "applies_to_models" | "applies_to_model_prefixes"> {
   const n = groupName.toLowerCase();
-  if (n.includes("gemini")) return geminiModels;
-  if (n.includes("claude") || n.includes("gpt")) return thirdPartyModels;
-  return null;
+  if (n.includes("gemini")) return AGY_QUOTA_MODEL_GROUPS.gemini;
+  if (n.includes("claude") || n.includes("gpt")) return AGY_QUOTA_MODEL_GROUPS.thirdParty;
+  return { applies_to_models: null };
 }

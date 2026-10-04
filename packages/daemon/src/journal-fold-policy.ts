@@ -51,6 +51,7 @@ import {
   QuotaSnapshot as QuotaSnapshotSchema,
   QuotaSource,
   QuotaWindowObservation,
+  QuotaWindowSupersession,
   TERMINAL_CONTROL_SETUP_JOB_STATES,
 } from "@claudexor/schema";
 import { legacyV320Snapshot, snapshotKey } from "./quota-registry-support.js";
@@ -93,6 +94,16 @@ function journalFoldVerdict(record: FoldRecord): FoldVerdict {
         return {
           slot: `q:window:${snapshotKey(snapshot)}`,
           group: quotaWindowGroup(snapshot.subject.harness, snapshot.subject.subject_id),
+        };
+      }
+      case "quota.window.superseded": {
+        const supersession = QuotaWindowSupersession.safeParse(record.payload);
+        if (!supersession.success) return KEEP;
+        const value = supersession.data;
+        return {
+          slot: `q:window:superseded:${value.snapshot_id}`,
+          group: quotaWindowGroup(value.subject.harness, value.subject.subject_id),
+          retire: [`q:window:${value.snapshot_id}`],
         };
       }
       case "quota.subject.removed":

@@ -19,8 +19,10 @@ import {
   QuotaSnapshot as QuotaSnapshotSchema,
   type QuotaAbsence,
   type QuotaSnapshot,
+  type QuotaSubject,
 } from "@claudexor/schema";
 import { noProjectRepoRoot, sha256 } from "@claudexor/util";
+import { fetchClaudeOauthUsage } from "./claude-oauth-fetch.js";
 import { readAccountsMigrationFile } from "./accounts-unified-migration.js";
 import {
   emitQuotaDiagnostic,
@@ -29,13 +31,10 @@ import {
 } from "./quota-refresh-diagnostics.js";
 
 const SOURCE = "claude_oauth_usage" as const;
-const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-const OAUTH_BETA_HEADER = "oauth-2025-04-20";
-const FETCH_TIMEOUT_MS = 10_000;
 
 /** Full subscription inventory from oauth/usage, independent of passive stream
  * windows. Access material from claude-oauth-credential stays transient for one
- * request. Claude Code owns renewal and persistence; diagnostics contain only
+ * serial refresh cycle. Claude Code owns renewal and persistence; diagnostics contain only
  * expiry/presence and physical operation receipts, never credentials. */
 
 /** A vendor rejection remembered per PRESENTED token (INV-062: the token's
@@ -212,73 +211,6 @@ export interface ClaudeOauthUsageDeps {
   diagnostic: QuotaDiagnosticSink;
 }
 
-/** Ceiling on a vendor-supplied Retry-After (7 days, aligned with the
- * pacer's floor ceiling): an absurd or overflowing header must clamp here at
- * the PARSER — an unrepresentable number reaching the schema would invalidate
- * the whole typed rate_limited observation and drop the batch, so the floor
- * would never arm at exactly the moment it matters. */
-const MAX_RETRY_AFTER_HEADER_MS = 7 * 24 * 60 * 60_000;
-
-/** RFC 9110 Retry-After → milliseconds from `now`: delta-seconds or an
- * HTTP-date, clamped to [0, MAX_RETRY_AFTER_HEADER_MS] (a non-finite or
- * oversized value clamps to the ceiling — the vendor DID ask for a long
- * pause; the observation is kept, bounded). Null only for a missing or
- * unparseable header — the floor is then unknown and pacing falls back to
- * exponential backoff. */
-export function parseRetryAfterHeaderMs(
-  header: string | null,
-  nowMs: number = Date.now(),
-): number | null {
-  if (header === null) return null;
-  const trimmed = header.trim();
-  const deltaMs = /^\d+$/.test(trimmed)
-    ? Number(trimmed) * 1000
-    : Number.isFinite(Date.parse(trimmed))
-      ? Date.parse(trimmed) - nowMs
-      : null;
-  if (deltaMs === null) return null;
-  if (!Number.isFinite(deltaMs)) return MAX_RETRY_AFTER_HEADER_MS;
-  return Math.min(Math.max(0, Math.round(deltaMs)), MAX_RETRY_AFTER_HEADER_MS);
-}
-
-async function fetchUsageDefault(
-  accessToken: string,
-  status: (code: number) => void,
-): Promise<unknown> {
-  const res = await fetch(USAGE_URL, {
-    method: "GET",
-    headers: {
-      authorization: `Bearer ${accessToken}`,
-      "anthropic-beta": OAUTH_BETA_HEADER,
-      accept: "application/json",
-    },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  status(res.status);
-  // A 401/403 is tagged as the vendor rejecting the presented access token.
-  // The caller owns the credential-expiry context: a token known to have
-  // expired while refreshable is awaiting Claude Code's vendor-owned refresh,
-  // not evidence that the account itself was revoked.
-  if (res.status === 401 || res.status === 403) {
-    throw Object.assign(new Error(`oauth/usage responded ${res.status}`), {
-      quotaAbsenceReason: "auth_revoked" as QuotaAbsence["reason"],
-    });
-  }
-  // A 429 throttles the POLL, not the plan: typed `rate_limited` so the pacer
-  // can honor the vendor's Retry-After floor (owner decision 7=A: this stays
-  // pacing evidence and is never journaled as a quota cooldown). Anthropic
-  // does not always send Retry-After — retryAfterMs is then null.
-  if (res.status === 429) {
-    throw Object.assign(new Error("oauth/usage responded 429"), {
-      quotaAbsenceReason: "rate_limited" as QuotaAbsence["reason"],
-      retryAfterMs: parseRetryAfterHeaderMs(res.headers.get("retry-after")),
-    });
-  }
-  // Everything else stays an undiagnosed refresh failure.
-  if (!res.ok) throw new Error(`oauth/usage responded ${res.status}`);
-  return res.json();
-}
-
 function claudeOauthAbsence(
   subjectId: string | null,
   reason: QuotaAbsence["reason"],
@@ -309,7 +241,8 @@ function claudeOauthAbsence(
  * automatically refreshed by Claude Code without inference, and a fetch
  * refusal is refresh_failed unless a known-fresh credential is explicitly rejected.
  * A remembered rejection is re-stated without re-presenting the token on
- * background cycles (see `rejectedTokens`); a foreground cycle always asks.
+ * background cycles (see `rejectedTokens`); a foreground cycle re-asks unless
+ * its poll floor remains active.
  * Absence is stated, never inferred. */
 export async function refreshClaudeOauthUsageQuota(
   deps: Partial<ClaudeOauthUsageDeps> = {},
@@ -326,7 +259,8 @@ export async function refreshClaudeOauthUsageQuota(
   const report = (
     profileId: string | null,
     record: Pick<QuotaRefreshDiagnostic, "stage" | "outcome"> & Partial<QuotaRefreshDiagnostic>,
-  ) =>
+  ) => {
+    if (!deps.diagnostic) return;
     emitQuotaDiagnostic(deps.diagnostic, {
       ...record,
       operationId,
@@ -337,6 +271,7 @@ export async function refreshClaudeOauthUsageQuota(
       credentialEpoch: epoch,
       current: epoch === rejectionEpoch,
     });
+  };
   releaseExpiredRejection(now().getTime());
   const notLoggedInDetail =
     platform === "darwin"
@@ -365,8 +300,13 @@ export async function refreshClaudeOauthUsageQuota(
   }
   const snapshots: QuotaSnapshot[] = [];
   const absences: QuotaAbsence[] = [];
-  for (let index = 0; index < candidates.length; index += 1) {
-    const candidate = candidates[index]!;
+  // Read all current identities before the serial HTTP pass so token-identical
+  // aliases inherit a saved floor regardless of profile order after restart.
+  const prepared: Array<{
+    candidate: (typeof candidates)[number];
+    credential: ClaudeOauthCredential;
+  }> = [];
+  for (const candidate of candidates) {
     let credential: ClaudeOauthCredential | null;
     try {
       credential = await readCredential(candidate.configDir, platform);
@@ -398,6 +338,75 @@ export async function refreshClaudeOauthUsageQuota(
       );
       continue;
     }
+    prepared.push({ candidate, credential });
+  }
+  const subjectOf = (subjectId: string | null): QuotaSubject => ({
+    harness: "claude",
+    credential_route: "vendor_native",
+    subject_id: subjectId,
+    plan_label: null,
+  });
+  const bindCredentials = () =>
+    cycle?.pacing?.bindCredentials(
+      prepared.map(({ candidate, credential }) => ({
+        subject: subjectOf(candidate.subjectId),
+        credentialHash: sha256(credential.accessToken),
+      })),
+    );
+  bindCredentials();
+  const throttledTokens = new Set<string>();
+  const skipPacedCredential = (subject: QuotaSubject, credential: ClaudeOauthCredential) => {
+    const pacedUntil = cycle?.pacing?.cooldownUntil(subject, now().getTime());
+    if (pacedUntil !== null && pacedUntil !== undefined) {
+      report(subject.subject_id, {
+        stage: "poll",
+        outcome: "skipped",
+        reason: "subject_rate_limited",
+      });
+      absences.push(
+        claudeOauthAbsence(
+          subject.subject_id,
+          "poll_paced",
+          `quota poll paused by rate-limit cooldown until ${new Date(pacedUntil).toISOString()}`,
+          now(),
+        ),
+      );
+      return true;
+    }
+    if (throttledTokens.has(sha256(credential.accessToken))) {
+      report(subject.subject_id, {
+        stage: "poll",
+        outcome: "skipped",
+        reason: "same_token_rate_limited",
+      });
+      absences.push(
+        claudeOauthAbsence(
+          subject.subject_id,
+          "probe_skipped_rate_limited",
+          "this token's oauth/usage probe hit the rate limit earlier in this cycle",
+          now(),
+        ),
+      );
+      return true;
+    }
+    return false;
+  };
+  for (const item of prepared) {
+    const { candidate } = item;
+    let { credential } = item;
+    const subject = subjectOf(candidate.subjectId);
+    if (skipPacedCredential(subject, credential)) continue;
+    // Retain the existing snapshot and its observation time when another
+    // account's retry caused this background lane cycle. All current aliases
+    // were bound above, and poll floors have already been honored.
+    if (cycle?.shouldRefresh?.(subject) === false) {
+      report(candidate.subjectId, {
+        stage: "poll",
+        outcome: "skipped",
+        reason: "primary_evidence_not_due",
+      });
+      continue;
+    }
     let beforeRequest = now();
     if (needsVendorRefresh(credential, beforeRequest)) {
       const previousExpiresAtMs = credential.expiresAtMs;
@@ -426,6 +435,8 @@ export async function refreshClaudeOauthUsageQuota(
           throw taggedRefreshFailure(VENDOR_REFRESH_FAILED_DETAIL);
         }
         credential = refreshed;
+        item.credential = refreshed;
+        bindCredentials();
         report(candidate.subjectId, {
           stage: "native_refresh",
           outcome: "succeeded",
@@ -435,6 +446,8 @@ export async function refreshClaudeOauthUsageQuota(
           native: nativeResult,
         });
         beforeRequest = now();
+        // Refresh may have joined a token alias whose poll floor is already active.
+        if (skipPacedCredential(subject, credential)) continue;
       } catch (error) {
         report(candidate.subjectId, {
           stage: "native_refresh",
@@ -491,7 +504,7 @@ export async function refreshClaudeOauthUsageQuota(
     const fetchUsage =
       deps.fetchUsage ??
       ((token: string) =>
-        fetchUsageDefault(token, (status) => {
+        fetchClaudeOauthUsage(token, (status) => {
           httpStatus = status;
         }));
     try {
@@ -501,13 +514,14 @@ export async function refreshClaudeOauthUsageQuota(
         expiresAtMs: credential.expiresAtMs,
         hasRefreshToken: credential.hasRefreshToken,
       });
+      const requestStartedAt = now();
       const usage = await fetchUsage(credential.accessToken);
       rejectedTokens.delete(tokenKey);
       const snapshot = parseClaudeOauthUsage(
         usage,
         candidate.subjectId,
         credential.subscriptionType,
-        now(),
+        requestStartedAt,
       );
       report(candidate.subjectId, {
         stage: "usage_http",
@@ -569,28 +583,11 @@ export async function refreshClaudeOauthUsageQuota(
           ? { retry_after_ms: Math.round(retryAfterMs) }
           : {}),
       });
-      // Short-circuit on the FIRST 429: every candidate hits the same vendor
-      // endpoint, so continuing the fan-out hammers the surface that just
-      // said stop. The unprobed siblings get the HONEST distinct reason —
-      // their own state is unknown; a sibling's 429 is never fabricated onto
-      // them as rate_limited (INV-093).
+      // A 429 establishes only this credential's poll floor. Continue the
+      // existing serial sweep for unrelated accounts; identical tokens share it.
       if (tagged === "rate_limited") {
-        for (const skippedCandidate of candidates.slice(index + 1)) {
-          report(skippedCandidate.subjectId, {
-            stage: "poll",
-            outcome: "skipped",
-            reason: "sibling_rate_limited",
-          });
-          absences.push(
-            claudeOauthAbsence(
-              skippedCandidate.subjectId,
-              "probe_skipped_rate_limited",
-              "a sibling candidate's oauth/usage probe hit the vendor rate limit this cycle",
-              now(),
-            ),
-          );
-        }
-        break;
+        throttledTokens.add(tokenKey);
+        cycle?.pacing?.noteRateLimited(subject, observedAt.getTime(), retryAfterMs ?? null);
       }
     }
   }

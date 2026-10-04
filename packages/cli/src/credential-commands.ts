@@ -28,7 +28,7 @@ import {
   isConfigDirLoginHarness,
 } from "./config-dir-login-harnesses.js";
 import { type ParsedArgs, flagStr } from "./args.js";
-import { print, printJson, printUsageError } from "./cli-io.js";
+import { print, printJson, printUsageError, quotaRefreshLabel } from "./cli-io.js";
 import { ensureDaemon } from "./daemon-run.js";
 import { controlApiFetch } from "./live.js";
 import { daemonGet } from "./ops-commands.js";
@@ -89,7 +89,7 @@ export async function accountsCommandWithDeps(
   print(`  quota refreshed_at: ${snapshot.quota.refreshed_at ?? "unknown"}`);
   for (const skip of snapshot.quota.refresh_skipped ?? []) {
     print(
-      `  quota refresh skipped for ${skip.vendor}: rate-limit cooldown until ${skip.not_before}`,
+      `  quota refresh skipped for ${quotaRefreshLabel(skip)}: rate-limit cooldown until ${skip.not_before}`,
     );
   }
   print(`  git: ${snapshot.git.status}`);
