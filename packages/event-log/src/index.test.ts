@@ -18,6 +18,54 @@ __afterAllReap(() => {
 });
 
 describe("EventLog seq stamping", () => {
+  it("prepares output before terminal sequencing, only when a deferred terminal is flushed", () => {
+    const dir = reapMk(join(tmpdir(), "claudexor-output-order-"));
+    const log = new EventLog(join(dir, "events.jsonl"), "run-1", "task-1");
+    let outputs = 0;
+    log.setBeforeTerminal(
+      (type, payload) => ({ type, payload }),
+      () => {
+        outputs++;
+        log.emit("output.ready", {
+          kind: "report",
+          path: "final/retained-output.md",
+          state: "diagnostic",
+        });
+      },
+    );
+    log.emit("run.created");
+    log.deferTerminal();
+    log.emit("run.failed", { lifecycle: "cancelled" });
+    expect(outputs).toBe(0);
+    log.flushDeferredTerminal();
+    expect(outputs).toBe(1);
+    expect(log.readAll().events.map((event) => [event.seq, event.type])).toEqual([
+      [1, "run.created"],
+      [2, "output.ready"],
+      [3, "run.failed"],
+    ]);
+    expect(() => log.emit("run.failed")).toThrow(/already committed/);
+    expect(outputs).toBe(1);
+  });
+
+  it("retains evidence when live publication is suppressed", () => {
+    const dir = reapMk(join(tmpdir(), "claudexor-retained-event-"));
+    const published: string[] = [],
+      persisted: string[] = [];
+    const log = new EventLog(
+      join(dir, "events.jsonl"),
+      "run-1",
+      "task-1",
+      (event) => persisted.push(event.type),
+      undefined,
+      (event) => published.push(event.type),
+    );
+    log.emit("harness.event", { type: "message", text: "past preview cap" }, false);
+    log.emit("run.failed");
+    expect(persisted).toEqual(["harness.event", "run.failed"]);
+    expect(published).toEqual(["run.failed"]);
+    expect(log.readAll().events[0]?.payload["text"]).toBe("past preview cap");
+  });
   it("fails the producer when the configured durable sink rejects an event", () => {
     const path = join(reapMk(join(tmpdir(), "claudexor-eventlog-")), "events.jsonl");
     const log = new EventLog(path, "run-1", "task-1", () => {

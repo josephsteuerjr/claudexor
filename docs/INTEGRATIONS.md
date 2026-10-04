@@ -169,7 +169,8 @@ gate's explicit exemptions):
   synthesis judge).
 - `--max-seconds <n>`: hard wall-clock deadline for the whole run; on expiry
   the run ends `cancelled` with reason `wall_clock_exceeded` and partial
-  artifacts (diagnostic `final/summary.md`) are kept. Consumers must use both
+  artifacts, including received assistant text in `final/retained-output.md`,
+  are kept as diagnostics. Consumers must use both
   facts: the process lifecycle is cancelled, while user-facing presentation is
   "Time limit reached" and ACP reports a refusal; an explicit Stop remains
   `user_cancelled` / cancelled. A control may additionally carry the typed

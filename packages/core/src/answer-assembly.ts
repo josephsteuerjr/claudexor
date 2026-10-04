@@ -28,9 +28,9 @@ export class AnswerAssembly {
   }): void {
     if (ev.type !== "message") return;
     if (ev.payload?.["auth_switched"] === true) return;
-    // Live deltas are DISPLAY-stream chunks (W-C4): the complete message
-    // always follows — joining chunks here would shred the answer.
-    if (ev.payload?.["delta"] === true) return;
+    // Fragments and buffered snapshots are retained evidence, not finality or
+    // retry inputs. A final flush may never arrive on an interrupted stream.
+    if (ev.payload?.["delta"] === true || ev.payload?.["buffered"] === true) return;
     if (ev.final === true) {
       const raw = ev.payload?.["work_report_envelope"];
       const machine = typeof raw === "string" ? raw : undefined;

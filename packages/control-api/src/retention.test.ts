@@ -92,6 +92,27 @@ function seedDataRootEntry(dataRoot: string, name: string, kind: "directory" | "
 }
 
 describe("runRetentionPass", () => {
+  it("keeps actionable patches but lets cancelled Git evidence follow normal retention", async () => {
+    const { project } = sandbox();
+    const records = ["succeeded", "cancelled", "failed", "interrupted"].map((state) => {
+      const runId = `run-${state}`;
+      seedRun(project.runsDir, runId, {
+        workProduct: `kind: patch\nmeta:\n  lifecycle: ${state}\n  apply_state: not_applied\n`,
+      });
+      return { runId, state, finishedAt: daysAgo(60) };
+    });
+    const receipt = await runRetentionPass(
+      { ...POLICY, keepLastRunsPerProject: 0 },
+      { dry_run: true },
+      deps(project, { records: () => records }),
+    );
+    expect(receipt.kept.actionable).toBe(1);
+    expect(receipt.deleted_runs.map((row) => row.run_id).sort()).toEqual([
+      "run-cancelled",
+      "run-failed",
+      "run-interrupted",
+    ]);
+  });
   it("retains the remainder of partial files delivery and releases explicit discard to normal retention", async () => {
     const { project } = sandbox();
     const records = ["pending", "discarded", "direct"].map((id) => {

@@ -70,9 +70,11 @@ export function formatRunEventLine(ev: Record<string, unknown>): string | null {
     }
     case "harness.event": {
       const sub = String(p["type"] ?? "");
+      const detail = p["payload"] as Record<string, unknown> | undefined;
+      if (sub === "message" && detail?.["buffered"] === true) return null;
       if (
         sub === "status" &&
-        (p["payload"] as Record<string, unknown> | undefined)?.["auth_status_stale"] === true &&
+        detail?.["auth_status_stale"] === true &&
         typeof p["title"] === "string"
       )
         return `[${who}] WARNING: ${truncate(p["title"], 300)}`;

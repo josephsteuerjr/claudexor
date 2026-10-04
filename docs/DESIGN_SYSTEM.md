@@ -986,10 +986,14 @@ views in the shared design-system files; screens compose them.
   sweep) primary output appears in
   Outcome as markdown. Technical artifacts (`context/task.yaml`, `events.jsonl`)
   stay in Diagnostics/artifact lists and must not be transformed into Plan rows.
-  When the engine's terminal presentation state is `diagnostic`, even a
-  standard answer/report primary renders in the diagnostic lane rather than as
-  a successful answer. A successful `final/summary.md` is evidence that output
-  settled, never an answer fallback.
+  A retained `report` primary with terminal presentation state `diagnostic`
+  renders as readable Markdown directly below the actual failure/cancel banner
+  and cause, in chat and Outcome. It is labelled "Unverified retained output";
+  its artifact action, captured-file actions and preview-limit notice stay outside
+  the Markdown body. Full files use the existing preview sheet and Reveal in Finder;
+  preview bounds never limit the downloaded retained document.
+  Other diagnostic primaries remain in Diagnostics. A successful summary is
+  evidence that output settled, never an answer fallback.
 - **Setup job lifecycle.** Auth/setup sheets show compatible coarse state plus
   the login-only typed phase (`preparing`, `launching`, `awaiting_user`,
   `verifying`, `cancelling`, `completed`), native source

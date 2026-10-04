@@ -265,6 +265,7 @@ export function timelineEvents(
   for (const ev of events ?? readRunEvents(rec)) {
     const payload = eventPayload(ev);
     const type = String(ev["type"] ?? "event");
+    if (type === "harness.event" && eventPayload(payload)["buffered"] === true) continue;
     const textKind =
       type === "harness.event" &&
       (payload["type"] === "thinking" || payload["type"] === "message") &&

@@ -222,24 +222,25 @@ function parseCursorEventStateful(
   if (type === "assistant") {
     // --stream-partial-output taxonomy (official docs, F2.5 W-C4): a new-text
     // DELTA has timestamp_ms and no model_call_id; a buffered duplicate has
-    // BOTH (skip — its text already streamed); the final flush has NEITHER
+    // BOTH (retained evidence only); the final flush has NEITHER
     // (the complete message — the plain no-flag shape).
     const hasTimestamp = obj.timestamp_ms !== undefined && obj.timestamp_ms !== null;
     const hasModelCall = typeof obj.model_call_id === "string" && obj.model_call_id;
-    if (hasTimestamp && hasModelCall) return [];
+    const buffered = Boolean(hasTimestamp && hasModelCall);
     const isDelta = hasTimestamp && !hasModelCall;
     const content: Json[] = obj.message?.content ?? [];
     const out: HarnessEvent[] = [];
     const completeText: string[] = [];
     for (const block of content) {
       if (typeof block?.text === "string" && block.text) {
-        if (!isDelta) completeText.push(block.text);
+        if (!isDelta && !buffered) completeText.push(block.text);
         out.push({
           type: "message",
           session_id: sessionId,
           ts,
           text: block.text,
           ...(isDelta ? { payload: { delta: true } } : {}),
+          ...(buffered ? { payload: { buffered: true, model_call_id: obj.model_call_id } } : {}),
         });
       }
     }

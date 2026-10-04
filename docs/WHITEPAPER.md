@@ -248,6 +248,13 @@ or "Incomplete", and a non-zero shell exit — without pretending the process
 failed. A blocked read-only run that produced no answer can no longer read as
 "done"; the deliverable is re-checked, so an empty run exits non-zero.
 
+Preservation and acceptance are separate promises. Work already observed remains
+useful after a failure or cancellation, even when it is not a completed answer.
+A readable projection of that evidence keeps its attempts distinct and presents
+the original cause before the text. It does not infer completion, regenerate the
+answer, or turn Stop into rollback. Recorded file effects can offer the existing
+explicit Revert only when their exact execution-tree evidence supports it.
+
 Every terminal run seals these axes into one immutable RunFacts receipt. The
 orchestrator builds it once from canonical artifacts, validates its
 cross-axis invariants, embeds the exact object in the terminal journal event,

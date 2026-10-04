@@ -7,6 +7,12 @@ import { safeArtifactRoot } from "./artifact-paths.js";
 import { safeReadStructuredArtifact } from "./run-artifact-read.js";
 import type { DaemonRunRecord } from "./run-record.js";
 
+/** Revert targets the tree recorded at execution, even if its thread moved later. */
+export function recordedExecutionRoot(rec: DaemonRunRecord): string | null {
+  const wp = safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct);
+  return typeof wp?.meta["execution_root"] === "string" ? wp.meta["execution_root"] : null;
+}
+
 export function controlRunResult(rec: DaemonRunRecord): ControlRunResult {
   const wp = safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct);
   const meta = (wp?.meta ?? {}) as Record<string, unknown>;

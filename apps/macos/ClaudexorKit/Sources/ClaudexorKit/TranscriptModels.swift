@@ -138,6 +138,9 @@ public struct TranscriptReducer: Sendable {
             }
             return true
         case "message":
+            // Buffered snapshots remain in the evidence artifact, not a second
+            // complete message in the visible transcript (live or replayed).
+            if payload["buffered"]?.boolValue == true || payload["payload"]?["buffered"]?.boolValue == true { return false }
             // A TYPED final message (claude/cursor result, codex finalized last
             // agent message) IS the answer bubble — never rendered here. It
             // SEALS the delta stream so a late stray delta cannot append after

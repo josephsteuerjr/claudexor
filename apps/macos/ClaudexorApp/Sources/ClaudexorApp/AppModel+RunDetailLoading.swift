@@ -85,8 +85,9 @@ extension AppModel {
         {
             guard primary.kind != "patch",
                   primary.kind != "diagnostic",
-                  detail.summary.outputReadyState != "diagnostic"
+                  detail.summary.outputReadyState != "diagnostic" || primary.kind == "report"
             else { return nil }
+            if detail.summary.outputReadyState == "diagnostic" { return text }
             return primary.truncated == true
                 ? text + "\n\n_Inline preview bounded; open \(primary.path) for the full output._"
                 : text
