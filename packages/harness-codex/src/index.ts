@@ -71,7 +71,6 @@ import { decorateCodexEvent, type CodexEventDecoration } from "./event-decoratio
 import { BIN, detectVersion, missingCliError, missingCliReport, probeEnv } from "./missing-cli.js";
 export { BIN } from "./missing-cli.js";
 
-/** Exported for focused route-policy tests; runtime uses this exact selector. */
 export const selectCodexRunAuthRoute = selectStrictAuthRoute;
 
 export {
@@ -96,7 +95,6 @@ import {
   type CodexLoginProbe,
 } from "./auth.js";
 
-/** Native Codex sandbox mode per active access profile; null = native default. */
 function sandboxMode(access: AccessProfile): string | null {
   switch (access) {
     case "readonly":

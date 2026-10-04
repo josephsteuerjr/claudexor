@@ -16,6 +16,7 @@ describe("Claude native OAuth refresh wake", () => {
   });
 
   it("holds a prompt-free vendor MCP process until expiry metadata advances", async () => {
+    const diagnostics: unknown[] = [];
     let captured:
       | {
           cmd: string;
@@ -53,6 +54,7 @@ describe("Claude native OAuth refresh wake", () => {
         sleep: async () => {},
         bin: "/vendor/claude",
         cwd: process.cwd(),
+        diagnostic: (record) => diagnostics.push(record),
       },
     );
 
@@ -69,6 +71,16 @@ describe("Claude native OAuth refresh wake", () => {
     });
     expect(stdinEnded).toBe(true);
     expect(captured?.options.abortSignal?.aborted).toBe(false);
+    expect(diagnostics).toEqual([
+      {
+        binary: null,
+        expiresAtMs: now + 8 * 60 * 60_000,
+        exitCode: 0,
+        signal: null,
+        terminationUnconfirmed: false,
+        childFailed: false,
+      },
+    ]);
   });
 
   it("returns false and reaps the exact child when it exits before refreshing", async () => {

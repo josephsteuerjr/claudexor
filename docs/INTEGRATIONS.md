@@ -255,6 +255,14 @@ constraints themselves. `POST /v2/quota` accepts an optional `{"model": …}`
 body to compute `state` against the model the caller intends to spend
 (case-insensitive alias containment in either direction). The CLI projection
 is `claudexor quota [--refresh] --json`.
+Control quota snapshots also carry a server-derived `snapshot_id` for stable
+presentation identity. Native incremental sources (`claude_rate_limit_event`,
+`codex_app_server_event`) report single windows with their own timestamps; they
+are not complete inventory and do not satisfy full-refresh demand or hide a
+failed refresh. Existing clients may keep their legacy identity fallback when
+that additive field is absent. Source replacement and journal semantics live in
+[ARCHITECTURE](ARCHITECTURE.md#7-control-api).
+
 Codex refreshes through the vendor app-server (including the live-verified
 `rateLimitResetCredits` balance, surfaced only when positive). Claude's
 PRIMARY subscription source is the `api.anthropic.com/api/oauth/usage`
@@ -995,7 +1003,11 @@ failures. Deltas: only MAIN-conversation `content_block_delta`/`text_delta`
 frames surface (flagged `delta`); subagent frames (`parent_tool_use_id`) and
 block/lifecycle frames never do — the complete message always follows.
 Plumbing: other `system` subtypes and `control_response`/`control_cancel_request`
-frames are recognized and consumed, never timeline events.
+frames are recognized and consumed, never timeline events. `rate_limit_event`
+additionally preserves measured `unifiedWindows` and the reported current window
+as status events with quota, independently of its rejecting signal. Allowed and
+warning frames do not create cooldowns. Unknown applicability remains diagnostic
+payload, never a guessed global restriction.
 
 **Codex** — wire: one `codex app-server --stdio` JSON-RPC child per Claudexor
 run. Fresh lanes use `thread/start`; later lane turns use `thread/resume`; input,
@@ -1004,6 +1016,11 @@ provides the exact active turn id. `item/*` maps `reasoning` → `thinking`,
 `commandExecution`/`mcpToolCall`/`webSearch` → `tool_call`+`tool_result`,
 `fileChange` → `file_change`, `agentMessage` → `message`; `turn/plan/updated`
 maps plan progress and `thread/tokenUsage/updated` maps usage.
+`account/rateLimits/updated` maps measured known-scope windows to independent
+status+quota events from that same running process, without token usage or a
+cooldown. The full quota reader shares the native window codec; supplied RPC
+refusal codes and safe detail survive as refresh diagnostics without interpreting
+a generic RPC error or HTTP-like number as credential revocation.
 An `error` notification with `willRetry: true` maps to nonterminal `status`
 (`api_retry`), preserving the native message as text and native fields in the
 payload. The vendor owns that in-turn retry: no retry count, delay, category,

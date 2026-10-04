@@ -130,6 +130,19 @@ their declared aliases, advisory warnings do not become cooldowns, absence is
 typed and explained, and unknown never renders as zero. A failed refresh remains
 explainable alongside stale last-known data without presenting it as a fresh observation.
 
+A saved login and a vendor accepting that credential are different facts.
+Observations from ordinary work should improve the same account view and selection
+that admitted the work, even when the account was pinned. Their authority is bound
+to the identity and credential generation that produced them, so a late result
+cannot rewrite a newer login. This does not require a new login manager or extra
+probe work on every completion.
+
+Likewise, one measured window is useful without pretending to be a complete
+subscription inventory. Passive native measurements keep independent ages and
+scope, while full refreshes retain their separate coverage and failure evidence.
+This reuses information already obtained during work without claiming that an
+idle account has been checked or that vendor throttling disappeared.
+
 A routing goal answers to the same line. Quality routing compares declared,
 comparable options — a named harness, model, and effort for the intent at
 hand — so with none declared there is nothing to rank and the run cannot

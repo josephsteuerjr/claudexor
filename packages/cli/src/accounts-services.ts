@@ -7,11 +7,14 @@ import { noProjectRepoRoot } from "@claudexor/util";
 import type {
   CredentialProfile,
   CredentialProfileStatus,
-  QuotaAbsence,
-  QuotaSnapshot,
+  CredentialUnusableObservation,
 } from "@claudexor/schema";
 import { withQuotaAvailability } from "@claudexor/schema";
-import { vendorVerifiedProfileStatus } from "@claudexor/orchestrator";
+import {
+  composeCredentialProfileEvidence,
+  type VendorQuotaObservations,
+} from "@claudexor/orchestrator";
+import { credentialUnusableLedger } from "./run-orchestrator.js";
 import { accountPoolsProjection, profileAccountProjection } from "./accounts-projection.js";
 import { buildGateway, buildRegistry, checkHarnessModel } from "./registry.js";
 import { delegationCapabilityFor } from "./delegation-capability.js";
@@ -77,9 +80,27 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
   // (quota.refresh_skipped) instead of re-hammering a 429ing endpoint.
   // A login/logout invalidates this cache immediately
   // (invalidateStatusProjections), so freshness lags at most the short TTL.
+  const probeAccounts = async () => {
+    const harnessIds = [...buildRegistry({ includeFakes: false }).keys()].sort();
+    const [profiles, statuses] = await Promise.all([
+      projectProfiles(),
+      buildGateway({ includeFakes: false })
+        .statusAll({ cwd: NO_PROJECT_ROOT }, harnessIds)
+        .catch(() => [] as HarnessStatus[]),
+    ]);
+    return { profiles, statuses };
+  };
+  // Only native probes are cached. A refusal, recovery or expiry must be
+  // visible on the next read without starting another vendor process.
+  const pollCache = new StatusProjectionCache<Awaited<ReturnType<typeof probeAccounts>>>({
+    versionOf: globalConfigVersion,
+  });
   const buildPollResponse = async () => {
+    const probed = await pollCache.read(probeAccounts);
     const quota = quotaRegistry().read();
-    const out = withVendorVerification(await projectProfiles(), quota);
+    const unusable = credentialUnusableLedger.live();
+    const evidence = { ...quota, honored: credentialUnusableLedger.honored() };
+    const out = withAccountEvidence(probed.profiles, evidence, unusable);
     return {
       profiles: out,
       // Unified account model: the legacy carrier stays PRESENT and empty for
@@ -87,12 +108,12 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
       harnessAccounts: [],
       accountPools: await accountPoolsProjection(NO_PROJECT_ROOT, quota.snapshots, {
         profiles: out,
+        statuses: probed.statuses,
+        quota: evidence,
+        unusable,
       }),
     };
   };
-  const pollCache = new StatusProjectionCache<Awaited<ReturnType<typeof buildPollResponse>>>({
-    versionOf: globalConfigVersion,
-  });
   const credentialProfiles = async (input?: { snapshot?: boolean }) => {
     if (input?.snapshot === true) {
       const [probed, accountStatuses, git, fencedQuota] = await Promise.all([
@@ -106,7 +127,9 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
       ]);
       const statuses = accountStatuses.map((receipt) => receipt.status);
       const rawQuota = fencedQuota.response;
-      const out = withVendorVerification(probed, rawQuota);
+      const unusable = credentialUnusableLedger.live();
+      const evidence = { ...rawQuota, honored: credentialUnusableLedger.honored() };
+      const out = withAccountEvidence(probed, evidence, unusable);
       // The explicit refresh proved the live state — drop the stale poll
       // cache so the next ordinary poll recomputes from it (re-priming with a
       // snapshot-derived projection was explicitly declined, wave-3 decision).
@@ -117,6 +140,8 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
         accountPools: await accountPoolsProjection(NO_PROJECT_ROOT, rawQuota.snapshots, {
           profiles: out,
           statuses,
+          quota: evidence,
+          unusable,
         }),
         harnesses: await projectHarnessStatuses(statuses),
         git,
@@ -124,10 +149,10 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
         quotaEventCursor: fencedQuota.quotaEventCursor,
       };
     }
-    return pollCache.read(buildPollResponse);
+    return buildPollResponse();
   };
   const accountPools = async () => ({
-    accountPools: (await pollCache.read(buildPollResponse)).accountPools,
+    accountPools: (await buildPollResponse()).accountPools,
   });
   return { credentialProfiles, accountPools };
 }
@@ -138,14 +163,20 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
  * so the routing identity (`next_up`) and the listed status can never disagree:
  * a revoked profile must not be advertised as who the next run routes to.
  */
-function withVendorVerification<
+function withAccountEvidence<
   T extends { profile: CredentialProfile; status: CredentialProfileStatus },
 >(
   entries: T[],
-  quota: { snapshots: readonly QuotaSnapshot[]; absences: readonly QuotaAbsence[] },
+  quota: VendorQuotaObservations,
+  unusable: readonly CredentialUnusableObservation[],
 ): T[] {
   return entries.map((entry) => ({
     ...entry,
-    status: vendorVerifiedProfileStatus(entry.status, quota),
+    status: composeCredentialProfileEvidence(entry.status, {
+      quota,
+      unusable,
+      model: null,
+      route: entry.profile.credential_kind === "api_key" ? "managed_api_key" : "vendor_native",
+    }),
   }));
 }

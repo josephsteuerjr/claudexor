@@ -1,5 +1,5 @@
 import type { ChildStdin } from "@claudexor/core";
-import { spawnProcess } from "@claudexor/core";
+import { harnessBinaryIdentity, harnessBinaryIdentityOnPath, spawnProcess } from "@claudexor/core";
 import { ensureDir, noProjectRepoRoot } from "@claudexor/util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { BIN } from "./effort-probe.js";
@@ -31,6 +31,14 @@ export interface ClaudeNativeAuthRefreshDeps {
   cwd: string;
   timeoutMs: number;
   pollMs: number;
+  diagnostic: (record: {
+    binary: ReturnType<typeof harnessBinaryIdentity>;
+    expiresAtMs: number | null;
+    exitCode: number | null;
+    signal: string | null;
+    terminationUnconfirmed: boolean;
+    childFailed: boolean;
+  }) => void;
 }
 
 /**
@@ -58,6 +66,15 @@ export async function refreshClaudeNativeAuth(
   let stdin: ChildStdin | null = null;
   let childExited = false;
   let terminationUnconfirmed = false;
+  let exitCode: number | null = null;
+  let exitSignal: string | null = null;
+  let childFailed = false;
+  let expiresAtMs: number | null = null;
+  const binary = !overrides.diagnostic
+    ? null
+    : typeof env.PATH === "string"
+      ? harnessBinaryIdentityOnPath(bin, env.PATH)
+      : harnessBinaryIdentity(bin);
   const child = (async () => {
     try {
       for await (const event of spawn(bin, ["--setting-sources", "", "mcp", "serve"], {
@@ -77,17 +94,22 @@ export async function refreshClaudeNativeAuth(
         cancelKillDelayMs: 1_000,
       })) {
         if (event.type === "termination_unconfirmed") terminationUnconfirmed = true;
+        if (event.type === "exit") {
+          exitCode = event.code;
+          exitSignal = event.signal;
+        }
         if (event.type === "exit" || event.type === "termination_unconfirmed") childExited = true;
       }
     } catch {
       childExited = true;
+      childFailed = true;
     }
   })();
 
   try {
     const deadline = nowMs() + timeoutMs;
     for (;;) {
-      const expiresAtMs = await readExpiresAtMs();
+      expiresAtMs = await readExpiresAtMs();
       if (claudeOauthAccessTokenIsFresh(expiresAtMs, nowMs())) return true;
       if (childExited || nowMs() >= deadline) return false;
       await wait(pollMs);
@@ -104,6 +126,18 @@ export async function refreshClaudeNativeAuth(
     }
     if (!closedAfterEof && !childExited) controller.abort();
     await child;
+    try {
+      overrides.diagnostic?.({
+        binary,
+        expiresAtMs,
+        exitCode,
+        signal: exitSignal,
+        terminationUnconfirmed,
+        childFailed,
+      });
+    } catch {
+      // Diagnostic I/O cannot change the native helper's result or custody.
+    }
     if (terminationUnconfirmed) {
       throw Object.assign(
         new Error("Claude Code OAuth refresh helper termination could not be confirmed"),

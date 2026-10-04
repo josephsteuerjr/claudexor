@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { loadConfig } from "@claudexor/config";
-import { harnessRuntimeEnv, providerScrubEnv } from "@claudexor/core";
+import { harnessBinaryIdentity, harnessRuntimeEnv, providerScrubEnv } from "@claudexor/core";
 import type { QuotaRefreshResult } from "@claudexor/daemon";
 import {
   CODEX_FILE_AUTH_ARGS,
@@ -18,6 +19,11 @@ import {
 import type { QuotaAbsence, QuotaSnapshot } from "@claudexor/schema";
 import { noProjectRepoRoot } from "@claudexor/util";
 import { readAccountsMigrationFile } from "./accounts-unified-migration.js";
+import {
+  emitQuotaDiagnostic,
+  type QuotaDiagnosticSink,
+  type QuotaRefreshDiagnostic,
+} from "./quota-refresh-diagnostics.js";
 
 export { parseCodexRateLimitsResponse } from "@claudexor/harness-codex";
 
@@ -29,16 +35,40 @@ const CODEX_BIN = process.env.CLAUDEXOR_CODEX_BIN || "codex";
  * cannot be observed yields a typed absence CLAIM, never a throw — a single
  * account's failure must never blind the others (release cut V11a). */
 export async function refreshCodexQuota(
-  options: { bin?: string; baseEnv?: NodeJS.ProcessEnv; spawn?: typeof spawn } = {},
+  options: {
+    bin?: string;
+    baseEnv?: NodeJS.ProcessEnv;
+    spawn?: typeof spawn;
+    diagnostic?: QuotaDiagnosticSink;
+    foreground?: boolean;
+  } = {},
 ): Promise<QuotaRefreshResult> {
   const snapshots: QuotaSnapshot[] = [];
   const absences: QuotaAbsence[] = [];
   for (const candidate of codexQuotaCandidates()) {
+    const operationId = randomUUID();
+    const diagnostic: QuotaDiagnosticSink = (record) =>
+      emitQuotaDiagnostic(options.diagnostic, record);
+    const diagnosticBase = {
+      operationId,
+      source: "codex_app_server",
+      profileId: candidate.subjectId,
+      foreground: options.foreground === true,
+      credentialEpoch: null,
+      current: null,
+    };
     // Logged-out precheck (v3.0.3 S8): a home without auth.json cannot yield a
     // quota window — report the typed absence WITHOUT booting a codex
     // app-server (the 2026-07-21 incident: a fresh scoped home was re-spawned
     // and re-initialized every 60s forever).
     if (!existsSync(join(candidate.home, "auth.json"))) {
+      diagnostic({
+        ...diagnosticBase,
+        at: new Date().toISOString(),
+        stage: "poll",
+        outcome: "skipped",
+        reason: "credential_file_absent",
+      });
       absences.push({
         subject: {
           harness: "codex",
@@ -60,6 +90,7 @@ export async function refreshCodexQuota(
           options.baseEnv,
           options.bin,
           options.spawn,
+          (record) => diagnostic({ ...record, ...diagnosticBase }),
         )),
       );
     } catch (error) {
@@ -124,8 +155,29 @@ async function readCodexCandidate(
   baseEnv: NodeJS.ProcessEnv | undefined,
   bin?: string,
   start: typeof spawn = spawn,
+  diagnostic?: (
+    record: Pick<
+      QuotaRefreshDiagnostic,
+      "at" | "stage" | "outcome" | "reason" | "binary" | "nativeRpcCode"
+    >,
+  ) => void,
 ): Promise<QuotaSnapshot[]> {
   const invocation = codexQuotaInvocation(baseEnv, codexHome);
+  const report = (
+    outcome: "started" | "succeeded" | "failed",
+    reason?: string,
+    nativeRpcCode?: number | null,
+  ) =>
+    diagnostic?.({
+      at: new Date().toISOString(),
+      stage: "native_rpc",
+      outcome,
+      reason,
+      nativeRpcCode,
+      ...(outcome === "started"
+        ? { binary: harnessBinaryIdentity(bin ?? CODEX_BIN, invocation.env) }
+        : {}),
+    });
   const child = start(bin ?? CODEX_BIN, invocation.args, {
     stdio: ["pipe", "pipe", "pipe"],
     env: invocation.env,
@@ -196,7 +248,19 @@ async function readCodexCandidate(
         error ? reject(error) : resolve(),
       );
     });
-    const response = await request(2, "account/rateLimits/read", null);
+    report("started", "account/rateLimits/read");
+    let response: Record<string, unknown>;
+    try {
+      response = await request(2, "account/rateLimits/read", null);
+      report("succeeded", "rpc_response_received");
+    } catch (error) {
+      report(
+        "failed",
+        error instanceof CodexRpcError ? "native_rpc_refused" : "native_rpc_transport_unknown",
+        error instanceof CodexRpcError ? error.code : null,
+      );
+      throw error;
+    }
     const result = response["result"];
     if (!result || typeof result !== "object") throw new Error("Codex quota response is missing");
     return parseCodexRateLimitsResponse(result, new Date(), subjectId);

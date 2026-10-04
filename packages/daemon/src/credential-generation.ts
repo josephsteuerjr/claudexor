@@ -25,7 +25,10 @@ export class CredentialGeneration {
     );
   }
 
-  bind(subject: CredentialExecutionSubject, startedAt = new Date().toISOString()): CredentialExecutionBinding {
+  bind(
+    subject: CredentialExecutionSubject,
+    startedAt = new Date().toISOString(),
+  ): CredentialExecutionBinding {
     return {
       subject,
       generation: this.generation(subject.harnessId, subject.profileId),

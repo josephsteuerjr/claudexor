@@ -1,3 +1,9 @@
+import {
+  claudeOauthKeychainItem,
+  parseClaudeOauthCredential,
+  readClaudeOauthCredential,
+  type ClaudeOauthCredential,
+} from "./claude-oauth-credential.js";
 import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -5,13 +11,9 @@ import { join } from "node:path";
 import { CLAUDE_AUTH_REFRESH_TERMINATION_UNCONFIRMED } from "@claudexor/harness-claude";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  claudeOauthKeychainItem,
   forgetClaudeOauthRejections,
-  parseClaudeOauthCredential,
   parseClaudeOauthUsage,
-  readClaudeOauthCredential,
   refreshClaudeOauthUsageQuota,
-  type ClaudeOauthCredential,
 } from "./claude-oauth-usage.js";
 
 /** The EXACT response shape of the 2026-07-17 live experiment (max plan). */

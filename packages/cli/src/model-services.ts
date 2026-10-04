@@ -11,12 +11,12 @@ import {
 } from "@claudexor/daemon";
 import { createCodexModelAdapter, describeCodexClientVersion } from "@claudexor/harness-codex";
 import {
-  differentialSubjectVerdict,
   probeCredentialProfileStatus,
   profileStatusAdmits,
   resolveAccountForRun,
   resolveCredentialProfile,
-  vendorVerifiedProfileStatus,
+  composeCredentialProfileEvidence,
+  applicableCredentialUnusable,
   vendorCredentialObservation,
 } from "@claudexor/orchestrator";
 import {
@@ -25,10 +25,8 @@ import {
   ControlProblem,
   GlobalConfig,
   type CredentialProfile,
-  type HarnessEvent,
   type ModelAccountChoice,
   type ModelCallResult,
-  type ModelUsage,
 } from "@claudexor/schema";
 import { errorCode, noProjectRepoRoot, redactSecrets } from "@claudexor/util";
 import { accountsMigrationGate } from "./accounts-unified-migration.js";
@@ -36,6 +34,7 @@ import { buildRegistry } from "./registry.js";
 import { credentialUnusableLedger } from "./run-orchestrator.js";
 import type { RetentionRunner } from "./retention-service.js";
 import { catalogProfiles, enumerateAccountCatalogs } from "./account-catalog.js";
+import { bindModelAccountEvidence } from "./model-account-evidence.js";
 
 /**
  * Daemon-lifetime model-substitution observations: in-memory and bounded, like
@@ -75,6 +74,7 @@ export function createModelServices(deps: Dependencies) {
   const config = deps.config ?? (() => loadConfig(noProjectRepoRoot()).global);
   const unusable = deps.unusable ?? credentialUnusableLedger;
   const substitutions = deps.substitutions ?? modelSubstitutionLedger;
+  const quotaEvidence = () => ({ ...deps.quota().read(), honored: unusable.honored() });
   const lifetime = new AbortController();
   const getSource = (id: string): ModelSource => {
     const source = sources.find((entry) => entry.adapter.id === id);
@@ -113,19 +113,13 @@ export function createModelServices(deps: Dependencies) {
       }
     }
     const probe = registry.get(harnessId)?.probeCredentialProfile?.bind(registry.get(harnessId));
-    const quota = deps.quota().read();
+    const quota = quotaEvidence();
     if (pinnedProfile) {
       // Preserve a confirmed sign-in remedy across subsequent pinned calls.
       // Local probe failures and generic unavailability do not prove revocation.
-      const revoked = unusable
-        .live()
-        .find(
-          (entry) =>
-            entry.harness_id === harnessId &&
-            entry.profile_id === pinnedProfile.profile_id &&
-            entry.code === "auth_revoked" &&
-            (entry.model === null || entry.model === model),
-        );
+      const evidence = { quota, unusable: unusable.live(), model, route: "vendor_native" as const };
+      const refusal = applicableCredentialUnusable(pinnedProfile, evidence);
+      const revoked = refusal?.code === "auth_revoked" ? refusal : null;
       const vendor = vendorCredentialObservation(quota, harnessId, pinnedProfile.profile_id);
       const revokedAt =
         revoked?.observed_at ?? (vendor?.outcome === "revoked" ? vendor.observed_at : null);
@@ -145,9 +139,9 @@ export function createModelServices(deps: Dependencies) {
             }),
           },
         );
-      const status = vendorVerifiedProfileStatus(
+      const status = composeCredentialProfileEvidence(
         await probeCredentialProfileStatus(pinnedProfile, probe),
-        quota,
+        evidence,
       );
       if (!profileStatusAdmits(pinnedProfile, status))
         throw modelError(
@@ -161,7 +155,7 @@ export function createModelServices(deps: Dependencies) {
     // The same pool resolver chooses any next candidate; this loop never generates.
     while (true) {
       signal.throwIfAborted();
-      const currentQuota = deps.quota().read();
+      const currentQuota = quotaEvidence();
       let profile: CredentialProfile | null;
       try {
         profile = await resolveAccountForRun({
@@ -263,6 +257,13 @@ export function createModelServices(deps: Dependencies) {
         throw modelError("model_account_unavailable", "Connect a managed account for model calls");
       signal.throwIfAborted();
       let catalog: ControlModelCatalogResponse;
+      const evidence = bindModelAccountEvidence({
+        harnessId,
+        profileId: profile.profile_id,
+        model,
+        unusable,
+        quota: deps.quota,
+      });
       try {
         catalog = ControlModelCatalogResponse.parse(
           await source.adapter.catalog({ profile, signal }),
@@ -285,13 +286,21 @@ export function createModelServices(deps: Dependencies) {
         // evidence maintenance fails or a concurrent refresh retires its block.
         excluded.add(profile.profile_id);
         try {
-          await observe(source, profile, refusal);
+          evidence.observe(refusal);
         } catch (error) {
           deps.warn?.(`Model quota evidence was not recorded: ${redactSecrets(String(error))}`);
         }
         if (account.mode === "pin")
           throw Object.assign(modelError(refusal.code, refusal.message), { problem: refusal });
         continue;
+      } finally {
+        try {
+          evidence.finish();
+        } catch (error) {
+          deps.warn?.(
+            `Model account evidence finalization failed: ${redactSecrets(String(error))}`,
+          );
+        }
       }
       if (
         catalog.source !== source.adapter.id ||
@@ -301,6 +310,8 @@ export function createModelServices(deps: Dependencies) {
           "model_catalog_identity_mismatch",
           "The model catalog does not identify the selected account",
         );
+      if (catalog.provenance === "provider_http" && catalog.observedAt)
+        evidence.honorCatalog(catalog.observedAt);
       if (model === null || catalog.models.some((entry) => entry.id === model))
         return { profile, catalog };
       if (account.mode === "pin")
@@ -309,61 +320,6 @@ export function createModelServices(deps: Dependencies) {
           `The pinned account does not advertise the requested model in its catalog as served to ${describeCodexClientVersion(catalog)}`,
         );
       excluded.add(profile.profile_id);
-    }
-  };
-
-  const observe = async (
-    source: ModelSource,
-    profile: CredentialProfile,
-    problem: ControlProblem | null,
-    usage?: ModelUsage,
-    model?: string | null,
-  ) => {
-    const ts = new Date().toISOString();
-    const event: HarnessEvent = {
-      type: usage ? "usage" : "error",
-      ts,
-      session_id: "model-operation",
-      credential_route: "vendor_native",
-      credential_profile_id: profile.profile_id,
-      observed_model: model ?? undefined,
-      usage: {
-        input_tokens: usage?.input_tokens ?? undefined,
-        output_tokens: usage?.output_tokens ?? undefined,
-        cached_input_tokens: usage?.cached_input_tokens ?? undefined,
-      },
-    };
-    // A cooldown is an assertion about time, so only the vendor's own reset or
-    // retry delay may produce one. Without either field the registry would
-    // invent a window instead of admitting it does not know.
-    const context = problem?.context ?? {};
-    if (typeof context.resetsAt === "string" || typeof context.retryAfterMs === "number") {
-      event.rate_limit = {
-        resets_at: typeof context.resetsAt === "string" ? context.resetsAt : null,
-        retry_delay_ms: typeof context.retryAfterMs === "number" ? context.retryAfterMs : null,
-      };
-    }
-    deps.quota().ingest(source.credentialHarness, event);
-    unusable.observeEvent(source.credentialHarness, event);
-    if (problem?.code === "auth_required") {
-      const observation = await differentialSubjectVerdict({
-        harnessId: source.credentialHarness,
-        profile,
-        model: model ?? null,
-        quota: deps.quota().read(),
-        transients: [
-          {
-            kind: "unknown",
-            category: "auth_failed",
-            retryable: false,
-            retryDelayMs: null,
-            httpStatus: null,
-            signal: null,
-            adapterCode: "auth_required",
-          },
-        ],
-      });
-      if (observation) unusable.record(observation);
     }
   };
 
@@ -381,33 +337,67 @@ export function createModelServices(deps: Dependencies) {
         adapter: {
           ...source.adapter,
           invoke: async (input, context) => {
-            const served = await source.adapter.invoke(input, { ...context, catalog });
-            // A typed fact about this generation, never a changed outcome: set
-            // only when a terminal response disclosed a model and its exact id
-            // differs from the requested one. The caller decides what to do.
-            const observed = served.route.model;
-            const result: ModelCallResult =
-              (served.outcome === "completed" || served.outcome === "incomplete") &&
-              observed !== null &&
-              observed !== input.model
-                ? { ...served, modelMismatch: { requested: input.model, observed } }
-                : served;
-            // Evidence maintenance must not erase an already-received model result.
+            const evidence = bindModelAccountEvidence({
+              harnessId: source.credentialHarness,
+              profileId: profile.profile_id,
+              model: input.model,
+              unusable,
+              quota: deps.quota,
+            });
+            let dispatched = false;
             try {
-              // The next Auto selection for this model prefers other accounts.
-              if (result.modelMismatch)
-                substitutions.record({
-                  harness_id: source.credentialHarness,
-                  profile_id: profile.profile_id,
-                  requested_model: result.modelMismatch.requested,
-                });
-              await observe(source, profile, result.problem, result.usage, result.route.model);
-            } catch (error) {
-              deps.warn?.(
-                `Model account evidence was not recorded: ${redactSecrets(String(error))}`,
-              );
+              const served = await source.adapter.invoke(input, {
+                ...context,
+                catalog,
+                onDispatch: async (route) => {
+                  await context.onDispatch(route);
+                  dispatched = true;
+                },
+              });
+              // A typed fact about this generation, never a changed outcome: set
+              // only when a terminal response disclosed a model and its exact id
+              // differs from the requested one. The caller decides what to do.
+              const observed = served.route.model;
+              const result: ModelCallResult =
+                (served.outcome === "completed" || served.outcome === "incomplete") &&
+                observed !== null &&
+                observed !== input.model
+                  ? { ...served, modelMismatch: { requested: input.model, observed } }
+                  : served;
+              // Evidence maintenance must not erase an already-received model result.
+              try {
+                // The next Auto selection for this model prefers other accounts.
+                if (result.modelMismatch && evidence.current())
+                  substitutions.record({
+                    harness_id: source.credentialHarness,
+                    profile_id: profile.profile_id,
+                    requested_model: result.modelMismatch.requested,
+                  });
+                if (
+                  result.route.source === source.adapter.id &&
+                  result.route.credentialProfileId === profile.profile_id
+                )
+                  evidence.observe(
+                    result.problem,
+                    result.usage,
+                    result.route.model,
+                    dispatched && result.outcome === "failed",
+                  );
+              } catch (error) {
+                deps.warn?.(
+                  `Model account evidence was not recorded: ${redactSecrets(String(error))}`,
+                );
+              }
+              return result;
+            } finally {
+              try {
+                evidence.finish();
+              } catch (error) {
+                deps.warn?.(
+                  `Model account evidence finalization failed: ${redactSecrets(String(error))}`,
+                );
+              }
             }
-            return result;
           },
         },
       };
@@ -444,7 +434,7 @@ export function createModelServices(deps: Dependencies) {
       },
       modelAccountCatalog: async (sourceId: string, credentialProfileId?: string) => {
         const source = getSource(sourceId);
-        const context = { config: config(), quota: deps.quota().read(), unusable: unusable.live() };
+        const context = { config: config(), quota: quotaEvidence(), unusable: unusable.live() };
         const accounts = await enumerateAccountCatalogs({
           context,
           adapter: registry.get(source.credentialHarness),

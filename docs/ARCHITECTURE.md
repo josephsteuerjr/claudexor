@@ -1165,35 +1165,46 @@ subject's OBSERVED live block with no eligible alternative refuses with the
 same typed terminal before spawn; a bare headroom breach with no alternative
 still proceeds (proximity is not proof the window is spent).
 
-Rotation also tells "quota spent" apart from "credential DEAD" (the A7
-differential probe): whenever a rotation-eligible failure triggers the
-candidate-readiness probe, a SIBLING probe examines the CURRENT/triggering
-subject — re-reading the quota poller's authenticated vendor observations,
-the attempt's own typed non-retryable auth/entitlement refusals, and the
-adapter's local doctor probe. It never spawns a harness or spends quota (a
-config-dir login has no cheaper liveness test than spending quota on a
-mini-run). A dead-credential verdict becomes a typed
-`route.profile.credential_unusable` run event and a bounded, self-expiring
-`CredentialUnusableObservation` in the daemon's in-memory
-`CredentialUnusableLedger` (deliberately NOT the `QuotaAbsence` channel — the
-registry hides an absence while any live snapshot covers the subject — and
-deliberately not journaled: readiness is non-durable by contract and the
-poller re-derives vendor rejections within a cycle after restart). The
-clearing contract is threefold: bounded self-expiry (24h hard cap;
-entitlement/probe verdicts expire within the hour), a served model response
-for the same subject (wired where usage events already feed the quota
-registry), and any credential-generation change (login/logout/profile
-mutation). Nothing is recorded while a login of that harness holds its
-credential-mutation window, and a subscription row's verdict is recorded only
-while the credential its try bound is still current (#363). Consumption is one
-composition point: `readyProfilesForRotation`
-refuses a candidate a live observation condemns (model-scoped observations
-refuse only their own model), exhaustion rows name it typed
-(`rejected: credential_unusable`, never hidden behind `not_ready`), and the
-pool-exhausted terminal carries the subject's dead-credential provenance in
-place of a quota-reset promise that would never help. The Accounts-surface
-projection of these observations is deliberately deferred (owner scope 4=A:
-run + rotation evidence now, UI as a separate issue).
+Account observations are collected independently of rotation policy. A bound
+observer sees normalized native events before the caller consumes them and
+finishes even when a caller exits early. Candidate, read-only, planner, reducer,
+reviewer and continuity-summary dispatches use that same boundary; raw model
+catalog and inference calls bind the same authority before provider work.
+An unresolved typed terminal auth or capability refusal enters the daemon's
+bounded, in-memory `CredentialUnusableLedger`. A pin records evidence without
+rotating. A transport failure or cancellation alone is not an auth verdict;
+served usage can recover an intermediate refusal. The existing differential
+probe still reads local/poller evidence when rotation needs it, without adding a
+probe to every completion or spawning a miniature generation.
+
+`CredentialGeneration`, extracted from the existing pre-progress ledger, is the
+shared managed-lifecycle authority. Dispatch captures subject, effective route,
+requested model, generation and ordering. Both recording and success clearing
+respect that binding: old-generation results cannot affect a newer login, and
+out-of-order results cannot undo a later dispatch's relevant evidence. A bounded
+success watermark keeps an older refusal from reappearing after recovery.
+An actual observed model is required to heal a model-scoped refusal; the request
+is not proof of which model was served. Credential mutation windows still make
+observations ineligible while the vendor may be changing the store. External
+native changes not observed by that lifecycle remain a limitation until a
+covering vendor observation or expiry; this is not a token-change detector.
+
+The pure `composeCredentialProfileEvidence` owner combines local readiness,
+applicable hard refusals and authenticated quota evidence for admission, catalog,
+Accounts and `next_up`. Accounts retains its compact status and detailed reason,
+identity and last-known quota. Only credential-wide failures affect an unqualified
+account row; `next_up` considers the configured model. Only expensive probes are
+cached, so a new refusal, recovery or expiry is composed on the next read without
+re-probing every account. Local verification failure stays local. A fresh,
+covering authenticated observation may supersede an older auth refusal but cannot
+heal unrelated model restrictions or a locally failed probe.
+
+Hard credential evidence, soft pool ordering, quota windows and poll pacing stay
+separate. Run refusals never become poller `auth_revoked` absences and never retire
+last-known numeric quota. A profile-level refusal does not suppress quota discovery:
+the Claude poller retains its existing present-token rejection memo, so external
+replacement remains discoverable. The hard ledger is non-durable, expires within
+its existing bounded TTLs, and clears through managed credential changes.
 
 Preflight headroom refusal applies to PINS only under the unified model
 (rotation never moves a pin); reactive `vendor_limit_rejected`/structural
@@ -3318,10 +3329,10 @@ so a saturated Fable-only window cannot cool an explicit Opus run. Codex rollout
 constraint with usage, duration, reset, provenance, and freshness. The global
 journal is authority; an elapsed reset marks a snapshot stale and requests a
 refresh, never locally invents zero usage. Unknown usage remains `null`.
-One exhaustive schema-owned trait registry classifies every source along three
+One exhaustive schema-owned trait registry classifies every source along four
 independent axes: vendor-authenticated credential evidence, the primary harness
-whose missing observation creates refresh demand, and whether a top-level
-refresher produces it. Refresh demand is computed per enabled credential
+whose missing observation creates refresh demand, whether a top-level
+refresher produces it, and full-inventory versus incremental-window replacement. Refresh demand is computed per enabled credential
 subject. Display and routing evaluate freshness at the actual current time:
 absent an earlier reset boundary, a snapshot is still fresh exactly five
 minutes after observation and becomes stale only after that boundary.
@@ -3357,7 +3368,8 @@ pacing evidence, not an exhausted window), so a daemon restart is not a 429
 amplifier; a credential change resets only the demand backoff, never the
 floor. Failed or suppressed refreshes remain explained alongside stale data:
 refresh-gap absences (`refresh_failed`, `rate_limited`,
-`probe_skipped_rate_limited`, `poll_paced`) are silenced only by a FRESH snapshot.
+`probe_skipped_rate_limited`, `poll_paced`) are silenced only by a FRESH full-source snapshot under the existing coverage
+rule; a new incremental window cannot hide a failed full refresh.
 While a lane's floor is active every universe
 subject of that vendor lacking fresh cover and a stored row is stated as a
 derived `poll_paced` row (a live projection, never journaled), so an
@@ -3384,6 +3396,28 @@ admission poll (immediate on arm, then every 60 s) re-observes it — it may rea
 stale, or past the 24-hour window drop out of the projection, for up to one poll
 interval. The marker's `projection_signature` is the sha256 digest of the
 projection (snapshots plus absences), compared only for equality.
+Native Claude `rate_limit_event` measurements and Codex's existing execution
+app-server `account/rateLimits/updated` notifications use incremental sources
+`claude_rate_limit_event` and `codex_app_server_event`. They produce ordinary
+singleton-window snapshots with independent observation time and freshness.
+`quotaSnapshotIdentity` in schema includes subject, route, source and, for these
+sources, the stable vendor window identity, duration and applicability. Percent,
+reset instant and observation time do not change identity. Registry, budget cache
+and journal fold/replay share that key; control projections derive `snapshot_id`
+for Swift instead of making the UI duplicate source policy. Full-reader sources
+continue replacing their complete inventory. Incremental observations neither
+refresh siblings nor satisfy full-inventory demand; fresh applicable values keep
+the existing ranking/headroom meaning, and missing windows stay unknown.
+
+Incremental snapshots use `quota.window.observed` in the same global journal,
+with window slots grouped by subject for removal and compaction. Older readers
+ignore that record rather than consuming a fabricated primary/cooldown snapshot.
+The existing full-source rollback representation remains unchanged.
+Unknown native applicability is retained as numerical diagnostic evidence rather
+than turned into an account-wide restriction. An overage name does not identify
+an additional model family. Numeric source units are translated by each adapter:
+Claude stream utilization is a ratio; Codex `usedPercent` is a percentage.
+
 Runtime-update rollback remains backward-readable: a scoped snapshot — or one
 whose source postdates v3.2.0's strict enum (`cursor_rate_limit`) — is first
 prepared under a typed record that an older engine ignores, then committed by
@@ -3586,7 +3620,8 @@ the typed `context` field of `HarnessEvent`: result `terminal_reason` (`prompt_t
 the rapid-refill breaker `rapid_refill_breaker` → `capacity_exhausted` with a
 typed cause), the `compact_boundary` system frame → a compaction event, and the
 top-level typed `rate_limit_event` → the existing `rate_limit` signal (a routine
-`allowed` heartbeat surfaces nothing and never arms rotation). Codex exec's
+`allowed` or `allowed_warning` heartbeat may carry independent measured quota
+windows but never arms rotation). Codex exec's
 recorded oversized-input refusal remains separate: the app-server preserves
 RPC data and emits `request_refusal`, which reaches final failure as
 `input_too_large` with Unicode-scalar measurements and no quota reset. It stops
@@ -4404,6 +4439,13 @@ code touching one of these areas must honor it or change it explicitly here.
   allowlisted windows in the external v3 root and composes/restores any
   existing display command. Per-run budget observations remain run evidence,
   not quota authority.
+- Quota operation diagnostics reuse the daemon log (`quota.observation`): source,
+  profile, operation id, time, cause, known currentness and native binary/child
+  facts are non-secret metadata. A physical Claude usage HTTP attempt, a skipped
+  token, and a Codex native RPC are different observations; an RPC does not imply
+  one HTTP request. Native refresh receipts describe observed expiry and child
+  outcome, not an inferred writer or reconstructed historical credential loss.
+  Retry-After and existing foreground/background polling rules are unchanged.
 - The `verify` intent is reserved: the shipped FinalVerifier is
   deterministic-only (fresh-tree apply + gates, no model), so no engine path
   requests verify-intent routing; the value stays for a future model-backed
@@ -4504,9 +4546,8 @@ code touching one of these areas must honor it or change it explicitly here.
   nor retain observations; fresh probes still answer and may admit work.
   Refusal marks and subscription-row unusable callbacks are generation-bound.
   The aggregate doctor/status projections are invalidated at the transitions;
-  they can show an intermediate observation until close. Pre-existing late
-  model-substitution callbacks and default/API-key unusable callbacks do not
-  gain a new cross-generation guarantee. Descendants outliving a valid runner
+  they can show an intermediate observation until close. Model-operation substitution callbacks and default/API-key unusable callbacks
+  also use the dispatch-bound managed generation. Descendants outliving a valid runner
   receipt remain outside the command-completion proof. An unreadable bound
   journal reads open; restart alone proves no closure. The hold is per harness,
   not a blanket admission ban. A genuinely unconfirmed group still needs the

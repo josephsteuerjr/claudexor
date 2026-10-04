@@ -5,6 +5,7 @@ import { PassThrough, Writable } from "node:stream";
 import type { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { defaultNativeCodexHome } from "@claudexor/harness-codex";
+import type { QuotaRefreshDiagnostic } from "./quota-refresh-diagnostics.js";
 import {
   codexQuotaInvocation,
   parseCodexRateLimitsResponse,
@@ -27,6 +28,7 @@ describe("Codex app-server quota source", () => {
       const authPath = join(home, "auth.json");
       writeFileSync(authPath, "{}\n");
       const requests: string[] = [];
+      const diagnostics: QuotaRefreshDiagnostic[] = [];
       const start = (() => {
         const stdout = new PassThrough();
         const stderr = new PassThrough();
@@ -61,7 +63,10 @@ describe("Codex app-server quota source", () => {
         });
       }) as unknown as typeof spawn;
       try {
-        const result = await refreshCodexQuota({ spawn: start });
+        const result = await refreshCodexQuota({
+          spawn: start,
+          diagnostic: (record) => diagnostics.push(record),
+        });
         expect(result.snapshots).toEqual([]);
         expect(result.absences).toHaveLength(1);
         expect(result.absences?.[0]).toMatchObject({ reason: "refresh_failed" });
@@ -71,6 +76,18 @@ describe("Codex app-server quota source", () => {
         if (error.data.code)
           expect(result.absences?.[0]?.detail).toContain('"native_code":"missing_scope"');
         expect(requests).toEqual(["initialize", "initialized", "account/rateLimits/read"]);
+        expect(diagnostics).toMatchObject([
+          { stage: "native_rpc", outcome: "started", reason: "account/rateLimits/read" },
+          {
+            stage: "native_rpc",
+            outcome: "failed",
+            reason: "native_rpc_refused",
+            nativeRpcCode: error.code,
+          },
+        ]);
+        expect(diagnostics[0]?.operationId).toBeTruthy();
+        expect(diagnostics[0]?.operationId).toBe(diagnostics[1]?.operationId);
+        expect(diagnostics.every((record) => record.stage !== "usage_http")).toBe(true);
       } finally {
         rmSync(authPath, { force: true });
       }
