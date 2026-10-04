@@ -11,14 +11,9 @@ const MAX_ROWS = 64;
  * The daemon's bounded, self-expiring memory of typed `credential_unusable`
  * observations (A7): "this credential is DEAD, not quota-spent".
  *
- * Deliberately IN-MEMORY, never journaled: profile readiness is non-durable by
- * contract (the doctor's projection), the quota poller re-derives vendor
- * rejections within a poll cycle after a restart, and a restart usually
- * follows exactly the re-login that heals a dead credential — journaling would
- * buy rollback-compat risk to preserve evidence that expires anyway. The
- * `QuotaAbsence` channel is unsuitable on purpose: the registry hides an
- * absence while ANY live snapshot covers the subject, which is exactly how a
- * dead credential with a lingering cooldown snapshot would vanish.
+ * Only independent attempt/local failures are stored. Poller rejections already
+ * live in the quota registry; duplicating them here would outlive its recovery.
+ * Current decision events may still carry vendor_poller provenance.
  *
  * Clearing contract (all three, per the design roast):
  * 1. self-expiry — every row carries `expires_at`, clamped to 24h max;
@@ -47,6 +42,7 @@ export class CredentialUnusableLedger {
   /** Validate, clamp to the TTL bound, newest-wins per (subject, model). */
   record(value: CredentialUnusableObservation): void {
     const obs = CredentialUnusableObservationSchema.parse(value);
+    if (obs.source === "vendor_poller") return;
     if (this.mutating(obs.harness_id)) return;
     const observed = Date.parse(obs.observed_at);
     const cap = (Number.isFinite(observed) ? observed : this.now().getTime()) + MAX_TTL_MS;

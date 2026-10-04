@@ -2,7 +2,6 @@ import { credentialProfilePolicyState, type HarnessAdapter } from "@claudexor/co
 import {
   liveUnusableFor,
   profileQuotaBlock,
-  probeCredentialProfileStatus,
   profileStatusAdmits,
   resolveCredentialProfile,
   vendorVerifiedProfileStatus,
@@ -17,6 +16,7 @@ import {
   type QuotaSnapshot,
 } from "@claudexor/schema";
 import { redactSecrets } from "@claudexor/util";
+import { accountObservations, displayAccountObservation } from "./account-observations.js";
 
 export interface AccountCatalogContext {
   config: GlobalConfig;
@@ -92,7 +92,7 @@ async function accountAvailability(
       ),
     );
   const status = vendorVerifiedProfileStatus(
-    await probeCredentialProfileStatus(profile, adapter?.probeCredentialProfile?.bind(adapter)),
+    (await displayAccountObservation(profile, adapter)).status,
     context.quota,
   );
   if (!profileStatusAdmits(profile, status)) {
@@ -128,12 +128,13 @@ async function accountAvailability(
   };
 }
 
-/** Each account keeps its own failure and observation; there is no catalog cache or quota refresh. */
+/** Each account retains its own cold display acquisition, including failure. */
 export async function enumerateAccountCatalogs<T>(input: {
   context: AccountCatalogContext;
   adapter: HarnessAdapter | undefined;
   profiles: readonly CredentialProfile[];
   read(profile: CredentialProfile, canReadCatalog: boolean): Promise<T | null>;
+  observationKey: string;
 }): Promise<Array<AccountCatalogAvailability & { catalog: T | null }>> {
   return Promise.all(
     input.profiles.map(async (profile) => {
@@ -143,7 +144,11 @@ export async function enumerateAccountCatalogs<T>(input: {
         profile,
       );
       try {
-        const catalog = await input.read(profile, canReadCatalog);
+        const { value: catalog } = await accountObservations.read(
+          input.observationKey,
+          profile,
+          () => input.read(profile, canReadCatalog),
+        );
         return catalog === null && facts.problem === null
           ? {
               ...facts,

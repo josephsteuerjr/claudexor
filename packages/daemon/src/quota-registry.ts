@@ -14,6 +14,8 @@ import {
 } from "@claudexor/schema";
 import {
   legacyV320Snapshot,
+  quotaSnapshotRecords,
+  withoutSupersededQuotaConstraints,
   reactiveCooldownSnapshot,
   sameQuotaEvidence,
   snapshotKey,
@@ -25,6 +27,7 @@ import {
   derivePollPacedRows,
   foldAbsenceClaims,
   laneDemand,
+  noteRefreshPacing,
   performPollSweep,
   recomputeScopeFor,
   selectCycleEntries,
@@ -234,6 +237,8 @@ export class QuotaRegistry {
       this.refresherLanes,
       scope,
       this.now().getTime(),
+      () => this.refreshCoordinator.isCurrent(credentialGeneration),
+      this.subjects?.(),
     );
     const settled = await Promise.allSettled(running.map(async ({ refresh }) => refresh()));
     const batches: Array<{ snapshots: QuotaSnapshot[]; absences: QuotaAbsence[] } | null> = [];
@@ -288,15 +293,13 @@ export class QuotaRegistry {
     }
     const now = this.now().getTime();
     if (running.length > 0) this.recomputeAbsences(claims, now, recomputeScopeFor(running));
-    // A typed rate_limited absence is PACING evidence (owner decision 7=A):
-    // arm the vendor lane's persisted floor — foreground cycles included, so
-    // an explicit refresh that got throttled also cools later fan-outs — and
-    // never journal it as a quota cooldown.
-    for (const claim of claims) {
-      if (claim.reason !== "rate_limited") continue;
-      const lane = this.refresherLanes.lanes.find((item) => item.vendor === claim.subject.harness);
-      lane?.pacer.noteRateLimited(now, claim.retry_after_ms ?? null);
-    }
+    noteRefreshPacing(
+      this.refresherLanes.lanes,
+      batches.flatMap((batch) => batch?.snapshots ?? []),
+      claims,
+      skipped,
+      now,
+    );
     const refreshedAt = this.now().toISOString();
     const response = ControlQuotaResponse.parse({
       snapshots: this.activeSnapshots(now),
@@ -401,7 +404,15 @@ export class QuotaRegistry {
       now: this.now,
       publishClockTransition: () => this.publishClockTransitionIfNeeded(),
       laneDemand: (vendor, now, dueBefore, since) =>
-        laneDemand(vendor, this.activeSnapshots(now), this.subjects?.(), now, dueBefore, since),
+        laneDemand(
+          vendor,
+          this.activeSnapshots(now),
+          this.subjects?.(),
+          now,
+          dueBefore,
+          since,
+          this.refresherLanes.lanes,
+        ),
       currentGeneration: () => this.refreshCoordinator.currentGeneration(),
       isCurrentGeneration: (generation) => this.refreshCoordinator.isCurrent(generation),
       runLaneCycle: (lane) => this.refreshCycle(false, lane),
@@ -447,43 +458,42 @@ export class QuotaRegistry {
   }
 
   private recordUpsert(value: QuotaSnapshot): void {
-    const snapshot = QuotaSnapshotSchema.parse(value);
-    // Upsert-on-change: a poll that re-observed unchanged evidence moves only
-    // the observation time, which stays live in memory (the projection marker
-    // still publishes it) without a journal frame. After a restart the replayed
-    // snapshot therefore carries the time of its last journaled change until
-    // the first admission poll re-observes it.
+    let snapshot = QuotaSnapshotSchema.parse(value);
     const current = this.snapshots.get(snapshotKey(snapshot));
-    if (current && sameQuotaEvidence(current, snapshot)) {
+    if (current && Date.parse(current.observed_at) > Date.parse(snapshot.observed_at)) return;
+    const now = this.now();
+    // A delayed reactive event cannot resurrect a limit already superseded by
+    // a later primary observation. Equal timestamps remain conservative.
+    const witnesses: QuotaSnapshot[] = [];
+    for (const observation of this.snapshots.values()) {
+      const reduced = withoutSupersededQuotaConstraints(
+        snapshot,
+        observation,
+        new Date(observation.observed_at),
+      );
+      if (reduced !== snapshot) witnesses.push(observation);
+      snapshot = reduced;
+    }
+    const retired = [...this.snapshots.values()].flatMap((existing) => {
+      const next = withoutSupersededQuotaConstraints(existing, snapshot, now);
+      return next === existing ? [] : [next];
+    });
+    if (
+      retired.length === 0 &&
+      witnesses.length === 0 &&
+      current &&
+      sameQuotaEvidence(current, snapshot)
+    ) {
       this.apply(snapshot);
       return;
     }
-    // Runtime updates share this journal with the prior installed engine during
-    // rollback. v3.2.0's strict schemas predate applies_to_models AND the
-    // cursor_rate_limit source. Prepare the exact current snapshot under a new
-    // record type an older runtime safely ignores, then commit it with the
-    // established v3.2.0-shaped upsert; current replay applies a prepare only
-    // when its matching base follows (one recovery intent, one fsync).
-    const legacy = legacyV320Snapshot(snapshot);
-    if (
-      snapshot.constraints.some((constraint) => constraint.applies_to_models !== undefined) ||
-      legacy.source !== snapshot.source
-    ) {
-      this.journal.appendBatch([
-        {
-          type: SCOPED_PREPARED,
-          payload: {
-            version: 1,
-            base_hash: hashJson(legacy),
-            snapshot,
-          },
-        },
-        { type: UPSERTED, payload: legacy },
-      ]);
-    } else {
-      this.journal.append(UPSERTED, legacy);
-    }
-    this.apply(snapshot);
+    // The primary witness and changed restrictions commit together, including
+    // an unchanged primary body whose new observation time was memory-only.
+    const updates = [...witnesses, snapshot, ...retired];
+    const records = updates.flatMap(quotaSnapshotRecords);
+    if (records.length === 1) this.journal.append(records[0]!.type, records[0]!.payload);
+    else this.journal.appendBatch(records);
+    for (const update of updates) this.apply(update);
   }
 
   /** `subjectId: null` retires a harness's legacy default/native subject —

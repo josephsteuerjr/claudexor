@@ -2,7 +2,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DurableJournal } from "@claudexor/journal";
 import {
   CommandStore,
@@ -27,6 +27,10 @@ import {
   type ModelCatalogEntry,
 } from "@claudexor/schema";
 import type { ModelAdapter } from "@claudexor/core";
+import { accountObservations } from "./account-observations.js";
+
+beforeEach(() => accountObservations.invalidate());
+
 import { createModelServices } from "./model-services.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -344,7 +348,7 @@ describe("production model service composition", () => {
     f.catalog.mockClear();
     const pinned = await f.services.routes.modelAccountCatalog("codex", "b");
     expect(pinned.accounts.map((row) => row.credentialProfileId)).toEqual(["b"]);
-    expect(f.catalog).toHaveBeenCalledTimes(1);
+    expect(f.catalog).not.toHaveBeenCalled();
     f.cfg.credential_profiles[1]!.enabled = false;
     await expect(f.services.routes.modelAccountCatalog("codex", "b")).rejects.toMatchObject({
       code: "model_account_unavailable",
@@ -392,6 +396,7 @@ describe("production model service composition", () => {
         : original(profile),
     );
     f.catalog.mockClear();
+    accountObservations.invalidate(); // Explicit credential-state invalidation.
     const missing = await f.services.routes.modelAccountCatalog("codex");
     expect(missing.accounts[1]).toMatchObject({
       credentialProfileId: "b",

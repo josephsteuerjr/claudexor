@@ -25,3 +25,13 @@ route and verification contract.
 
 Fixtures under `fixtures/` pin the recorded 1.1.13 stream shapes; see
 `fixtures/manifest.yaml` for provenance and stream-semantics expectations.
+
+Model enumeration uses the named profile's `agy models` table through the same
+bounded, pipe-EOF runner as doctor and quota, with self-update disabled. Failed
+or malformed reads remain unknown. An unscoped query returns marked historical
+hints without probing a host account. Catalog absence is advisory: an explicit
+unlisted id reaches the vendor unchanged with the engine's unverified-model
+disclosure. Known Gemini and Claude/GPT families retain their declared quota
+scope for new ids; an unrelated model family has unknown applicability.
+`fixtures/models.tsv` records the October 2026 table with the version ambiguity
+disclosed in `fixtures/manifest.yaml`.

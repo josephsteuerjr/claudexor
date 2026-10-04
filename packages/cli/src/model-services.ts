@@ -446,6 +446,7 @@ export function createModelServices(deps: Dependencies) {
         const source = getSource(sourceId);
         const context = { config: config(), quota: deps.quota().read(), unusable: unusable.live() };
         const accounts = await enumerateAccountCatalogs({
+          observationKey: `model-source:${sourceId}`,
           context,
           adapter: registry.get(source.credentialHarness),
           profiles: catalogProfiles(context, source.credentialHarness, credentialProfileId, true),

@@ -739,6 +739,12 @@
                       }
                     ]
                   },
+                  "applies_to_model_prefixes": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/HarnessEvent/properties/credential_profile_id"
+                    }
+                  },
                   "applies_to_unspecified_model": {
                     "type": "boolean"
                   },
@@ -797,7 +803,7 @@
                   "resets_at"
                 ],
                 "additionalProperties": false,
-                "description": "One independent vendor quota window; omitted/null applies_to_models means every model, and null usage stays unknown."
+                "description": "One independent vendor quota window; without model ids or declared prefixes it applies to every model, and null usage stays unknown."
               }
             }
           },

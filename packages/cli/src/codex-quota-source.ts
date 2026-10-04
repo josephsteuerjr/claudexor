@@ -188,10 +188,13 @@ async function readCodexCandidate(
         error ? reject(error) : resolve(),
       );
     });
+    // Bind the evidence to the request, not its eventual delivery: a poll
+    // already in flight must not erase a refusal observed while it awaited I/O.
+    const observedAt = new Date();
     const response = await request(2, "account/rateLimits/read", null);
     const result = response["result"];
     if (!result || typeof result !== "object") throw new Error("Codex quota response is missing");
-    return parseCodexRateLimitsResponse(result, new Date(), subjectId);
+    return parseCodexRateLimitsResponse(result, observedAt, subjectId);
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);
     // A spawn/exit/stdin transport fault (missing binary, crash, timeout) is a
@@ -217,25 +220,27 @@ export function parseCodexRateLimitsResponse(
   observedAt: Date,
   subjectId: string | null = null,
 ): QuotaSnapshot[] {
-  if (!value || typeof value !== "object") return [];
-  const response = value as Record<string, unknown>;
+  const response = objectOrNull(value);
+  if (!response) throw new Error("Codex quota response is not an object");
   const historical = objectOrNull(response["rateLimits"]);
-  const byId = objectOrNull(response["rateLimitsByLimitId"]);
-  const buckets = byId
-    ? Object.entries(byId).flatMap(([id, item]) => {
-        const bucket = objectOrNull(item);
-        return bucket ? [[id, bucket] as const] : [];
-      })
-    : historical
-      ? [[String(historical["limitId"] ?? "default"), historical] as const]
-      : [];
+  const buckets = rateLimitBuckets(response);
   const constraints: QuotaConstraint[] = [];
   for (const [fallbackId, bucket] of buckets) {
     const bucketId = textOrNull(bucket["limitId"]) ?? fallbackId;
     const bucketLabel = textOrNull(bucket["limitName"]) ?? bucketId;
     for (const [windowName, candidate] of Object.entries(bucket)) {
       const window = objectOrNull(candidate);
+      if ((windowName === "primary" || windowName === "secondary") && candidate !== null) {
+        if (!window || !isRateLimitWindow(window)) {
+          throw new Error("Codex quota response contains an unrecognized window");
+        }
+      }
       if (!window || !isRateLimitWindow(window)) continue;
+      for (const key of ["usedPercent", "windowDurationMins", "resetsAt"]) {
+        if (key in window && window[key] !== null && finiteNumber(window[key]) === null) {
+          throw new Error("Codex quota response contains a malformed window");
+        }
+      }
       const usedPercent = finiteNumber(window["usedPercent"]);
       const durationMins = finiteNumber(window["windowDurationMins"]);
       const resetSeconds = finiteNumber(window["resetsAt"]);
@@ -265,7 +270,6 @@ export function parseCodexRateLimitsResponse(
       cooldown_until: null,
     });
   }
-  if (buckets.length === 0) return [];
   return [
     {
       subject: {
@@ -280,6 +284,49 @@ export function parseCodexRateLimitsResponse(
       freshness: "fresh",
     },
   ];
+}
+
+/** Explicit null windows or an empty named-bucket map are recognized absence,
+ * not zero usage. An arbitrary object or malformed bucket is a failed read:
+ * it must never gain the authority of a successful empty observation. */
+function rateLimitBuckets(
+  response: Record<string, unknown>,
+): Array<[string, Record<string, unknown>]> {
+  const byId = response["rateLimitsByLimitId"];
+  if (byId !== undefined && byId !== null) {
+    const buckets = objectOrNull(byId);
+    if (!buckets) throw new Error("Codex quota response contains a malformed bucket map");
+    if (Object.keys(buckets).length > 0) {
+      return Object.entries(buckets).map(([id, value]) => [id, recognizedRateLimitBucket(value)]);
+    }
+    if (response["rateLimits"] === undefined || response["rateLimits"] === null) return [];
+  }
+  if (response["rateLimits"] === null) return [];
+  if (response["rateLimits"] !== undefined) {
+    const bucket = recognizedRateLimitBucket(response["rateLimits"]);
+    return [[textOrNull(bucket["limitId"]) ?? "default", bucket]];
+  }
+  throw new Error("Codex quota response contains no recognized rate limits");
+}
+
+function recognizedRateLimitBucket(value: unknown): Record<string, unknown> {
+  const bucket = objectOrNull(value);
+  if (
+    !bucket ||
+    !(
+      "primary" in bucket ||
+      "secondary" in bucket ||
+      textOrNull(bucket["limitId"]) ||
+      textOrNull(bucket["planType"]) ||
+      Object.values(bucket).some((item) => {
+        const window = objectOrNull(item);
+        return window !== null && isRateLimitWindow(window);
+      })
+    )
+  ) {
+    throw new Error("Codex quota response contains an unrecognized bucket");
+  }
+  return bucket;
 }
 
 export function codexQuotaInvocation(

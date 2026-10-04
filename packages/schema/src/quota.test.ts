@@ -294,3 +294,31 @@ describe("quotaSnapshotAvailability", () => {
     expect(JSON.stringify(response)).toBe(raw);
   });
 });
+
+it("declared model prefixes share blocking semantics without inventing unknown families", () => {
+  const snapshot = {
+    constraints: [
+      constraint({
+        id: "third-party",
+        applies_to_model_prefixes: ["claude-", "gpt-"],
+        used_ratio: 1,
+        resets_at: FUTURE,
+      }),
+    ],
+  };
+  expect(quotaSnapshotAvailability(snapshot, { now: NOW, model: "claude-new-high" }).state).toBe(
+    "exhausted",
+  );
+  expect(quotaSnapshotAvailability(snapshot, { now: NOW, model: "gemini-new-high" }).state).toBe(
+    "available",
+  );
+  expect(quotaSnapshotAvailability(snapshot, { now: NOW }).state).toBe("available");
+  expect(quotaSnapshotAvailability(snapshot, { now: NOW }).model_scoped_exhaustions).toEqual([
+    {
+      constraint_id: "third-party",
+      applies_to_models: [],
+      applies_to_model_prefixes: ["claude-", "gpt-"],
+      resets_at: FUTURE,
+    },
+  ]);
+});

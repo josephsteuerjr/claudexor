@@ -25,6 +25,8 @@ import {
   type AccountCatalogContext,
 } from "./account-catalog.js";
 
+import { retainAccountProbeObservations } from "./account-observations.js";
+
 export interface RegistryOptions {
   /** Register the fake-harness suite (so `--harness fake-*` works). Default true. */
   includeFakes?: boolean;
@@ -55,7 +57,7 @@ export function buildRegistry(opts: RegistryOptions = {}): AdapterRegistry {
       defaultModel: process.env.CLAUDEXOR_OPENROUTER_MODEL ?? "openai/gpt-5.5",
     }),
   ]) {
-    registry.set(adapter.id, adapter);
+    registry.set(adapter.id, retainAccountProbeObservations(adapter));
   }
   if (opts.includeFakes !== false) {
     for (const kind of FAKE_KINDS) registry.set(kind, createFakeHarness(kind));
@@ -228,6 +230,7 @@ export async function harnessAccountModels(
   // Discovery is host-level capability data, shared by this request's rows.
   let manifestPromise: ReturnType<HarnessAdapter["discover"]> | undefined;
   const accounts = await enumerateAccountCatalogs({
+    observationKey: `agent-models:${input.cwd}:${input.route ?? "all"}`,
     context: input,
     adapter,
     profiles: routeProfiles,

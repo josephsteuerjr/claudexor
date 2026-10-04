@@ -291,9 +291,9 @@ read Claude credential or session files. See the official
 Accounts read for interactive clients. It returns profiles/readiness,
 per-harness `next_up`, Workspace Git, quota, and an opaque quota-event cursor
 from one server-authored epoch. The quota leg (like `POST /v2/quota`) honors
-each vendor's poll rate-limit cooldown: a vendor that recently answered 429
+each affected account's poll rate-limit cooldown: an account that recently answered 429
 is served from last-known registry data, disclosed additively as
-`quota.refresh_skipped` rows carrying the vendor and its release instant. Resume the dedicated quota observer from that
+`quota.refresh_skipped` rows carrying the vendor, optional exact subject and its release instant; omitted subject identifies an existing broad floor. Resume the dedicated quota observer from that
 cursor. A quota marker or a rejected/lost cursor invalidates the quota and
 `next_up` projection; clients keep identity/Enabled/readiness, stop observing,
 and wait for an explicit Accounts Refresh rather than automatically fetching a

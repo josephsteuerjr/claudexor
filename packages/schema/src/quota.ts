@@ -150,6 +150,10 @@ export const QuotaConstraint = z
      * list is the producer's canonical model-id/alias scope, so a
      * model-specific cap never cools a different model on the same subject. */
     applies_to_models: z.array(Id).nullable().optional(),
+    /** Vendor-declared model families, matched as literal id prefixes. These
+     * augment exact ids without guessing that every unknown model belongs to
+     * a known group. An absent/empty list adds no family scope. */
+    applies_to_model_prefixes: z.array(Id).optional(),
     /**
      * Whether this MODEL-SCOPED window also governs a run that names no model.
      * Default (absent) is the conservative answer: a scoped window cannot
@@ -167,7 +171,7 @@ export const QuotaConstraint = z
   })
   .strict()
   .describe(
-    "One independent vendor quota window; omitted/null applies_to_models means every model, and null usage stays unknown.",
+    "One independent vendor quota window; without model ids or declared prefixes it applies to every model, and null usage stays unknown.",
   );
 export type QuotaConstraint = z.infer<typeof QuotaConstraint>;
 
@@ -263,12 +267,13 @@ export type QuotaAvailabilityState = z.infer<typeof QuotaAvailabilityState>;
 export const QuotaModelScopedExhaustion = z
   .object({
     constraint_id: Id,
-    applies_to_models: z.array(Id).min(1),
+    applies_to_models: z.array(Id),
+    applies_to_model_prefixes: z.array(Id).optional(),
     resets_at: z.string().datetime({ offset: true }).nullable(),
   })
   .strict()
   .describe(
-    "A spent or cooling window that applies only to the named models. Without a requested model only a window that DECLARES it governs the unspecified-model route can exhaust the subject; when the request names a model it covers, it blocks that request too (and is then also listed in blocking_constraints). resets_at is its earliest known release instant (null = unknown).",
+    "A spent or cooling window that applies only to the named models or declared model-id prefixes. Without a requested model only a window that DECLARES it governs the unspecified-model route can exhaust the subject; when the request names a model it covers, it blocks that request too (and is then also listed in blocking_constraints). resets_at is its earliest known release instant (null = unknown).",
   );
 export type QuotaModelScopedExhaustion = z.infer<typeof QuotaModelScopedExhaustion>;
 
@@ -323,6 +328,9 @@ export type ControlQuotaRefreshRequest = z.infer<typeof ControlQuotaRefreshReque
 export const QuotaRefreshSkipped = z
   .object({
     vendor: Id,
+    subject: QuotaSubject.optional().describe(
+      "The exact paused subject; omitted only for an existing vendor-wide floor.",
+    ),
     not_before: z.string().datetime({ offset: true }),
   })
   .strict()
@@ -356,6 +364,16 @@ function futureMs(iso: string | null, now: number): number | null {
   if (!iso) return null;
   const at = Date.parse(iso);
   return Number.isFinite(at) && at > now ? at : null;
+}
+
+/** Literal family matching belongs to the quota contract, shared by display
+ * and admission. Prefixes must be declared by the vendor-specific producer;
+ * neither a missing model nor an unknown family proves a match. */
+export function quotaModelPrefixMatches(
+  prefixes: readonly string[] | undefined,
+  model: string,
+): boolean {
+  return prefixes?.some((prefix) => prefix.length > 0 && model.startsWith(prefix)) === true;
 }
 
 /** API-parameter model matching, deliberately looser than the router's exact
@@ -429,11 +447,13 @@ export function quotaSnapshotAvailability(
             ? { iso: constraint.resets_at as string, at: resetAt as number }
             : { iso: constraint.cooldown_until as string, at: cooldownAt as number };
     const scope = constraint.applies_to_models ?? null;
-    const scoped = scope !== null && scope.length > 0;
+    const prefixes = constraint.applies_to_model_prefixes;
+    const scoped = (scope !== null && scope.length > 0) || (prefixes?.length ?? 0) > 0;
     if (scoped) {
       scopedExhaustions.push({
         constraint_id: constraint.id,
-        applies_to_models: [...scope],
+        applies_to_models: [...(scope ?? [])],
+        ...(prefixes?.length ? { applies_to_model_prefixes: [...prefixes] } : {}),
         resets_at: release?.iso ?? null,
       });
     }
@@ -446,7 +466,10 @@ export function quotaSnapshotAvailability(
       scoped &&
       (model === null
         ? constraint.applies_to_unspecified_model !== true
-        : !modelScopeMatches(scope, model))
+        : !(
+            quotaModelPrefixMatches(prefixes, model) ||
+            (scope !== null && scope.length > 0 && modelScopeMatches(scope, model))
+          ))
     )
       continue;
     blocking.push(constraint.id);

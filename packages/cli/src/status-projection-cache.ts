@@ -20,6 +20,10 @@ import { globalConfigPath } from "@claudexor/config";
 
 const registry = new Set<{ invalidate(): void }>();
 
+export function registerStatusProjection(cache: { invalidate(): void }): void {
+  registry.add(cache);
+}
+
 /** Cheap identity stamp of the global config file: any write — service-layer,
  * CLI, or hand edit — changes it, so config-derived projection facts are never
  * served stale. One stat() per poll read. */
@@ -60,7 +64,7 @@ export class StatusProjectionCache<T> {
     this.ttlMs = opts.ttlMs ?? STATUS_PROJECTION_TTL_MS;
     this.now = opts.now ?? Date.now;
     this.versionOf = opts.versionOf ?? (() => "");
-    registry.add(this);
+    registerStatusProjection(this);
   }
 
   /** Serve the cached value inside the TTL (same version); otherwise compute

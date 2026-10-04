@@ -194,7 +194,7 @@ extension AppModel {
             accountsQuotaDisplayStates[locationID] = .current(
                 observedAt: Self.quotaObservedAt(response))
         } else {
-            let vendors = refreshSkipped.map(\.vendor).joined(separator: ", ")
+            let vendors = refreshSkipped.map { row in row.subject?.subjectId.map { "\(row.vendor)/\($0)" } ?? row.vendor }.joined(separator: ", ")
             accountsQuotaDisplayStates[locationID] = .stale(
                 reason:
                     "Rate-limit cooldown: \(vendors) served from last-known data (not re-fetched).",

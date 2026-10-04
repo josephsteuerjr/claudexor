@@ -414,7 +414,9 @@ describe("updateCredentialProfile (INV-135 Enabled toggle) + accounts projection
     // routing = quota-aware pool; there is no separate native default).
     gatewayMock.profileReadiness = { availability: "available", verification: "passed" };
     updateGlobalConfig((config) => ({ ...config })); // bump the projection cache version
-    const ready = ControlCredentialProfilesResponse.parse(await svc.credentialProfiles());
+    const ready = ControlCredentialProfilesSnapshotResponse.parse(
+      await svc.credentialProfiles({ snapshot: true }),
+    );
     expect(ready.accountPools.find((pool) => pool.harness_id === "claude")?.next_up).toEqual({
       kind: "profile",
       profileId: "work",

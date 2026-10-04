@@ -630,7 +630,8 @@ invariant or operator decision before proceeding.
   `advisory` (claude: the picker is an alias menu of one binary version plus the
   account's bootstrap rows; codex: a `model/list` reply carries no provenance
   and the CLI serves a bundled default list when its remote fetch times out;
-  cursor: `--list-models` is a fail-soft menu blind to routing variants) means
+  cursor: `--list-models` is a fail-soft menu blind to routing variants;
+  agy: the account menu can omit newer models) means
   presence still admits while absence decides nothing: the EXPLICIT model is
   forwarded byte-identical, the vendor accepts or refuses it, and the consumer
   that admitted it says so once — the settings read-back carries `notes`, the
@@ -640,7 +641,7 @@ invariant or operator decision before proceeding.
   manifest`); known-model hints carry a `verifiedAgainst` freshness note
   checked by the model-hints-freshness gate; automatic reviewer selection still
   skips an unlisted family at zero cost; HTTP model operations stay strict
-  against the account catalog read at a named client version; raw-api, agy and
+  against the account catalog read at a named client version; raw-api and
   opencode stay authoritative by declaration, not by proof of completeness.
   Residuals, disclosed: the explicit reviewer panel forwards without the
   run-event disclosure (its spawn does not pass the per-spawn gate); on the CLI
@@ -655,7 +656,10 @@ invariant or operator decision before proceeding.
   `packages/orchestrator/src/reviewerPanel.test.ts`;
   `packages/harness-codex/src/astra.test.ts`. Operator decisions 2026-09-21
   (strict wherever a truth source can prove absence) and 2026-09-24 (absence is
-  the harness's declaration; claude, codex and cursor declare advisory).
+  the harness's declaration; claude, codex and cursor declare advisory), extended
+  to account-scoped Antigravity discovery by owner decision 2026-10-04. Known
+  model-family quota scopes still apply to newly named models; an unknown
+  family stays disclosed as unknown and never borrows another family's limit.
 - **INV-105** Per-harness knobs a manifest does not support are disclosed as
   `ignored_settings` on `harness.started` — never silently dropped. This
   covers max_turns, tool lists, and effort (an empty declared ladder); an
@@ -931,7 +935,12 @@ invariant or operator decision before proceeding.
   quota after known-positive headroom but before exhausted (stale quota
   never authorizes routing — D3; an OBSERVED live block — a reactive
   vendor-limit cooldown or spent window, stale-but-live included — ranks a
-  row exhausted with its release instant), a row that recently answered this
+  row exhausted with its release instant until superseded). A newer recognized
+  authenticated primary observation can retire an older unclassified refusal
+  for that subject and route, including an early purchased or vendor-granted
+  reset; unknown usage is never zero. Independently scoped restrictions remain
+  unless corresponding evidence replaces them. The same durable projection
+  governs every consumer and survives restart. A row that recently answered this
   model's request with a different model (a live, self-expiring
   model-substitution observation), or whose session an unpinned run started
   on it recently ended before any progress for this same requested model (a

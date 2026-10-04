@@ -30,7 +30,11 @@ import { accountPoolRows } from "./account-pool.js";
 import { PoolRouteFlags, resolveAccountForRun } from "./account-resolution.js";
 import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
 import { profileBillingVerification } from "./auth-route-classification.js";
-import { currentSubjectProber, readyProfilesForRotation } from "./credential-differential.js";
+import {
+  currentSubjectProber,
+  readyProfilesForRotation,
+  pollerCredentialRejections,
+} from "./credential-differential.js";
 import {
   resolveCredentialProfile,
   probeCredentialProfileStatus,
@@ -265,12 +269,13 @@ export class OrchestratorCredentials {
     transients: readonly TransientFailureObservation[],
     refusal: PreProgressRefusalSubject | null,
   ) {
+    const quota = this.vendorQuotaObservations();
     return {
       probeCurrentSubject: currentSubjectProber({
         harnessId: adapter.id,
         profile: spec.credential_profile ?? null,
         model: spec.model_hint ?? null,
-        quota: this.vendorQuotaObservations(),
+        quota,
         transients,
         probe: adapter.probeCredentialProfile?.bind(adapter),
         // #363: a verdict about a credential the try no longer holds — a
@@ -279,7 +284,7 @@ export class OrchestratorCredentials {
           if (refusal?.current() ?? true) this.host.recordCredentialUnusable(obs);
         },
       }),
-      liveUnusable: this.host.credentialUnusable(),
+      liveUnusable: [...this.host.credentialUnusable(), ...pollerCredentialRejections(quota)],
       notePreProgressRefusal: () => refusal?.note(),
     };
   }

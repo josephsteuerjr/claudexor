@@ -15,10 +15,7 @@ import type {
   CredentialProfileStatus,
   QuotaSnapshot,
 } from "@claudexor/schema";
-import {
-  AccountIdentity as AccountIdentitySchema,
-  estimateEffectiveAuthRoute,
-} from "@claudexor/schema";
+import { estimateEffectiveAuthRoute } from "@claudexor/schema";
 import { loadConfig } from "@claudexor/config";
 import {
   effectiveAuthPreference,
@@ -28,23 +25,9 @@ import {
 } from "@claudexor/orchestrator";
 import type { HarnessStatus } from "@claudexor/gateway";
 import { credentialProfilePolicyState } from "@claudexor/core";
-import { codexAccountIdentity } from "@claudexor/harness-codex";
-import { claudeAccountIdentity } from "@claudexor/harness-claude";
+import { displayAccountObservation, profileAccountIdentity } from "./account-observations.js";
 import { buildGateway, buildRegistry } from "./registry.js";
 import { preProgressRefusalLedger } from "./run-orchestrator.js";
-
-/**
- * Non-secret {email, plan} of a config_dir_login PROFILE, read daemon-side from
- * the profile's OWN isolation-locator store (INV-067) — never the ordinary
- * vendor home. Secret-ref profiles (no isolation_locator) and non-config_dir
- * families project no identity.
- */
-export function profileAccountIdentity(profile: CredentialProfile): AccountIdentity | null {
-  if (!profile.isolation_locator) return null;
-  if (profile.harness_id === "codex") return codexAccountIdentity(profile.isolation_locator);
-  if (profile.harness_id === "claude") return claudeAccountIdentity(profile.isolation_locator);
-  return null;
-}
 
 /**
  * Doctor readiness projection for one credential profile (INV-135) — the ONE
@@ -94,6 +77,7 @@ export async function profileAccountProjection(
   profile: CredentialProfile,
   registry: readonly CredentialProfile[] = [profile],
   platform: NodeJS.Platform = process.platform,
+  fresh = false,
 ): Promise<{
   profile: CredentialProfile;
   status: CredentialProfileStatus;
@@ -118,29 +102,7 @@ export async function profileAccountProjection(
       identity: profileAccountIdentity(profile),
     };
   }
-  if (!adapter?.probeCredentialAccount) {
-    return {
-      profile,
-      status: await probeCredentialProfileStatus(
-        profile,
-        adapter?.probeCredentialProfile?.bind(adapter),
-      ),
-      identity: profileAccountIdentity(profile),
-    };
-  }
-  let identity: AccountIdentity | null = null;
-  const status = await probeCredentialProfileStatus(profile, async (candidate) => {
-    const receipt = await adapter.probeCredentialAccount!(candidate);
-    if (
-      receipt.status.profile_id !== candidate.profile_id ||
-      receipt.status.harness_id !== candidate.harness_id
-    ) {
-      throw new Error("profile account probe returned a receipt for a different profile");
-    }
-    identity = receipt.identity === null ? null : AccountIdentitySchema.parse(receipt.identity);
-    return receipt.status;
-  });
-  return { profile, status, identity };
+  return { profile, ...(await displayAccountObservation(profile, adapter, fresh)) };
 }
 
 /**

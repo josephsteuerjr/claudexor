@@ -619,7 +619,8 @@ they can refuse no more than the producer can. `advisory` (claude: the picker
 is an alias menu of one binary version plus the account's bootstrap rows;
 codex: `model/list` carries no provenance and the CLI substitutes a bundled
 default list when its remote fetch times out; cursor: `--list-models` is a
-fail-soft menu blind to routing variants; copilot: `session/new` config
+fail-soft menu blind to routing variants; agy: an account menu with
+no completeness guarantee; copilot: `session/new` config
 options are an optional per-session menu over unverified hint rows) makes
 an unlisted EXPLICIT model undecidable, so every gate forwards it
 byte-identical and the vendor decides.
@@ -1074,15 +1075,19 @@ toggle is `PATCH /v2/credential-profiles/:harness/:id` (CLI `profiles
 enable|disable`); for a migrated row the PATCH also updates the deprecated
 `native_credentials_enabled` mirror for the downgrade window.
 
-Accounts has three location-scoped owners. Opening, connecting, and ordinary
-registry mutations use the cacheable plain `GET /v2/credential-profiles` to
-hydrate the rows plus stable identity and status fields; it may
-probe on a cold server cache, but it never claims fenced quota or `next_up`
-authority. A display-only `GET /v2/quota` owns the quota values shown to the
-person. Explicit Refresh/Retry and exact post-login verification alone request
-the atomic `GET /v2/credential-profiles` form with `snapshot=true`: one server-authored
-epoch contains profiles, profile and harness readiness, Workspace Git
-capability, decorated quota, `next_up`, and an opaque quota-event cursor.
+Accounts separates display acquisition, live quota composition and explicit refresh.
+Ordinary profile and account-catalog reads share one process-local observation owner
+(`cli/account-observations.ts`): one coalesced cold attempt per binding, including a
+failed attempt. TTL expiry and repeated views never repeat it. The profile's current
+registry fields and quota evidence are composed at each read; old verification is
+shown as unknown with its check time, never renewed by viewing it. Credential-state
+invalidation and an explicit atomic Refresh request new evidence. Catalog payloads
+retain original timestamps, including null when the adapter supplies none. This
+cache is display-only: real run and model admission retain their fresh route checks.
+The ordinary response does not claim fenced `next_up` authority. Display-only
+`GET /v2/quota` owns shown quota values. Explicit Refresh/Retry and exact post-login
+verification use `GET /v2/credential-profiles` with `snapshot=true`: one epoch contains
+profiles, readiness, Git capability, quota, `next_up` and its quota-event cursor.
 
 The atomic response starts a dedicated observer at exactly that cursor. Its
 quota marker or a rejected/lost cursor expires `next_up` authority, but keeps
@@ -1173,12 +1178,11 @@ the attempt's own typed non-retryable auth/entitlement refusals, and the
 adapter's local doctor probe. It never spawns a harness or spends quota (a
 config-dir login has no cheaper liveness test than spending quota on a
 mini-run). A dead-credential verdict becomes a typed
-`route.profile.credential_unusable` run event and a bounded, self-expiring
-`CredentialUnusableObservation` in the daemon's in-memory
-`CredentialUnusableLedger` (deliberately NOT the `QuotaAbsence` channel — the
-registry hides an absence while any live snapshot covers the subject — and
-deliberately not journaled: readiness is non-durable by contract and the
-poller re-derives vendor rejections within a cycle after restart). The
+`route.profile.credential_unusable` run event and a typed current-decision `CredentialUnusableObservation`. Only independent stream
+and local-probe failures enter the in-memory `CredentialUnusableLedger`. Poller
+rejections remain in the quota owner and are derived for diagnostics, including
+rotation's sibling rows; storing a second copy would block recovery after the
+canonical poller had accepted the credential. Readiness is not journaled. The
 clearing contract is threefold: bounded self-expiry (24h hard cap;
 entitlement/probe verdicts expire within the hour), a served model response
 for the same subject (wired where usage events already feed the quota
@@ -3310,8 +3314,11 @@ proven-zero route. It NEVER recommends authentication/setup for a budget cause,
 and it warns that an unchanged Exact Retry replays the immutable cap. Surfaces
 choose remediation from the typed `code`, never by parsing the message.
 
-Quota is typed and vendor-owned, never scraped from prose. Each constraint may
-carry canonical `applies_to_models`; omitted/null means a vendor-wide window.
+Quota is typed and vendor-owned, never inferred from model prose. Constraints carry
+exact `applies_to_models` and optional producer-declared `applies_to_model_prefixes`.
+Without either scope they are vendor-wide. AGY's named Gemini and Claude/GPT groups
+declare their known prefixes once, so new IDs in those families retain their limits;
+unknown families receive no invented group. Display and budget consume that contract.
 Routing, pacing, and profile headroom consume that same applicability predicate,
 so a saturated Fable-only window cannot cool an explicit Opus run. Codex rollout
 `token_count.rate_limits` preserves every reported window as an independent
@@ -3344,22 +3351,23 @@ ingested harness event — so a revoked, never-logged-in, or failing sibling
 cannot hold the healthy subjects of its own vendor past their five-minute
 freshness — they renew on the last tick before expiry exactly like a lane with
 no absent subject, and a vendor window reset that falls within the next tick of
-the cycle that observed it is picked up on that tick. Only the vendor rate-limit
-floor is never bypassed. An absence-only lane keeps
+the cycle that observed it is picked up on that tick. A subject's poll rate-limit floor is never bypassed. An absence-only lane keeps
 the pure ladder, and a lane whose last satisfied subject disappears continues
 at the rung it has earned. Every refresher of a cycle is told whether the cycle
 is an explicit foreground refresh or a paced background poll, so a source may
 re-present on request a credential it otherwise leaves alone. A typed `rate_limited` poll absence
-additionally arms that lane's vendor rate-limit floor — the max of the
-exponential ladder and the vendor's Retry-After when one was sent — kept in
-daemon-private pacer state, never the quota journal (a throttled poll is
-pacing evidence, not an exhausted window), so a daemon restart is not a 429
-amplifier; a credential change resets only the demand backoff, never the
-floor. Failed or suppressed refreshes remain explained alongside stale data:
+arms a subject-and-route floor in the same pacer/store. A bare 429 has unknown vendor
+bucket scope: policy holds the observed subject and known token-identical aliases,
+while unrelated accounts continue serially at their normal cadence. Token hashes
+are transient alias evidence, never persisted. Missing Retry-After uses that
+subject's existing exponential ladder. Foreground refresh respects these floors;
+`refresh_skipped.subject` names individual omissions. Old vendor-wide persisted
+floors remain in force until their recorded deadlines. A credential change clears
+soft demand backoff, not an existing rate-limit floor. Poll pacing is not inference
+quota and is never journaled as an exhausted window. Failed or suppressed refreshes remain explained alongside stale data:
 refresh-gap absences (`refresh_failed`, `rate_limited`,
 `probe_skipped_rate_limited`, `poll_paced`) are silenced only by a FRESH snapshot.
-While a lane's floor is active every universe
-subject of that vendor lacking fresh cover and a stored row is stated as a
+A paused subject lacking fresh cover and a stored absence is stated as a
 derived `poll_paced` row (a live projection, never journaled), so an
 exhaustion reader that skips stale snapshots stays fail-open instead of
 promoting a stale spent window into "window exhausted". A registry-owned
@@ -3383,7 +3391,16 @@ carries the observation time of its last journaled change until the first
 admission poll (immediate on arm, then every 60 s) re-observes it — it may read
 stale, or past the 24-hour window drop out of the projection, for up to one poll
 interval. The marker's `projection_signature` is the sha256 digest of the
-projection (snapshots plus absences), compared only for equality.
+projection (snapshots plus absences), compared only for equality. A later recognized
+primary observation reconciles old reactive constraints at the registry write owner.
+The observation witness and changed reactive snapshots commit in one journal batch,
+even for timestamp-only re-observation. Reversed arrival uses the same witness;
+a delayed old refusal cannot revive a retired block. Request-start timestamps keep
+an older in-flight poll from erasing a newer refusal. A generic unclassified block
+can yield to a successful response without measured windows (usage stays unknown),
+while independently identified/scoped windows need matching measured replacement.
+This permits purchased or vendor-granted early resets without waiting for an obsolete
+timer. Malformed Codex responses never become successful empty observations.
 Runtime-update rollback remains backward-readable: a scoped snapshot — or one
 whose source postdates v3.2.0's strict enum (`cursor_rate_limit`) — is first
 prepared under a typed record that an older engine ignores, then committed by
@@ -3393,11 +3410,10 @@ appends that pair under one recovery intent and one fsync, so replay retains
 both records or neither. Current engines apply the exact scope and true source
 only when the
 matching base follows; v3.2.0 replays that base conservatively as account-wide.
-A background poll cycle runs one vendor lane's refreshers; an explicit
-foreground refresh (`POST /v2/quota`, the atomic Accounts snapshot) runs
-every lane NOT inside its vendor rate-limit cooldown — a cooled vendor is
-served from last-known registry data and the skip is disclosed additively as
-`refresh_skipped` rows on the response. Join semantics are asymmetric: a
+A background cycle uses the same vendor refresher sweep; an explicit foreground
+refresh runs all eligible subjects. Paused subjects return last-known data with
+`refresh_skipped` subject identity and deadline; only a legacy broad floor skips
+the whole vendor lane. Join semantics are asymmetric: a
 poll joining an in-flight foreground FULL cycle keeps that cycle's result (a
 superset of what it wanted), while a foreground caller that joined a
 lane-scoped poll cycle re-runs a bounded full cycle once the scoped one

@@ -7,6 +7,7 @@
 import {
   REACTIVE_COOLDOWN_SOURCE,
   legacyV320QuotaSource,
+  quotaSourceTraits,
   vendorResetDayCooldownEnd,
   type CredentialRoute,
   type HarnessEvent,
@@ -78,6 +79,93 @@ export const QUOTA_FRESHNESS_TTL_MS = 5 * 60_000;
  * `observed_at` in memory without a journal frame. */
 export function sameQuotaEvidence(a: QuotaSnapshot, b: QuotaSnapshot): boolean {
   return hashJson({ ...a, observed_at: null }) === hashJson({ ...b, observed_at: null });
+}
+
+/** Retire only restrictions superseded by a later authenticated primary read.
+ * The registry must journal a changed result even when the primary read only
+ * changed its timestamp. Keep the old observation's time and unrelated facts. */
+export function withoutSupersededQuotaConstraints(
+  existing: QuotaSnapshot,
+  observation: QuotaSnapshot,
+  now: Date,
+): QuotaSnapshot {
+  const traits = quotaSourceTraits(observation.source);
+  if (
+    !traits.vendorAuthenticated ||
+    traits.refreshDemandHarness !== observation.subject.harness ||
+    staleAt(observation, now.getTime()).freshness !== "fresh" ||
+    REACTIVE_COOLDOWN_SOURCE[existing.subject.harness] !== existing.source ||
+    existing.subject.harness !== observation.subject.harness ||
+    existing.subject.credential_route !== observation.subject.credential_route ||
+    existing.subject.subject_id !== observation.subject.subject_id ||
+    !(Date.parse(observation.observed_at) > Date.parse(existing.observed_at))
+  ) {
+    return existing;
+  }
+  const constraints = existing.constraints.filter((constraint) => {
+    // A generic refusal retained no window identity. A successful recognized
+    // read permits the next requested attempt, including unknown/empty quota;
+    // it does not promise that the provider will accept that attempt.
+    if (
+      constraint.id === "cooldown" &&
+      !constraint.applies_to_models?.length &&
+      !constraint.applies_to_model_prefixes?.length
+    ) {
+      return false;
+    }
+    // Independently identified windows require a measured replacement of the
+    // same window and scope. Absence/unknown usage cannot disprove one.
+    return !observation.constraints.some(
+      (current) =>
+        current.used_ratio !== null &&
+        sameQuotaWindow(existing.source, constraint.id, current.id) &&
+        sameModelScope(constraint, current),
+    );
+  });
+  return constraints.length === existing.constraints.length
+    ? existing
+    : { ...existing, constraints };
+}
+
+function sameQuotaWindow(source: QuotaSource, oldId: string, newId: string): boolean {
+  const id = oldId.startsWith("cooldown:") ? oldId.slice("cooldown:".length) : oldId;
+  if (id === newId) return true;
+  // Codex rollout omits the native default bucket id that app-server includes.
+  // A different bucket (for example review) is an independent constraint.
+  return source === "codex_rollout" && (newId === `codex:${id}` || newId === `default:${id}`);
+}
+
+function sameModelScope(a: QuotaConstraint, b: QuotaConstraint): boolean {
+  return hashJson(quotaModelScope(a)) === hashJson(quotaModelScope(b));
+}
+
+function quotaModelScope(constraint: QuotaConstraint) {
+  const { id, label, used_ratio, window_seconds, resets_at, cooldown_until, ...scope } = constraint;
+  return {
+    ...scope,
+    applies_to_models: [...(scope.applies_to_models ?? [])].sort(),
+    applies_to_unspecified_model: scope.applies_to_unspecified_model ?? false,
+  };
+}
+
+/** Existing prepare/upsert wire shape, reusable for an atomic reconciliation. */
+export function quotaSnapshotRecords(snapshot: QuotaSnapshot) {
+  const legacy = legacyV320Snapshot(snapshot);
+  const upsert = { type: "quota.snapshot.upserted", payload: legacy };
+  if (
+    legacy.source === snapshot.source &&
+    !snapshot.constraints.some(
+      (c) => c.applies_to_models !== undefined || c.applies_to_model_prefixes !== undefined,
+    )
+  )
+    return [upsert];
+  return [
+    {
+      type: "quota.snapshot.scoped_prepared",
+      payload: { version: 1, base_hash: hashJson(legacy), snapshot },
+    },
+    upsert,
+  ];
 }
 
 export function snapshotKey(snapshot: QuotaSnapshot): string {

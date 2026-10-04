@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { defaultNativeCodexHome } from "@claudexor/harness-codex";
@@ -9,6 +10,61 @@ import {
 } from "./codex-quota-source.js";
 
 describe("Codex app-server quota source", () => {
+  it.each([
+    { rateLimits: null },
+    { rateLimitsByLimitId: {} },
+    { rateLimits: { primary: null, secondary: null } },
+    { rateLimits: { limitId: "codex", planType: "pro" } },
+    { rateLimitsByLimitId: { codex: { primary: null, secondary: null } } },
+  ])("recognizes explicit absent windows without inventing zero usage: %j", (value) => {
+    const snapshots = parseCodexRateLimitsResponse(value, new Date("2026-10-04T12:00:00Z"), "work");
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.constraints).toEqual([]);
+    expect(snapshots[0]?.subject.subject_id).toBe("work");
+  });
+
+  it.each([
+    null,
+    [],
+    {},
+    { rateLimitResetCredits: { availableCount: 3 } },
+    { rateLimits: {} },
+    { rateLimits: { unexpected: true } },
+    { rateLimits: { primary: {} } },
+    { rateLimits: { primary: "unknown" } },
+    { rateLimits: { primary: { usedPercent: "0" } } },
+    { rateLimits: { primary: { usedPercent: Number.NaN } } },
+    { rateLimits: { primary: { usedPercent: 0, resetsAt: "bad" } } },
+    { rateLimitsByLimitId: [] },
+    { rateLimitsByLimitId: { codex: null } },
+    { rateLimitsByLimitId: { codex: {}, review: { primary: { usedPercent: 0 } } } },
+    { rateLimitsByLimitId: {}, rateLimits: { primary: "bad" } },
+  ])(
+    "refuses malformed or unrecognized readings instead of declaring successful absence: %j",
+    (value) => {
+      expect(() => parseCodexRateLimitsResponse(value, new Date())).toThrow(/Codex quota response/);
+    },
+  );
+
+  it("preserves an available legacy window when the bucket map is empty", () => {
+    const [snapshot] = parseCodexRateLimitsResponse(
+      {
+        rateLimitsByLimitId: {},
+        rateLimits: { primary: { usedPercent: 100, resetsAt: 1893456000 } },
+      },
+      new Date(),
+    );
+    expect(snapshot?.constraints[0]?.used_ratio).toBe(1);
+  });
+
+  it("keeps null measurements unknown in a recognized window", () => {
+    const [snapshot] = parseCodexRateLimitsResponse(
+      { rateLimits: { primary: { usedPercent: null, windowDurationMins: null, resetsAt: null } } },
+      new Date(),
+    );
+    expect(snapshot?.constraints[0]?.used_ratio).toBeNull();
+  });
+
   it("keeps every bucket/window and vendor metadata without an aggregate", () => {
     const [snapshot] = parseCodexRateLimitsResponse(
       {
@@ -168,6 +224,57 @@ describe("Codex app-server quota source", () => {
       rmSync(authPath, { force: true });
     }
   });
+
+  it.skipIf(process.platform === "win32").each([
+    { payload: { rateLimits: { primary: null, secondary: null } }, accepted: true },
+    { payload: { rateLimits: { primary: {} } }, accepted: false },
+  ])(
+    "the app-server boundary preserves success versus malformed data: %j",
+    async ({ payload, accepted }) => {
+      const fixture = mkdtempSync(join(tmpdir(), "codex-quota-response-"));
+      const binary = join(fixture, "app-server");
+      const requestTime = join(fixture, "requested-at");
+      const home = defaultNativeCodexHome();
+      const auth = join(home, "auth.json");
+      mkdirSync(home, { recursive: true });
+      writeFileSync(auth, "{}\n");
+      writeFileSync(
+        binary,
+        `#!${process.execPath}
+const fs = require("node:fs");
+require("node:readline").createInterface({input:process.stdin}).on("line", line => {
+  const request = JSON.parse(line);
+  if (request.id === undefined) return;
+  const send = result => process.stdout.write(JSON.stringify({id:request.id, result}) + "\\n");
+  if (request.method !== "account/rateLimits/read") return send({});
+  fs.writeFileSync(${JSON.stringify(requestTime)}, String(Date.now()));
+  setTimeout(() => send(${JSON.stringify(payload)}), 20);
+});
+`,
+      );
+      chmodSync(binary, 0o755);
+      try {
+        const result = await refreshCodexQuota({ bin: binary });
+        if (accepted) {
+          expect(result.snapshots).toHaveLength(1);
+          expect(result.snapshots[0]?.constraints).toEqual([]);
+          // The reply is delivered later; the observation remains bound to
+          // request start so an intervening refusal cannot be superseded.
+          expect(Date.parse(result.snapshots[0]!.observed_at)).toBeLessThanOrEqual(
+            Number(readFileSync(requestTime, "utf8")),
+          );
+        } else {
+          expect(result.snapshots).toEqual([]);
+          expect(result.absences?.find((row) => row.subject.subject_id === null)?.reason).toBe(
+            "refresh_failed",
+          );
+        }
+      } finally {
+        rmSync(auth, { force: true });
+        rmSync(fixture, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("codex rateLimitResetCredits (W5.3 mini-gap, live-verified shape)", () => {

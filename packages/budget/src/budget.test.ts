@@ -1483,3 +1483,16 @@ describe("quotaConstraintAppliesToModel", () => {
     expect(quotaConstraintAppliesToModel(scoped, undefined)).toBe(true);
   });
 });
+
+it("quota admission matches declared families without guessing unknown ids", () => {
+  const scope = { applies_to_model_prefixes: ["claude-", "gpt-"] };
+  expect(quotaConstraintAppliesToModel(scope, "claude-opus-5-5-high")).toBe(true);
+  expect(quotaConstraintAppliesToModel(scope, "claude-next-generation")).toBe(true);
+  expect(quotaConstraintAppliesToModel(scope, "gpt-next-generation")).toBe(true);
+  expect(quotaConstraintAppliesToModel(scope, "gemini-next-generation")).toBe(false);
+  expect(quotaConstraintAppliesToModel(scope, "unrecognized-model")).toBe(false);
+  expect(quotaConstraintAppliesToModel(scope, null)).toBe(false);
+  expect(
+    quotaConstraintAppliesToModel({ ...scope, applies_to_unspecified_model: true }, null),
+  ).toBe(true);
+});

@@ -299,57 +299,46 @@ describe("QuotaRegistry poll sweep: renewal is never postponed by a sibling's re
       expect(cadence).toEqual([0, 1, 3, 4, 12]);
     }));
 
-  it("the vendor rate-limit floor is absolute: a renewal never pierces it", async () =>
-    withJournal("claudexor-quota-263-floor-", async (journal) => {
-      const clock = { nowMs: Date.parse("2026-09-03T17:00:00.000Z") };
-      let calls = 0;
-      let throttle = false;
+  it("a subject rate-limit floor never pauses a healthy sibling's renewal", async () =>
+    withJournal("claudexor-quota-subject-floor-", async (journal) => {
+      const clock = { nowMs: Date.parse("2026-10-04T10:00:00Z") };
       const healthy = subjectOf("claude", "healthy");
-      const dead = subjectOf("claude", "dead");
+      const limited = subjectOf("claude", "limited");
+      let calls = 0;
+      let limitedCalls = 0;
       const registry = new QuotaRegistry(
         journal,
         [
           {
             vendor: "claude",
-            refresh: async () => {
+            refresh: async (cycle) => {
               calls += 1;
+              const until = cycle?.pacing?.cooldownUntil(limited, clock.nowMs);
+              if (!until) limitedCalls += 1;
               return {
                 snapshots: [primarySnapshot(healthy, "claude_oauth_usage", clock.nowMs)],
                 absences: [
-                  throttle
-                    ? absenceOf(dead, "rate_limited", clock.nowMs, { retry_after_ms: 3_600_000 })
-                    : absenceOf(dead, "auth_revoked", clock.nowMs),
+                  absenceOf(
+                    limited,
+                    until ? "poll_paced" : "rate_limited",
+                    clock.nowMs,
+                    until ? {} : { retry_after_ms: 3_600_000 },
+                  ),
                 ],
               };
             },
           },
         ],
         () => new Date(clock.nowMs),
-        () => [healthy, dead],
+        () => [healthy, limited],
       );
-      await driveTicks(registry, clock, 12, () => calls, "healthy");
-      // The next cycle observes the vendor's one-hour 429 on the dead token.
-      throttle = true;
-      const before = await driveTicks(registry, clock, 8, () => calls, "healthy");
-      expect(before.cadence.length).toBeGreaterThanOrEqual(1);
-      const throttledAt = calls;
-      // For the rest of the hour the lane is floor-paused even though the
-      // healthy snapshot's renewal comes due every five minutes; the healthy
-      // subject is honestly stale + a derived poll_paced row, never re-asked.
-      const paused = await driveTicks(registry, clock, 20, () => calls, "healthy");
-      // An explicit refresh during the pause honours the floor as well (a
-      // skipped lane, no vendor call), so it installs no post-arm evidence:
-      // the ladder bypass never reaches a floored lane.
-      await registry.refresh();
-      const stillPaused = await driveTicks(registry, clock, 30, () => calls, "healthy");
-      expect([...paused.cadence, ...stillPaused.cadence]).toEqual([]);
-      expect(calls).toBe(throttledAt);
-      expect(paused.staleTicks + stillPaused.staleTicks).toBeGreaterThan(40);
-      expect(registry.read().absences.map((a) => a.reason)).toContain("poll_paced");
-      // After the floor the lane resumes on the renewal cadence.
-      throttle = false;
-      const after = await driveTicks(registry, clock, 20, () => calls, "healthy");
-      expect(after.cadence.length).toBeGreaterThanOrEqual(3);
+      const observed = await driveTicks(registry, clock, 50, () => calls, "healthy");
+      expect(limitedCalls).toBe(1);
+      expect(observed.staleTicks).toBe(0);
+      expect(observed.cadence).toEqual([0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48]);
+      const refreshed = await registry.refresh();
+      expect(limitedCalls).toBe(1);
+      expect(refreshed.refresh_skipped?.map((row) => row.subject?.subject_id)).toEqual(["limited"]);
     }));
 
   it("a lane whose last satisfied subject disappears continues at the retry rung it earned", async () =>

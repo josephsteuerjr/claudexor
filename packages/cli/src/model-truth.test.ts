@@ -62,7 +62,7 @@ describe("harness model truth = list + declaration (the ONE settings/doctor/cata
     expect(checkHarnessModelTruth(truth, "gpt-5.5")).toEqual({ status: "ok", message: null });
   }, 30_000);
 
-  it("agy: an unlisted model is refused (authoritative by omission), a listed one passes", async () => {
+  it("agy: an unlisted explicit model is disclosed and forwarded, a listed hint passes", async () => {
     const { truth, check } = await checkHarnessModel(
       "agy",
       "ghost-model-9000",
@@ -70,8 +70,8 @@ describe("harness model truth = list + declaration (the ONE settings/doctor/cata
       true,
     );
     expect(truth.source).toBe("manifest");
-    expect(check.status).toBe("rejected");
-    expect(check.message).toContain("manifest known-model list");
+    expect(check).toMatchObject({ status: "ok", unverified: true });
+    expect(check.message).toContain("forwarded to the vendor");
     expect(
       (await checkHarnessModel("agy", "gemini-3.7-flash-high", process.cwd(), true)).check,
     ).toEqual({ status: "ok", message: null });

@@ -78,15 +78,18 @@ public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
     /// nil/empty means the window applies to every model. A non-empty list is
     /// the server-authored scope; clients render it but never infer account-wide
     /// exhaustion from a scoped ratio.
+    public let appliesToModelPrefixes: [String]?
     public let appliesToModels: [String]?
     public let usedRatio: Double?
     public let windowSeconds: Double?
     public let resetsAt: String?
     public let cooldownUntil: String?
+    public var modelScope: [String] { quotaModelScopeDisplay(appliesToModels ?? [], appliesToModelPrefixes ?? []) }
 
     private enum CodingKeys: String, CodingKey {
         case id, label
         case appliesToModels = "applies_to_models"
+        case appliesToModelPrefixes = "applies_to_model_prefixes"
         case usedRatio = "used_ratio"
         case windowSeconds = "window_seconds"
         case resetsAt = "resets_at"
@@ -96,12 +99,15 @@ public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
 
 public struct QuotaModelScopedExhaustion: Codable, Sendable, Equatable, Hashable {
     public let constraintId: String
+    public let appliesToModelPrefixes: [String]?
     public let appliesToModels: [String]
+    public var modelScope: [String] { quotaModelScopeDisplay(appliesToModels, appliesToModelPrefixes ?? []) }
     public let resetsAt: String?
 
     private enum CodingKeys: String, CodingKey {
         case constraintId = "constraint_id"
         case appliesToModels = "applies_to_models"
+        case appliesToModelPrefixes = "applies_to_model_prefixes"
         case resetsAt = "resets_at"
     }
 }
@@ -168,18 +174,20 @@ public struct QuotaAbsence: Codable, Sendable, Equatable, Identifiable {
 public struct QuotaRefreshSkipped: Codable, Sendable, Equatable, Identifiable {
     public let vendor: String
     public let notBefore: String
+    public let subject: QuotaSubject?
 
     private enum CodingKeys: String, CodingKey {
-        case vendor
+        case vendor, subject
         case notBefore = "not_before"
     }
 
-    public init(vendor: String, notBefore: String) {
+    public init(vendor: String, notBefore: String, subject: QuotaSubject? = nil) {
         self.vendor = vendor
         self.notBefore = notBefore
+        self.subject = subject
     }
 
-    public var id: String { vendor }
+    public var id: String { subject.map { [vendor, $0.credentialRoute, $0.subjectId ?? ""].joined(separator: ":") } ?? vendor }
 }
 
 public struct ControlQuotaResponse: Codable, Sendable, Equatable {
@@ -219,4 +227,11 @@ public struct ControlQuotaResponse: Codable, Sendable, Equatable {
         refreshSkipped =
             try c.decodeIfPresent([QuotaRefreshSkipped].self, forKey: .refreshSkipped)
     }
+}
+
+// A declared family already names every covered exact model. Preserve only
+// uncovered aliases beside it, so catalog growth never expands the label.
+private func quotaModelScopeDisplay(_ models: [String], _ prefixes: [String]) -> [String] {
+    models.filter { model in !prefixes.contains(where: { model.hasPrefix($0) }) }
+        + prefixes.map { $0 + "*" }
 }
