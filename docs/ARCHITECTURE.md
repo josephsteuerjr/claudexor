@@ -849,7 +849,7 @@ so a GUI-launched daemon can discover models and quota from the CLI it found
 during login. Host toolchain PATH is composed before a scoped HOME patch;
 credential homes and provider-variable scrubbing remain specific to each probe.
 The same runtime environment producer supplies an absent OS login name from
-`os.userInfo()` on POSIX, preserving supplied identity and later environment
+`os.userInfo()`, preserving supplied identity and later environment
 patches. It never derives the name from a profile or scratch HOME.
 The shared `spawnProcess`/`runCaptureRaw` helpers also request `windowsHide`:
 every child they start is a fully piped background process. On Windows this

@@ -34,6 +34,9 @@ import Testing
         #expect(session.readiness?.nativeSessionVerified == true)
         #expect(!gateway.requests.contains(where: { $0.hasPrefix("create") || $0.hasPrefix("list") }))
         await observing.value
+        #expect(session.lifecycle.connection == .terminal)
+        #expect(session.current)
+        #expect(session.status == nil)
     }
 
     @Test func correctedDisclosureReplacesTheLinkAndCloseDoesNotCancelLogin() async throws {

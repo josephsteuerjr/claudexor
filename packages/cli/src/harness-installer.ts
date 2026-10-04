@@ -111,7 +111,7 @@ export interface HarnessInstallRunResult {
   /** Evidence for the exact unpinned vendor-script bytes that ran. */
   installerSha256?: string;
   installerByteLength?: number;
-  /** Present on every SUCCESS: the absolute launcher the proof executed. */
+  /** Present on every SUCCESS: the vendor entrypoint verified through its launch command. */
   installedBinary?: string;
   /** Present on every SUCCESS: the exact npm pin, or the script vendor's own
    * trimmed `--version` line. */

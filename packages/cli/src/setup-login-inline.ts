@@ -207,7 +207,7 @@ export async function streamDurableLogin(
           },
         );
       }
-      if (job.phase !== "awaiting_user") inputAbort.abort();
+      if (inputStarted && job.phase !== "awaiting_user") inputAbort.abort();
       if (inputResult && !detached && snapshot.deviceCode?.flow === "oauth_url_input") {
         const result = inputResult;
         inputResult = undefined;

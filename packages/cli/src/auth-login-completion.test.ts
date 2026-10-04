@@ -1,3 +1,4 @@
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ControlSetupJob, type ControlHarnessSetupHarness } from "@claudexor/schema";
 import * as daemonRun from "./daemon-run.js";
@@ -139,6 +140,92 @@ describe("managed login completion at CLI consumers", () => {
       if (harness === "claude") expect(text).toContain("corrected-complete-link");
     },
   );
+
+  it("first login waits through launching before opening the real input prompt", async () => {
+    const input = new PassThrough();
+    const promptOutput = new PassThrough();
+    let promptText = "";
+    promptOutput.on("data", (chunk) => {
+      promptText += String(chunk);
+    });
+    let reads = 0;
+    const submissions: unknown[] = [];
+    try {
+      const exit = await streamDurableLogin(addr, "setup-login-1", {
+        label: "claude",
+        isTTY: true,
+        sleep: async () => {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        },
+        fetchImpl: async (_path, init) => {
+          if (init?.method === "POST") {
+            submissions.push(JSON.parse(String(init.body)));
+            return response(job("claude"));
+          }
+          reads += 1;
+          if (reads === 1)
+            return response({
+              ...snapshot("claude", "running"),
+              job: { ...job("claude", "running"), phase: "launching" },
+            });
+          return response(
+            snapshot("claude", submissions.length ? "succeeded" : "waiting_for_input"),
+          );
+        },
+        promptInput: (question, signal) => {
+          expect(signal.aborted).toBe(false);
+          const pending = inputPrompt.promptLoginInput(question, signal, {
+            input,
+            output: promptOutput,
+          });
+          input.write("first-login-fixture\n");
+          return pending;
+        },
+      });
+      expect(exit).toBe(0);
+      expect(promptText).toContain("Paste the sign-in code");
+      expect(submissions).toEqual([{ value: "first-login-fixture" }]);
+      expect(output.join("")).not.toContain("first-login-fixture");
+    } finally {
+      input.destroy();
+      promptOutput.destroy();
+    }
+  });
+
+  it("leaving the input phase cancels its reader without reporting a user refusal", async () => {
+    const input = new PassThrough();
+    const promptOutput = new PassThrough();
+    let reads = 0;
+    let posts = 0;
+    try {
+      const exit = await streamDurableLogin(addr, "setup-login-1", {
+        label: "claude",
+        isTTY: true,
+        sleep: async () => {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        },
+        fetchImpl: async (_path, init) => {
+          if (init?.method === "POST") posts += 1;
+          reads += 1;
+          if (reads === 2)
+            return response({
+              ...snapshot("claude", "running"),
+              job: { ...job("claude", "running"), phase: "verifying" },
+            });
+          return response(snapshot("claude", reads > 2 ? "succeeded" : "waiting_for_input"));
+        },
+        promptInput: (question, signal) =>
+          inputPrompt.promptLoginInput(question, signal, { input, output: promptOutput }),
+      });
+      expect(exit).toBe(0);
+      expect(posts).toBe(0);
+      expect(output.join("")).not.toContain("No code was submitted");
+      expect(input.listenerCount("data")).toBe(0);
+    } finally {
+      input.destroy();
+      promptOutput.destroy();
+    }
+  });
 
   it("JSON discloses the same input job and endpoint without reading or submitting a code", async () => {
     const prompt = vi.fn();
