@@ -3,6 +3,12 @@ import type { CredentialUnusableObservation, HarnessEvent } from "@claudexor/sch
 import { CredentialUnusableLedger } from "./credential-unusable-ledger.js";
 
 const T0 = Date.parse("2026-08-18T10:00:00.000Z");
+const subject = {
+  harnessId: "claude",
+  profileId: "work",
+  route: "vendor_native" as const,
+  requestedModel: null,
+};
 
 function ledgerAt(): { ledger: CredentialUnusableLedger; clock: { now: number } } {
   const clock = { now: T0 };
@@ -165,5 +171,115 @@ describe("CredentialUnusableLedger (A7 bounded typed evidence)", () => {
         .map((o) => o.harness_id)
         .sort(),
     ).toEqual(["claude", "codex"]);
+  });
+
+  it("an expired hidden witness cannot retain its old dispatch boundary", () => {
+    const { ledger, clock } = ledgerAt();
+    const A = ledger.bind(subject),
+      D = ledger.bind(subject),
+      B = ledger.bind(subject),
+      C = ledger.bind(subject);
+    ledger.recordBound(B, obs({ expires_at: new Date(T0 + 1000).toISOString() }));
+    clock.now = T0 + 100;
+    ledger.honorBound(C, null);
+    expect(ledger.live()).toEqual([]);
+    clock.now = T0 + 2000;
+    ledger.recordBound(A, obs({ observed_at: new Date(clock.now).toISOString() }));
+    expect(ledger.live()).toHaveLength(1);
+    clock.now = T0 + 2100;
+    ledger.honorBound(D, null);
+    expect(ledger.live()).toEqual([]);
+    expect(ledger.honored()).toMatchObject([{ observed_at: new Date(clock.now).toISOString() }]);
+  });
+
+  it("positive contacts self-expire without extending their original contact time", () => {
+    const { ledger, clock } = ledgerAt();
+    ledger.honorBound(ledger.bind(subject), null);
+    expect(ledger.honored()).toMatchObject([{ observed_at: new Date(T0).toISOString() }]);
+    clock.now = T0 + 24 * 60 * 60_000;
+    expect(ledger.honored()).toEqual([]);
+  });
+
+  it("default generation clearing removes hidden witnesses and all real points on both routes", () => {
+    const { ledger, clock } = ledgerAt();
+    const bindings = ["vendor_native", "managed_api_key"] as const;
+    const old = bindings.map((route) => ledger.bind({ ...subject, profileId: null, route }));
+    for (const binding of old)
+      ledger.recordBound(
+        binding,
+        obs({ profile_id: null, credential_route: binding.subject.route! }),
+      );
+    clock.now = T0 + 100;
+    for (const route of bindings)
+      ledger.honorBound(ledger.bind({ ...subject, profileId: null, route }), null);
+    ledger.honorBound(ledger.bind(subject), null);
+    expect(ledger.live()).toEqual([]);
+    expect(ledger.honored()).toHaveLength(3);
+    ledger.clearDefaultSubjects();
+    for (const binding of old) {
+      ledger.honorBound(binding, null);
+      ledger.recordBound(
+        binding,
+        obs({ profile_id: null, credential_route: binding.subject.route! }),
+      );
+    }
+    expect(ledger.live()).toEqual([]);
+    expect(ledger.honored().map((point) => point.profile_id)).toEqual(["work"]);
+    ledger.noteCredentialChange();
+    expect(ledger.honored()).toEqual([]);
+  });
+
+  it("bounds actual incomparable positive entries even when they share one key", () => {
+    const { ledger, clock } = ledgerAt();
+    const bindings = Array.from({ length: 70 }, () => ledger.bind(subject));
+    for (const [index, binding] of bindings.entries()) {
+      clock.now = T0 + 1000 + index;
+      ledger.honorBound(binding, null, new Date(T0 + 500 - index).toISOString());
+    }
+    const contacts = ledger.honored().map((point) => point.observed_at);
+    expect(contacts).toHaveLength(64);
+    expect(contacts).not.toContain(new Date(T0 + 500).toISOString());
+    expect(contacts).toContain(new Date(T0 + 431).toISOString());
+  });
+
+  it("monotonic success replaces dominated contacts rather than accumulating history", () => {
+    const { ledger, clock } = ledgerAt();
+    for (let index = 0; index < 70; index++) {
+      clock.now = T0 + index;
+      ledger.honorBound(ledger.bind(subject), "model-a");
+    }
+    expect(ledger.honored()).toMatchObject([
+      { model: null, observed_at: new Date(clock.now).toISOString() },
+      { model: "model-a", observed_at: new Date(clock.now).toISOString() },
+    ]);
+    expect(ledger.honored()).toHaveLength(2);
+  });
+
+  it("recovery points retain route and actual-model scope", () => {
+    const { ledger, clock } = ledgerAt();
+    const api = { ...subject, route: "managed_api_key" as const };
+    ledger.recordBound(ledger.bind(api), obs({ credential_route: "managed_api_key" }));
+    clock.now = T0 + 100;
+    ledger.recordBound(
+      ledger.bind(subject),
+      obs({
+        credential_route: "vendor_native",
+        code: "capability_refused",
+        model: "model-a",
+        observed_at: new Date(clock.now).toISOString(),
+      }),
+    );
+    clock.now = T0 + 200;
+    ledger.honorBound(ledger.bind(subject), "model-b");
+    expect(ledger.live()).toHaveLength(2);
+    clock.now = T0 + 300;
+    ledger.honorBound(ledger.bind(subject), null);
+    expect(ledger.live()).toHaveLength(2);
+    clock.now = T0 + 400;
+    ledger.honorBound(ledger.bind(subject), "model-a");
+    expect(ledger.live()).toMatchObject([{ credential_route: "managed_api_key" }]);
+    clock.now = T0 + 500;
+    ledger.honorBound(ledger.bind(api), null);
+    expect(ledger.live()).toEqual([]);
   });
 });

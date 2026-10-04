@@ -14,6 +14,13 @@ const MAX_TTL_MS = 24 * 60 * 60_000;
 /** Bounded memory: the ledger holds evidence, not history. */
 const MAX_ROWS = 64;
 
+interface Success {
+  binding: CredentialExecutionBinding;
+  observation: CredentialHonoredObservation;
+  order: number;
+  expires: number;
+}
+
 /**
  * The daemon's bounded, self-expiring memory of typed `credential_unusable`
  * observations (A7): "this credential is DEAD, not quota-spent".
@@ -29,7 +36,9 @@ const MAX_ROWS = 64;
  *
  * Clearing contract (all three, per the design roast):
  * 1. self-expiry — every row carries `expires_at`, clamped to 24h max;
- * 2. a dispatch-bound successful model response for the same subject;
+ * 2. a covering dispatch-bound successful model response hides the live
+ *    verdict; its bounded negative witnesses remain until expiry or generation
+ *    clearing so a later concurrent refusal cannot lose either boundary;
  * 3. a credential-generation change voids the verdicts about the changed
  *    generation: a login/logout clears the WHOLE ledger
  *    (`noteCredentialChange`, wired in claudexord's setup lifecycle), while a
@@ -46,15 +55,7 @@ const MAX_ROWS = 64;
 export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
   private rows = new Map<string, CredentialUnusableObservation>();
   private orders = new Map<string, number>();
-  private successes = new Map<
-    string,
-    {
-      binding: CredentialExecutionBinding;
-      observation: CredentialHonoredObservation;
-      order: number;
-      expires: number;
-    }
-  >();
+  private successes = new Map<string, Success[]>();
 
   constructor(
     private readonly now: () => Date = () => new Date(),
@@ -83,20 +84,7 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
       value.credential_route !== binding.subject.route
     )
       return;
-    const previous = this.rows.get(key(value));
-    if (
-      (this.orders.get(key(value)) ?? -1) > binding.order &&
-      previous &&
-      Date.parse(previous.observed_at) >= Date.parse(value.observed_at)
-    )
-      return;
-    const success = this.successes.get(key(value));
-    if (
-      success &&
-      success.order > binding.order &&
-      Date.parse(success.observation.observed_at) >= Date.parse(value.observed_at)
-    )
-      return;
+    // Even a healed prefix contributes to a later concurrent refusal's bounds.
     this.store(value, binding.order);
   }
 
@@ -119,41 +107,31 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
         credential_route: binding.subject.route ?? undefined,
         model,
       });
-      const previous = this.successes.get(k);
-      if (this.refusesPositive(binding, model, observedTime)) continue;
-      if (
-        !previous ||
-        (previous.order <= binding.order &&
-          Date.parse(previous.observation.observed_at) <= observedTime)
-      )
-        this.successes.set(k, {
-          binding,
-          observation: {
-            harness_id: binding.subject.harnessId,
-            profile_id: binding.subject.profileId,
-            credential_route: binding.subject.route,
-            model,
-            observed_at: observedAt,
-          },
-          order: binding.order,
-          expires: this.now().getTime() + MAX_TTL_MS,
-        });
+      const point: Success = {
+        binding,
+        observation: {
+          harness_id: binding.subject.harnessId,
+          profile_id: binding.subject.profileId,
+          credential_route: binding.subject.route,
+          model,
+          observed_at: observedAt,
+        },
+        order: binding.order,
+        expires: this.now().getTime() + MAX_TTL_MS,
+      };
+      const previous = this.successes.get(k) ?? [];
+      if (previous.some((item) => dominates(item, point))) continue;
+      // Keep real incomparable contacts, never a synthetic order/time maximum.
+      this.successes.set(k, [...previous.filter((item) => !dominates(point, item)), point]);
     }
-    while (this.successes.size > MAX_ROWS)
-      this.successes.delete(this.successes.keys().next().value!);
-    for (const [k, obs] of this.rows) {
-      if (
-        obs.harness_id !== binding.subject.harnessId ||
-        obs.profile_id !== binding.subject.profileId
-      )
-        continue;
-      if (obs.credential_route !== undefined && obs.credential_route !== binding.subject.route)
-        continue;
-      if (obs.model !== null && obs.model !== observedModel) continue;
-      if ((this.orders.get(k) ?? Infinity) > binding.order) continue;
-      if (Date.parse(obs.observed_at) > observedTime) continue;
-      this.rows.delete(k);
-      this.orders.delete(k);
+    // Count points, not keys: a single subject can have incomparable contacts.
+    while (this.positivePoints().length > MAX_ROWS) {
+      const oldest = [...this.successes.entries()]
+        .flatMap(([k, points]) => points.map((point) => ({ k, point })))
+        .reduce((a, b) => (a.point.expires <= b.point.expires ? a : b));
+      const retained = this.successes.get(oldest.k)!.filter((point) => point !== oldest.point);
+      if (retained.length) this.successes.set(oldest.k, retained);
+      else this.successes.delete(oldest.k);
     }
   }
 
@@ -184,23 +162,30 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
       this.rows.delete(earliest[0]);
       this.orders.delete(earliest[0]);
     }
-    const previous = this.rows.get(key(obs));
+    const k = key(obs);
+    const previous = this.rows.get(k);
+    const previousTime = previous ? Date.parse(previous.observed_at) : -Infinity;
+    const previousOrder = this.orders.get(k) ?? order;
     // A delayed completion cannot lower either independent negative boundary.
     // Provenance and expiry belong to the latest actual observation, not arrival.
-    if (!previous || Date.parse(previous.observed_at) <= observed)
-      this.rows.set(key(obs), { ...obs, expires_at: new Date(expires).toISOString() });
-    this.orders.set(key(obs), Math.max(this.orders.get(key(obs)) ?? order, order));
+    // Preserve the prior equal-time provenance against an older dispatch.
+    if (observed > previousTime || (observed === previousTime && order >= previousOrder))
+      this.rows.set(k, { ...obs, expires_at: new Date(expires).toISOString() });
+    this.orders.set(k, Math.max(previousOrder, order));
   }
 
-  /** Every un-expired observation (the read side of the orchestrator deps). */
+  /** Unhealed observations; hidden witnesses keep their bounds until expiry. */
   live(): readonly CredentialUnusableObservation[] {
     this.prune();
-    return [...this.rows.values()];
+    const positives = this.positivePoints();
+    return [...this.rows.entries()]
+      .filter(([k, obs]) => !positives.some((point) => this.covers(k, obs, point)))
+      .map(([, obs]) => obs);
   }
 
   honored(): readonly CredentialHonoredObservation[] {
     this.prune();
-    return [...this.successes.values()]
+    return this.positivePoints()
       .filter(
         (entry) =>
           this.current(entry.binding) &&
@@ -220,17 +205,7 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
     observedTime: number,
   ): boolean {
     for (const [k, refusal] of this.rows) {
-      if (
-        refusal.harness_id !== binding.subject.harnessId ||
-        refusal.profile_id !== binding.subject.profileId
-      )
-        continue;
-      if (
-        refusal.credential_route !== undefined &&
-        refusal.credential_route !== binding.subject.route
-      )
-        continue;
-      if (refusal.model !== null && refusal.model !== model) continue;
+      if (!matches(refusal, binding.subject, model)) continue;
       if (
         (this.orders.get(k) ?? Infinity) > binding.order ||
         Date.parse(refusal.observed_at) > observedTime
@@ -238,6 +213,18 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
         return true;
     }
     return false;
+  }
+
+  private covers(k: string, refusal: CredentialUnusableObservation, point: Success): boolean {
+    return (
+      matches(refusal, point.binding.subject, point.observation.model) &&
+      (this.orders.get(k) ?? Infinity) <= point.order &&
+      Date.parse(refusal.observed_at) <= Date.parse(point.observation.observed_at)
+    );
+  }
+
+  private positivePoints(): Success[] {
+    return [...this.successes.values()].flat();
   }
 
   /** Credential generation changed wholesale (login/logout): every verdict
@@ -281,7 +268,11 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
 
   private prune(): void {
     const now = this.now().getTime();
-    for (const [k, value] of this.successes) if (value.expires <= now) this.successes.delete(k);
+    for (const [k, points] of this.successes) {
+      const retained = points.filter((point) => point.expires > now && this.current(point.binding));
+      if (retained.length) this.successes.set(k, retained);
+      else this.successes.delete(k);
+    }
     for (const [k, obs] of this.rows) {
       const expires = Date.parse(obs.expires_at);
       if (!Number.isFinite(expires) || expires <= now) {
@@ -290,6 +281,26 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
       }
     }
   }
+}
+
+function matches(
+  refusal: CredentialUnusableObservation,
+  subject: CredentialExecutionSubject,
+  model: string | null,
+): boolean {
+  return (
+    refusal.harness_id === subject.harnessId &&
+    refusal.profile_id === subject.profileId &&
+    (refusal.credential_route === undefined || refusal.credential_route === subject.route) &&
+    (refusal.model === null || refusal.model === model)
+  );
+}
+
+function dominates(left: Success, right: Success): boolean {
+  return (
+    left.order >= right.order &&
+    Date.parse(left.observation.observed_at) >= Date.parse(right.observation.observed_at)
+  );
 }
 
 function key(

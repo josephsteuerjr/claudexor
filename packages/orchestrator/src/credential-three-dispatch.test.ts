@@ -100,8 +100,15 @@ function fixture() {
   return { ledger, stamp, bind, refuse, serve, finish, composed, admission, recover };
 }
 
-async function expectBlocked(f: ReturnType<typeof fixture>) {
+async function expectBlocked(f: ReturnType<typeof fixture>, offset?: number) {
   expect(f.ledger.live()).toHaveLength(1);
+  if (offset !== undefined)
+    expect(f.ledger.live()[0]).toMatchObject({
+      observed_at: f.stamp(offset),
+      expires_at: f.stamp(offset + 6 * 3600000),
+      source: "attempt_stream",
+      code: "auth_revoked",
+    });
   expect(f.ledger.honored()).toEqual([]);
   expect(f.composed().verification).toBe("failed");
   expect(await f.admission()).toContain("unusable");
@@ -181,8 +188,97 @@ describe("independent negative order and observation boundaries", () => {
         [first, second, third].forEach((name, index) =>
           f.finish(observers[name], 500 + index * 10, name === "C" ? 0 : 1),
         );
-        await expectBlocked(f);
+        await expectBlocked(f, variant === "order" ? 200 : 300);
       }
+    },
+  );
+
+  function permutations<T>(values: readonly T[]): T[][] {
+    return values.length === 0
+      ? [[]]
+      : values.flatMap((value, index) =>
+          permutations(values.filter((_, other) => other !== index)).map((tail) => [
+            value,
+            ...tail,
+          ]),
+        );
+  }
+
+  it.each(permutations(["A", "B", "C", "D"] as const))(
+    "gap contact, finish %s,%s,%s,%s, cannot heal the complete negative boundary",
+    async (...delivery) => {
+      for (const variant of ["order", "time"] as const) {
+        const f = fixture();
+        const A = f.bind(0),
+          middle = f.bind(10),
+          B = f.bind(20),
+          last = f.bind(30);
+        const C = variant === "order" ? middle : last;
+        const D = variant === "order" ? last : middle;
+        if (variant === "order") {
+          f.refuse(B, 100);
+          f.serve(D, 150);
+          f.refuse(A, 200);
+          f.serve(C, 300);
+        } else {
+          f.refuse(B, 200);
+          f.serve(C, 250);
+          f.refuse(A, 300);
+          f.serve(D, 400);
+        }
+        const observers = { A, B, C, D };
+        delivery.forEach((name, index) =>
+          f.finish(observers[name], 600 + index * 10, name === "A" || name === "B" ? 1 : 0),
+        );
+        await expectBlocked(f, variant === "order" ? 200 : 300);
+      }
+    },
+  );
+
+  it.each(deliveries)(
+    "incomparable real recovery survives finish %s,%s,%s",
+    async (...delivery) => {
+      const f = fixture();
+      const A = f.bind(0),
+        C = f.bind(10),
+        B = f.bind(20);
+      f.serve(B, 100);
+      f.refuse(A, 200);
+      f.serve(C, 500);
+      const observers = { A, B, C };
+      delivery.forEach((name, index) =>
+        f.finish(observers[name], 600 + index * 10, name === "A" ? 1 : 0),
+      );
+      expect(f.ledger.live()).toEqual([]);
+      expect(f.ledger.honored().map((item) => item.observed_at)).toEqual([
+        f.stamp(500),
+        f.stamp(500),
+      ]);
+      expect(f.composed()).toMatchObject({
+        verification: "passed",
+        last_verified_at: f.stamp(500),
+      });
+      expect(await f.admission()).toBe("available");
+    },
+  );
+
+  it.each(deliveries)(
+    "separate successful order and contact time never invent a recovery, finish %s,%s,%s",
+    async (...delivery) => {
+      const f = fixture();
+      f.bind(0);
+      f.bind(10);
+      const C = f.bind(20),
+        A = f.bind(30),
+        B = f.bind(40);
+      f.serve(B, 100);
+      f.refuse(A, 200);
+      f.serve(C, 500);
+      const observers = { A, B, C };
+      delivery.forEach((name, index) =>
+        f.finish(observers[name], 600 + index * 10, name === "A" ? 1 : 0),
+      );
+      await expectBlocked(f, 200);
     },
   );
 });
