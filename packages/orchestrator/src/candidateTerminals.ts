@@ -22,6 +22,7 @@ import {
 } from "./harnessFailure.js";
 import { cancelledResult } from "./runTerminals.js";
 import { gatesPassed } from "@claudexor/review";
+import { publishUnverifiedGitCandidate } from "./candidateWorkProduct.js";
 
 interface CandidateTerminalContext {
   ledger: BudgetLedger;
@@ -38,6 +39,12 @@ export async function cancelledCandidatesResult(
     runs: CandidateRun[];
     signal?: AbortSignal;
     writeTelemetry(): void;
+    git?: {
+      live: boolean;
+      execRoot: string;
+      preTurnSha: string | null;
+      postTurnSha: string | null;
+    };
   },
 ): Promise<OrchestratorResult> {
   const { store, paths, log, runId, taskId, mode, ledger, runs, signal, writeTelemetry } = input;
@@ -53,6 +60,36 @@ export async function cancelledCandidatesResult(
       facts: makeOutcomeFacts("cancelled", { noChanges: candidate.files.noChanges }),
       log,
     });
+  if (runs.length === 1 && input.git) {
+    await publishUnverifiedGitCandidate({
+      ...input.git,
+      run: runs[0]!,
+      store,
+      paths,
+      log,
+      taskId,
+      mode,
+      kind: "patch",
+      facts: makeOutcomeFacts("cancelled", { noChanges: !runs[0]!.diff.trim() }),
+    });
+  } else if (runs.some((run) => run.diff.trim() && !run.secretDiffRefusal)) {
+    const patches = runs.filter((run) => run.diff.trim() && !run.secretDiffRefusal);
+    store.writeText(
+      join(paths.finalDir, "retained-changes.md"),
+      "# Unverified candidate changes\n\nNo candidate was selected or applied.\n\n" +
+        patches
+          .map(
+            (run) =>
+              `- [${run.attemptId} · ${run.harnessId}](../attempts/${run.attemptId}/patch.diff)`,
+          )
+          .join("\n"),
+    );
+    log.emit("output.ready", {
+      kind: "report",
+      path: "final/retained-changes.md",
+      state: "diagnostic",
+    });
+  }
   return cancelledResult(
     log,
     runId,
@@ -186,6 +223,8 @@ export async function failedCandidatesResult(
   const existingEventRefs = runs
     .map((r) => `attempts/${r.attemptId}/events.jsonl`)
     .filter((rel) => existsSync(join(paths.root, rel)));
+  if (!existingEventRefs.length && existsSync(paths.eventsPath))
+    existingEventRefs.push("events.jsonl");
   // #31: auth guidance only on a classified auth failure; every other
   // harness cause (timeout, rate limit, crash, config) gets remediation that
   // fits it, instead of a doomed "Check harness authentication".

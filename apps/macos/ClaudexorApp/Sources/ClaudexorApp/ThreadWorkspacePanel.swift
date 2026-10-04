@@ -188,7 +188,7 @@ struct ThreadWorkspacePanel: View {
                 .help("Show or hide this run's Outcome, answer, plan, candidates, and review")
             }
             if runFactsExpanded {
-                RunOutcomeSection(task: run)
+                RunOutcomeSection(task: run, locationID: model.selectedExecutionLocation)
             }
         }
     }

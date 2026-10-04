@@ -2,6 +2,7 @@ import type { RunEvent, RunEventType } from "@claudexor/schema";
 import { RunEvent as RunEventSchema } from "@claudexor/schema";
 import { existsSync, statSync, truncateSync, unlinkSync } from "node:fs";
 import { appendLine, nowIso, readTextSafe, redactSecrets } from "@claudexor/util";
+export { RETAINED_OUTPUT_PATH, writeRetainedOutput } from "./retained-output.js";
 
 export type TerminalRunEventType = Extract<
   RunEventType,
@@ -41,6 +42,7 @@ export class EventLog {
   private terminalCommittedFlag = false;
   private terminalCommitInProgress = false;
   private terminalWriterPoisoned = false;
+  private prepareOutput?: (type: TerminalRunEventType, payload: Record<string, unknown>) => void;
   private beforeTerminal?: (
     type: TerminalRunEventType,
     payload: Record<string, unknown>,
@@ -112,8 +114,10 @@ export class EventLog {
       type: TerminalRunEventType,
       payload: Record<string, unknown>,
     ) => PreparedTerminalEvent | void,
+    prepareOutput?: (type: TerminalRunEventType, payload: Record<string, unknown>) => void,
   ): void {
     this.beforeTerminal = hook;
+    this.prepareOutput = prepareOutput;
   }
 
   /** Whether this writer has durably committed its exactly-once terminal. */
@@ -122,7 +126,7 @@ export class EventLog {
   }
 
   /** Append a typed run event. Validates against the schema before writing. */
-  emit(type: RunEventType, payload: Record<string, unknown> = {}): RunEvent {
+  emit(type: RunEventType, payload: Record<string, unknown> = {}, publish = true): RunEvent {
     if (this.terminalCommittedFlag) {
       throw new Error("run terminal event is already committed");
     }
@@ -148,6 +152,9 @@ export class EventLog {
         payload: redactEventValue(payload),
       });
     }
+    // Derived output may announce its file before the terminal sequence/receipt
+    // is frozen. Deferred terminals reach this only when they are flushed.
+    if (terminalType) this.prepareOutput?.(terminalType, payload);
     let prepared: PreparedTerminalEvent | void = undefined;
     let event = RunEventSchema.parse({
       seq: this.nextSeq,
@@ -216,7 +223,7 @@ export class EventLog {
       this.beforeTerminal = undefined;
       this.dispose();
       try {
-        this.onPublish?.(event);
+        if (publish) this.onPublish?.(event);
       } catch {
         /* durable replay remains authoritative */
       }
@@ -225,7 +232,7 @@ export class EventLog {
       this.nextSeq += 1;
       this.onPersist?.(event);
       try {
-        this.onPublish?.(event);
+        if (publish) this.onPublish?.(event);
       } catch {
         /* best-effort live observer */
       }
@@ -301,21 +308,26 @@ export class EventLog {
 
   /** Read and parse all events (skipping malformed lines, which are surfaced separately). */
   readAll(): { events: RunEvent[]; malformed: number } {
-    const text = readTextSafe(this.path);
-    if (text === null) return { events: [], malformed: 0 };
-    const events: RunEvent[] = [];
-    let malformed = 0;
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        events.push(RunEventSchema.parse(JSON.parse(trimmed)));
-      } catch {
-        malformed += 1;
-      }
-    }
-    return { events, malformed };
+    return readRunEvents(this.path);
   }
+}
+
+/** Shared reader for live terminal preparation and selected interrupted-run recovery. */
+export function readRunEvents(path: string): { events: RunEvent[]; malformed: number } {
+  const text = readTextSafe(path);
+  if (text === null) return { events: [], malformed: 0 };
+  const events: RunEvent[] = [];
+  let malformed = 0;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      events.push(RunEventSchema.parse(JSON.parse(trimmed)));
+    } catch {
+      malformed += 1;
+    }
+  }
+  return { events, malformed };
 }
 
 /**

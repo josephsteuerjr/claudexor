@@ -7,6 +7,25 @@ import Testing
 /// every cut disclosed. These catch the 30GB-hang class: an unbounded
 /// thinking merge that SwiftUI then laid out on the main thread.
 @Suite struct TranscriptBoundsTests {
+    @Test func bufferedEvidenceDoesNotBecomeAnotherVisibleMessage() {
+        var reducer = TranscriptReducer()
+        reducer.apply(message(1, "Original"))
+        let before = reducer.blocks
+        let buffered = BusEnvelope(seq: 2, kind: "harness.event", event: .object([
+            "type": .string("harness.event"),
+            "payload": .object(["type": .string("message"), "text": .string("Original"),
+                                "payload": .object(["buffered": .bool(true)])])
+        ]))
+        let bufferedApplied = reducer.apply(buffered)
+        #expect(!bufferedApplied)
+        #expect(reducer.blocks == before)
+        let replayApplied = reducer.apply(message(2, "Already consumed sequence"))
+        #expect(!replayApplied)
+        let nextApplied = reducer.apply(message(3, "Next message"))
+        #expect(nextApplied)
+        #expect(reducer.blocks.count == 2)
+    }
+
     private func thinking(_ seq: Int, _ text: String) -> BusEnvelope {
         BusEnvelope(seq: seq, kind: "harness.event", event: .object([
             "type": .string("harness.event"),

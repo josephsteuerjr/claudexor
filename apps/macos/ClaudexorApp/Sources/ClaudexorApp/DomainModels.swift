@@ -512,8 +512,7 @@ struct TaskRun: Identifiable, Hashable {
     var title: String
     var prompt: String
     var mode: RunMode
-    /// The run LIFECYCLE (D8). Presentation of outcome quality (review / checks /
-    /// delivery) reads `outcomeFacts` + the effective review verdict, never this phase.
+    /// Process lifecycle (D8); outcome quality comes from `outcomeFacts` and review verdict.
     var phase: RunPhase
     var project: String
     var harnesses: [HarnessFamily]
@@ -529,9 +528,7 @@ struct TaskRun: Identifiable, Hashable {
     var capKnown: Bool = true
     var budgetUnlimited: Bool = false
     var spendEstimated: Bool = false
-    /// Subscription VALUATION in USD (QA-023c): the token-valued cost of this
-    /// run's native-subscription work, separate from billed cash. Nil when the
-    /// valuation is UNKNOWN — an unknown valuation is NEVER rendered as $0.
+    /// Subscription token valuation (QA-023c), separate from cash; nil is unknown, never $0.
     var valuationUsd: Double?
     var routeProof: RouteProof
     var attentionNote: String?
@@ -542,6 +539,9 @@ struct TaskRun: Identifiable, Hashable {
     var diff: [DiffFile]
     var isLive: Bool = false
     var answerText: String?
+    var primaryOutputPath: String?
+    var primaryOutputTruncated = false
+    var capturedArtifactPaths: [String] = []
     var diagnosticText: String?
     var engineError: String?
     var artifactPaths: [String] = []

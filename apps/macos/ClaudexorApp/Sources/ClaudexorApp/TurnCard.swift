@@ -125,7 +125,12 @@ struct TurnCard: View {
             if let run, let runId = turn.runId {
                 // The FINAL answer is the loudest element — its own accent-edged
                 // bubble above the quiet receipt (W22 Show-more clamp preserved).
-                answerBubble(run)
+                if run.hasRetainedOutput {
+                    RetainedOutputView(task: run, locationID: target.locationID)
+                        .padding(Theme.Spacing.md)
+                } else {
+                    answerBubble(run)
+                }
                 // ONE persistent receipt row: the whole row toggles inline activity.
                 TurnReceiptRow(
                     run: run, runId: runId,

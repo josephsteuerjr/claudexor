@@ -665,7 +665,8 @@ describe("runDeepScanReducer WorkReport contract parity (D-16)", () => {
       expect(telemetry[0]?.telemetry.usageCost.cashUsd).toBeCloseTo(0.25);
       const events = readFileSync(paths.eventsPath, "utf8");
       expect(events).toContain("termination unconfirmed");
-      expect(events).not.toContain("late output must not be accepted");
+      expect(events).toContain("late output must not be accepted");
+      expect(observed.some((event) => event.type === "message")).toBe(false);
     } finally {
       log.dispose();
     }

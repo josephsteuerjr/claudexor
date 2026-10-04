@@ -114,9 +114,17 @@ export function terminalPresentation(ctx: AnnouncedRunContext): RunFacts["presen
       diagnosticPaths.has(candidate.path) &&
       optionalMaterializedArtifact(ctx, candidate.path) !== null,
   );
+  const retained = receipts.findLast(
+    (receipt) =>
+      receipt.state === "diagnostic" &&
+      receipt.kind === "report" &&
+      optionalMaterializedArtifact(ctx, receipt.path) !== null,
+  );
   return {
     state: "diagnostic",
-    primary: primary ?? { kind: "diagnostic", path: last.path },
+    primary: retained
+      ? { kind: "report", path: retained.path }
+      : (primary ?? { kind: "diagnostic", path: last.path }),
   };
 }
 

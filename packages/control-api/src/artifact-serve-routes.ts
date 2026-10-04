@@ -18,6 +18,7 @@ import { isVanishedErrno, safeArtifactPath, safeArtifactRoot } from "./artifact-
 import { readRunTombstone } from "./retention.js";
 import type { DaemonRunRecord } from "./daemon-server.js";
 import { streamFilesArtifact } from "./files-artifact-stream.js";
+import { RETAINED_OUTPUT_PATH } from "@claudexor/event-log";
 
 const MAX_ARTIFACT_FETCH_BYTES = 4 * 1024 * 1024;
 const MAX_ARTIFACT_BINARY_FETCH_BYTES = 32 * 1024 * 1024;
@@ -111,7 +112,12 @@ export async function handleArtifactServeRoute(
       rec.runDir,
       decodeURIComponent(artifactFetchMatch[2] as string),
     );
-    serveArtifactFile(ctx, res, target);
+    serveArtifactFile(
+      ctx,
+      res,
+      target,
+      decodeURIComponent(artifactFetchMatch[2] as string) === RETAINED_OUTPUT_PATH,
+    );
     return true;
   }
 
@@ -193,6 +199,7 @@ function serveArtifactFile(
   ctx: ArtifactServeContext,
   res: ServerResponse,
   target: string | null,
+  fullRetainedOutput = false,
 ): void {
   if (!target || !existsSync(target) || lstatSync(target).isDirectory())
     return ctx.json(res, 404, { error: "no such artifact" });
@@ -212,7 +219,13 @@ function serveArtifactFile(
     });
   }
   const stats = lstatSync(target);
-  const cap = isTextArtifact(target) ? MAX_ARTIFACT_FETCH_BYTES : MAX_ARTIFACT_BINARY_FETCH_BYTES;
+  // This generated document is a full-result transfer, not a log preview. It
+  // still passes the same path/credential checks and text redaction below.
+  const cap = fullRetainedOutput
+    ? Infinity
+    : isTextArtifact(target)
+      ? MAX_ARTIFACT_FETCH_BYTES
+      : MAX_ARTIFACT_BINARY_FETCH_BYTES;
   if (stats.size > cap) {
     return ctx.json(res, 413, {
       error: `artifact is ${stats.size} bytes (limit ${cap}); read it from disk at ${target}`,

@@ -43,7 +43,7 @@ describe("parseCursorEvent", () => {
     expect(finalMsg?.text).toBe("All done");
 
     // --stream-partial-output taxonomy (W-C4): delta = timestamp_ms without
-    // model_call_id; buffered duplicate = both (skipped); final flush =
+    // model_call_id; buffered snapshot = both (evidence only); final flush =
     // neither (a plain message).
     const delta = parse(
       { type: "assistant", timestamp_ms: 123, message: { content: [{ text: "chu" }] } },
@@ -60,7 +60,11 @@ describe("parseCursorEvent", () => {
       },
       "s1",
     );
-    expect(buffered).toEqual([]);
+    expect(buffered?.[0]).toMatchObject({
+      type: "message",
+      text: "chu",
+      payload: { buffered: true, model_call_id: "mc1" },
+    });
     const flush = parse({ type: "assistant", message: { content: [{ text: "chunk" }] } }, "s1");
     expect(flush?.[0]?.payload?.["delta"]).toBeUndefined();
 

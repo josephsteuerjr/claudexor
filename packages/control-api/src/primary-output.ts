@@ -1,6 +1,7 @@
 import { closeSync, lstatSync, openSync, readSync } from "node:fs";
 import { ControlPrimaryOutput, type RunFacts, type RunFailure } from "@claudexor/schema";
 import { redactSecrets } from "@claudexor/util";
+import { RETAINED_OUTPUT_PATH } from "@claudexor/event-log";
 import { safeArtifactPath } from "./artifact-paths.js";
 import type { DaemonRunRecord } from "./daemon-server.js";
 import { readRunTombstone } from "./retention.js";
@@ -95,6 +96,15 @@ export function primaryOutput(
       bytes: Buffer.byteLength(text, "utf8"),
     });
   }
+  if (rec.state === "interrupted" && !runFacts) {
+    const retained = preview(rec, RETAINED_OUTPUT_PATH);
+    if (retained?.text.trim())
+      return ControlPrimaryOutput.parse({
+        kind: "report",
+        path: RETAINED_OUTPUT_PATH,
+        ...retained,
+      });
+  }
   const candidates =
     mode === "ask"
       ? [
@@ -114,9 +124,7 @@ export function primaryOutput(
     const output = preview(rec, candidate.path);
     if (output?.text.trim()) return ControlPrimaryOutput.parse({ ...candidate, ...output });
   }
-  // A cancelled Ask has no answer artifact by design, but its terminal summary
-  // contains the actionable cancellation diagnostic. Promote it only for this
-  // terminal state; ordinary summaries remain non-primary compatibility text.
+  // Older cancelled Ask runs may contain only the cancellation summary.
   if (mode === "ask" && rec.state === "cancelled") {
     const output = preview(rec, "final/summary.md");
     if (output?.text.trim()) {
@@ -143,6 +151,7 @@ export function outputReadyState(
   failure: RunFailure | null,
   runFacts: RunFacts | null = null,
 ): "pending" | "finalizing" | "ready" | "diagnostic" {
+  if (rec.state === "interrupted" && !runFacts) return "diagnostic";
   if (runFacts?.presentation) {
     if (!runFacts.presentation.primary) return runFacts.presentation.state;
     return primaryOutput(rec, mode, failure, runFacts)?.kind === "diagnostic"

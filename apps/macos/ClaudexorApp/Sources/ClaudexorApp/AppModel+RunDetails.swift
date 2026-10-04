@@ -72,6 +72,7 @@ extension AppModel {
             if !detail.timeline.isEmpty {
                 task.activity = detail.timeline.map(Self.activityEvent(from:))
             }
+            task.adoptPrimaryOutput(detail)
             task.answerText = await answerText(
                 for: detail, client: requestClient, runId: id)
             guard selectedExecutionLocation == locationID,

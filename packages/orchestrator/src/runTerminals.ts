@@ -29,6 +29,7 @@ import { reconcileDecisionTerminal } from "./decisionTerminalReconciliation.js";
 import type { OrchestratorResult } from "./orchestrator.js";
 import { prepareRunFactsFailureReceipt, prepareRunFactsReceipt } from "./runFacts.js";
 import type { AnnouncedRunContext } from "./runTerminalContext.js";
+import { publishRetainedOutput } from "./retainedOutput.js";
 import {
   cancelledResult,
   declaredFailure,
@@ -244,69 +245,25 @@ export async function guardAnnouncedRun(
     try {
       result = await body((a) => {
         announced = a;
-        a.log.setBeforeTerminal((originalType, payload) => {
-          try {
-            // Cancellation wins only until the synchronous terminal commit
-            // starts. A later abort cannot rewrite an already-durable success.
-            const payloadOutcome = terminalOutcomeFromPayload(payload);
-            const terminalOutcome = signal?.aborted
-              ? cancellationFacts(signal, payloadOutcome)
-              : payloadOutcome;
-            const prepared = prepareRunFactsReceipt(a, terminalOutcome);
-            canonicalOutcome = prepared.facts.outcome;
-            return {
-              type: terminalEventTypeFor(originalType, prepared.facts.outcome),
-              payload: {
-                ...payload,
-                lifecycle: prepared.facts.outcome.lifecycle,
-                facts: prepared.facts.outcome,
-                reason: prepared.facts.outcome.reason,
-                run_facts: prepared.facts,
-              },
-              commit: prepared.commit,
-              rollback: () => {
-                prepared.rollback();
-                canonicalOutcome = null;
-              },
-            };
-          } catch (error) {
-            // A contradictory terminal projection must fail the run, not throw
-            // out of the hook and retry the same contradiction forever.
-            const detail = redactSecrets(error instanceof Error ? error.message : String(error));
-            terminalPreparationError = `terminal facts preparation failed: ${detail}`;
-            const failureOutcome = makeOutcomeFacts("failed", {
-              reason: "harness_failed",
-            });
-            let failureRefWritten = false;
+        a.log.setBeforeTerminal(
+          (originalType, payload) => {
             try {
-              a.store.writeText(
-                join(a.paths.finalDir, "summary.md"),
-                `# Run ${a.runId} (${a.mode})\n\n- Lifecycle: failed\n- Phase: terminal_facts\n\n${terminalPreparationError}\n`,
-              );
-              writeFailure(a.store, a.paths, {
-                phase: "terminal_facts",
-                category: "internal",
-                safeMessage: terminalPreparationError,
-                runDir: a.paths.root,
-                nextActions: ["Open diagnostics", "Inspect final/run_facts.yaml", "Retry the run"],
-              });
-              failureRefWritten = true;
-            } catch {
-              /* terminal event remains the fail-closed authority */
-            }
-            try {
-              const prepared = prepareRunFactsFailureReceipt(a, failureOutcome);
+              // Cancellation wins only until the synchronous terminal commit
+              // starts. A later abort cannot rewrite an already-durable success.
+              const payloadOutcome = terminalOutcomeFromPayload(payload);
+              const terminalOutcome = signal?.aborted
+                ? cancellationFacts(signal, payloadOutcome)
+                : payloadOutcome;
+              const prepared = prepareRunFactsReceipt(a, terminalOutcome);
               canonicalOutcome = prepared.facts.outcome;
               return {
-                type: "run.failed",
+                type: terminalEventTypeFor(originalType, prepared.facts.outcome),
                 payload: {
+                  ...payload,
                   lifecycle: prepared.facts.outcome.lifecycle,
                   facts: prepared.facts.outcome,
                   reason: prepared.facts.outcome.reason,
                   run_facts: prepared.facts,
-                  phase: "terminal_facts",
-                  error: terminalPreparationError,
-                  ...(failureRefWritten ? { failure_ref: "final/failure.yaml" } : {}),
                 },
                 commit: prepared.commit,
                 rollback: () => {
@@ -314,24 +271,81 @@ export async function guardAnnouncedRun(
                   canonicalOutcome = null;
                 },
               };
-            } catch {
-              // If even the minimal receipt cannot be written, still commit an
-              // honest failed terminal. The daemon job state then fails closed.
-              canonicalOutcome = failureOutcome;
-              return {
-                type: "run.failed",
-                payload: {
-                  lifecycle: failureOutcome.lifecycle,
-                  facts: failureOutcome,
-                  reason: failureOutcome.reason,
+            } catch (error) {
+              // A contradictory terminal projection must fail the run, not throw
+              // out of the hook and retry the same contradiction forever.
+              const detail = redactSecrets(error instanceof Error ? error.message : String(error));
+              terminalPreparationError = `terminal facts preparation failed: ${detail}`;
+              const failureOutcome = makeOutcomeFacts("failed", {
+                reason: "harness_failed",
+              });
+              let failureRefWritten = false;
+              try {
+                a.store.writeText(
+                  join(a.paths.finalDir, "summary.md"),
+                  `# Run ${a.runId} (${a.mode})\n\n- Lifecycle: failed\n- Phase: terminal_facts\n\n${terminalPreparationError}\n`,
+                );
+                writeFailure(a.store, a.paths, {
                   phase: "terminal_facts",
-                  error: terminalPreparationError,
-                  ...(failureRefWritten ? { failure_ref: "final/failure.yaml" } : {}),
-                },
-              };
+                  category: "internal",
+                  safeMessage: terminalPreparationError,
+                  runDir: a.paths.root,
+                  nextActions: [
+                    "Open diagnostics",
+                    "Inspect final/run_facts.yaml",
+                    "Retry the run",
+                  ],
+                });
+                failureRefWritten = true;
+              } catch {
+                /* terminal event remains the fail-closed authority */
+              }
+              try {
+                const prepared = prepareRunFactsFailureReceipt(a, failureOutcome);
+                canonicalOutcome = prepared.facts.outcome;
+                return {
+                  type: "run.failed",
+                  payload: {
+                    lifecycle: prepared.facts.outcome.lifecycle,
+                    facts: prepared.facts.outcome,
+                    reason: prepared.facts.outcome.reason,
+                    run_facts: prepared.facts,
+                    phase: "terminal_facts",
+                    error: terminalPreparationError,
+                    ...(failureRefWritten ? { failure_ref: "final/failure.yaml" } : {}),
+                  },
+                  commit: prepared.commit,
+                  rollback: () => {
+                    prepared.rollback();
+                    canonicalOutcome = null;
+                  },
+                };
+              } catch {
+                // If even the minimal receipt cannot be written, still commit an
+                // honest failed terminal. The daemon job state then fails closed.
+                canonicalOutcome = failureOutcome;
+                return {
+                  type: "run.failed",
+                  payload: {
+                    lifecycle: failureOutcome.lifecycle,
+                    facts: failureOutcome,
+                    reason: failureOutcome.reason,
+                    phase: "terminal_facts",
+                    error: terminalPreparationError,
+                    ...(failureRefWritten ? { failure_ref: "final/failure.yaml" } : {}),
+                  },
+                };
+              }
             }
-          }
-        });
+          },
+          (_type, payload) =>
+            publishRetainedOutput(
+              a,
+              !signal?.aborted &&
+                (RunOutcomeFacts.safeParse(payload["facts"]).data?.lifecycle ??
+                  payload["lifecycle"]) === "succeeded",
+            ),
+        );
       });
       preparedResult = result;
       const context = announced as AnnouncedRunContext | null;
