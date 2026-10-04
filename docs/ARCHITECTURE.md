@@ -1214,7 +1214,13 @@ explicit cooldowns from an already-running session remain observable through an
 unrelated managed login or a mutation window. The generation fence governs auth
 refusal and recovery, not whether an ongoing session may report its quota. Run
 refusals never become poller `auth_revoked` absences and never retire last-known
-numeric quota. A profile-level refusal does not suppress quota discovery:
+numeric quota. A native session already running when the same profile is signed
+into another identity can still report the old identity's numbers under its bound
+profile; full-reader reconciliation remains authoritative for that changed store.
+This preserved session limitation can temporarily affect quota ranking, but those
+passive numbers do not certify authentication. Raw model operations retain their
+separate dispatch-generation check for their single terminal cooldown observation.
+A profile-level refusal does not suppress quota discovery:
 the Claude poller retains its existing present-token rejection memo, so external
 replacement remains discoverable. The hard ledger is non-durable, expires within
 its existing bounded TTLs, and clears through managed credential changes.
