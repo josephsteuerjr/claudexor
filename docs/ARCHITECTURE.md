@@ -3555,6 +3555,44 @@ typed conformance failure rather than being guessed. The receipt records the
 number of restored adapter-created nulls as `normalized_optional_nulls`, while
 the raw answer and invalid diagnostic stay unchanged.
 
+Retained output is separate from completion authority. Sanitized assistant events
+reach the per-run `events.jsonl` before live-preview suppression; candidate log
+writes are not optional observer callbacks. Cursor buffered snapshots are tagged
+as evidence and do not enter accepted-answer or retry predicates. The event-log
+package projects this ordered stream into `final/retained-output.md`, separating
+attempts and physical `session_id` values while retaining explicit delta bytes.
+It excludes reasoning, tool output and status prose, and collapses only exact
+adjacent delta/flush/final repetitions. Missing WorkReport still means unverified
+contract failure; no additional generation is performed to repair the format.
+A final-only successful answer without captured files needs no duplicate retained
+document. Captured media references are added from the existing attempt capture, using distinct
+attempt-scoped handles; the original text remains intact. The full retained
+Markdown fetch is redacted like other text, but is not restricted by the log
+preview fetch ceiling. Inline/native rendering keeps its own preview limits.
+The direct observer delta cap does not truncate public event replay, whose
+existing backpressure and client display bounds remain in force.
+
+The announced-run guard materializes and announces retained output before the
+existing terminal preparation fence, including deferred terminals. RunFacts
+selects its report primary for diagnostic presentation; normal accepted output
+remains primary on success. The retained filename never participates in accepted
+plan/deliverable discovery. If storage fails, the original terminal cause stays
+in force and a best-effort status names the preservation failure. Control detail
+can reconstruct only the addressed interrupted run lacking a committed terminal
+from surviving events, without changing its lifecycle, journal or RunFacts. Lists
+and startup do not scan old logs; intentional retention remains authoritative.
+
+Cancelled Git candidates retain their patch and actual execution-tree effects
+through WorkProduct. Direct effects record the current pre/post snapshots and
+existing revert anchor when available; isolated drafts are not adopted. A
+convergence attempt captures its postimage before an early cancellation exit,
+so it cannot advertise the previous attempt's anchor. Revert uses the recorded
+execution root rather than a thread's later location or the stable project root.
+Multiple unselected candidates retain separate patch links, without a winner.
+Non-success Git evidence cannot be applied and follows ordinary age/reference
+retention rather than an unfinishable pending-apply hold. A live run's Revert remains
+available while that evidence is retained; a non-purged thread reference preserves it.
+
 WorkReport envelope (D-16): on a `work_report_transport: constrained` route the
 engine COMPILES a transport ENVELOPE `{ work_report, output }` that wraps any
 caller `output_schema` and rides `HarnessRunSpec.output_schema`; the caller's
@@ -3707,6 +3745,8 @@ final/work_product.yaml?
 final/summary.md
 final/failure.yaml?
 final/answer.md?
+final/retained-output.md?          # received text and captured-media handles, not acceptance
+final/retained-changes.md?         # separate unselected candidate patches
 final/explore.md?            (legacy deep-scan output; current runs write final/report.md)
 final/explore-findings.yaml?
 final/omissions.md?

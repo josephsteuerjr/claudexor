@@ -300,10 +300,14 @@ export async function runDeepScanReducer(
   let stoppedDuringRun: ReducerStop | null = null;
   const observeEvent = (event: HarnessEvent, acceptDeliverable: boolean): void => {
     const safeEv = redactHarnessEvent(event);
-    if (!acceptDeliverable && !REDUCER_CLEANUP_EVENT_TYPES.has(safeEv.type)) return;
-    safeInvoke(args.onHarnessEvent, safeEv);
-    log.emit("harness.event", harnessEventPayload(adapter.id, attemptId, safeEv));
+    log.emit(
+      "harness.event",
+      harnessEventPayload(adapter.id, attemptId, safeEv),
+      safeEv.payload?.["buffered"] !== true,
+    );
     appendLine(attemptEventsPath, JSON.stringify(safeEv));
+    if (!acceptDeliverable && !REDUCER_CLEANUP_EVENT_TYPES.has(safeEv.type)) return;
+    if (safeEv.payload?.["buffered"] !== true) safeInvoke(args.onHarnessEvent, safeEv);
     observeAttemptTelemetry(telemetry, safeEv);
     observeBudgetSignals(ledger, log, adapter.id, attemptId, safeEv, budgetSignalState);
     deps.quotaEventSink?.(adapter.id, safeEv);

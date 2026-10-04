@@ -12,6 +12,7 @@ import ClaudexorKit
 
 struct RunOutcomeSection: View {
     let task: TaskRun
+    var locationID: ExecutionLocationID = .local
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
@@ -19,7 +20,11 @@ struct RunOutcomeSection: View {
                 DelegationWarningRow(warning: warning)
             }
             factsRow
-            answerBlock
+            if task.hasRetainedOutput {
+                RetainedOutputView(task: task, locationID: locationID)
+            } else {
+                answerBlock
+            }
             if task.planReadiness != nil || !task.planQuestions.isEmpty || !task.plan.isEmpty {
                 planSection
             }

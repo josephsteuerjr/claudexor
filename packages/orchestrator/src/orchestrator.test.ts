@@ -12161,7 +12161,8 @@ describe("Orchestrator", () => {
       harnesses: ["slow-planner"],
       signal: controller.signal,
       onEvent: (event) => {
-        if (event.type === "harness.event") controller.abort();
+        if (event.type === "harness.event" && event.payload["type"] === "started")
+          controller.abort();
       },
     });
     expect(plannerStarted).toBe(true);

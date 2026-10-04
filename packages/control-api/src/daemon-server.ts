@@ -1,3 +1,5 @@
+import { recoverInterruptedOutput } from "./retained-output.js";
+import { recordedExecutionRoot } from "./run-delivery-state.js";
 import {
   readTextArtifact,
   readRawTextArtifact,
@@ -1130,7 +1132,8 @@ export class DaemonControlApiServer {
                     { status: 409 },
                   );
                 }
-                const repoRoot = applyTargetRoot({ kind: "original_project" }, rec);
+                const repoRoot =
+                  recordedExecutionRoot(rec) ?? applyTargetRoot({ kind: "original_project" }, rec);
                 if (!repoRoot) {
                   throw Object.assign(
                     new Error("cannot resolve the in-place project root to revert"),
@@ -2683,6 +2686,7 @@ function detailFor(
     () => applyEligibilityFor(rec, operator),
     expectedRunFacts(rec),
   );
+  const retentionProblem = !runFacts ? recoverInterruptedOutput(rec) : null;
   const planProjection = planProjectionFor(rec, summary.mode);
   const telemetry = safeReadStructuredArtifact(rec, "final/telemetry.yaml", RunTelemetry);
   return ControlRunDetail.parse({
@@ -2708,7 +2712,9 @@ function detailFor(
     }),
     lastSeq,
     artifacts: rec.runDir ? listArtifacts(rec.runDir) : [],
-    primaryOutput: primaryOutput(rec, summary.mode, failure, runFacts),
+    primaryOutput: retentionProblem
+      ? { kind: "diagnostic", path: "events.jsonl", text: retentionProblem }
+      : primaryOutput(rec, summary.mode, failure, runFacts),
     timeline: timelineEvents(rec, events, integrity),
     budget: budgetSnapshot(rec, decision, events, integrity),
     finalSummary: boundedArtifactText(rec, "final/summary.md"),

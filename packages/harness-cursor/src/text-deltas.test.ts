@@ -42,7 +42,10 @@ describe("Cursor text fragment semantics", () => {
     );
 
     const completeMessages = events.filter(
-      (event) => event.type === "message" && event.payload?.["delta"] !== true,
+      (event) =>
+        event.type === "message" &&
+        event.payload?.["delta"] !== true &&
+        event.payload?.["buffered"] !== true,
     );
     expect(completeMessages.map((event) => event.text)).toEqual(["Final answer.", "Final answer."]);
     expect(completeMessages.at(-1)?.final).toBe(true);

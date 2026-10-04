@@ -278,13 +278,17 @@ export async function runPlannerAttempt(
         suspensionVersion: () => planInteraction?.suspensionVersion?.() ?? 0,
       });
       for await (const ev of watchedPlan) {
-        if (input.signal?.aborted) break;
         const safeEv = redactHarnessEvent(ev);
-        safeInvoke(input.onHarnessEvent, safeEv);
+        if (safeEv.payload?.["buffered"] !== true) safeInvoke(input.onHarnessEvent, safeEv);
         if (args.laneRun) observeNativeSessionEvent(input, adapter.id, safeEv);
         observeAuthSwitch(log, adapter.id, attemptId, safeEv);
-        log.emit("harness.event", harnessEventPayload(adapter.id, attemptId, safeEv));
+        log.emit(
+          "harness.event",
+          harnessEventPayload(adapter.id, attemptId, safeEv),
+          safeEv.payload?.["buffered"] !== true,
+        );
         appendLine(attemptEventsPath, JSON.stringify(safeEv));
+        if (input.signal?.aborted) break;
         observeAttemptTelemetry(telemetry, safeEv);
         if (safeEv.plan_progress) {
           log.emit("plan.progress", {

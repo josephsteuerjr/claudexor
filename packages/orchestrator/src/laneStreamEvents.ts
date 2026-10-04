@@ -28,10 +28,8 @@ export function emitPlanProgress(
 
 /** W-C4 flood guard (review sol #10): a per-character delta stream would
  * otherwise persist/SSE one journal event PER CHUNK without bound. Delta
- * messages are DISPLAY-only (the complete message still follows and carries
- * the authoritative text), so past a per-attempt budget further deltas are
- * DROPPED (`true`) and the cutoff disclosed ONCE — the final answer is
- * unaffected. */
+ * messages past this budget are hidden from live observers, but retained in
+ * the canonical event log: an interrupted stream may never send its flush. */
 export function dropDeltaPastBudget(
   ev: { type: string; payload?: Record<string, unknown> | null },
   state: { count: number; disclosed: boolean },
@@ -49,7 +47,7 @@ export function dropDeltaPastBudget(
       harness_id: harnessId,
       attempt_id: attemptId,
       type: "status",
-      title: `live delta stream capped at ${max} chunks; the complete message still lands`,
+      title: `direct observer delta preview capped at ${max} chunks; complete evidence remains available through run events and artifacts`,
     });
   }
   return true;
