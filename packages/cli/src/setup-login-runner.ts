@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { interpretedCommand, killOwnedProcessTree, type HarnessInterpreter } from "@claudexor/core";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -160,6 +161,7 @@ export async function runSetupLoginWorker(
       manifest.binary,
       spawnProcess,
       nativeLoginEnv(manifest.harness, process.env, manifest.profileConfigDir),
+      manifest.interpreter,
     );
     if (probe.completed && !probe.output.includes("--device-auth")) {
       persistFailure(
@@ -222,11 +224,17 @@ export async function runSetupLoginWorker(
   process.on("SIGINT", holdLeaderForEscalation);
   let stopInputWatch: (() => void) | undefined;
   try {
+    const invocation = interpretedCommand(
+      manifest.binary,
+      manifest.args,
+      nativeLoginEnv(manifest.harness, process.env, manifest.profileConfigDir),
+      manifest.interpreter,
+    );
     let terminal: Extract<TerminalTransportResolution, { status: "ready" }> | null = null;
     if (manifest.ptyStdin) {
       let resolution: TerminalTransportResolution;
       try {
-        resolution = await resolvePtyCommand(manifest.binary, manifest.args);
+        resolution = await resolvePtyCommand(invocation.binary, invocation.args);
       } catch {
         persistFailure(
           manifest,
@@ -243,7 +251,7 @@ export async function runSetupLoginWorker(
       }
       terminal = resolution;
     }
-    const command = terminal?.command ?? { binary: manifest.binary, args: manifest.args };
+    const command = terminal?.command ?? invocation;
 
     // A spawn throw and a wait rejection write the SAME receipt, so they share
     // one catch. The outer finally releases both input and signal handlers on
@@ -256,7 +264,7 @@ export async function runSetupLoginWorker(
         // A sealed profileConfigDir (INV-135) scopes the vendor login to the
         // binding's exact environment/state root. Credential custody remains
         // platform-defined; absent = the harness default route as before.
-        env: nativeLoginEnv(manifest.harness, process.env, manifest.profileConfigDir),
+        env: invocation.env,
         ...(terminal?.backend === "windows_conpty" ? { windowsHide: true } : {}),
         detached: false,
         stdio: urlDisclosure
@@ -298,7 +306,7 @@ export async function runSetupLoginWorker(
       }
       let refreshed: TerminalTransportResolution | null = null;
       try {
-        refreshed = await resolvePtyCommand(manifest.binary, manifest.args);
+        refreshed = await resolvePtyCommand(invocation.binary, invocation.args);
       } catch {
         // A resolver must normally return a typed result. If its own I/O fails,
         // the already-probed transport still has the narrow post-probe code.
@@ -366,9 +374,15 @@ async function runDeviceCodeLogin(
   }
   let child: ChildProcess;
   try {
-    child = spawnProcess(manifest.binary, manifest.args, {
+    const invocation = interpretedCommand(
+      manifest.binary,
+      manifest.args,
+      nativeLoginEnv(manifest.harness, process.env, manifest.profileConfigDir),
+      manifest.interpreter,
+    );
+    child = spawnProcess(invocation.binary, invocation.args, {
       cwd: manifest.cwd,
-      env: nativeLoginEnv(manifest.harness, process.env, manifest.profileConfigDir),
+      env: invocation.env,
       detached: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -483,6 +497,7 @@ function probeLoginHelp(
   binary: string,
   spawnProcess: typeof spawn,
   probeEnv: NodeJS.ProcessEnv,
+  interpreter?: HarnessInterpreter,
 ): Promise<{ completed: boolean; output: string }> {
   return new Promise((resolveProbe) => {
     const PROBE_OUTPUT_CAP = 65_536;
@@ -496,10 +511,11 @@ function probeLoginHelp(
     };
     let probe: ReturnType<typeof spawn>;
     try {
-      probe = spawnProcess(binary, ["login", "--help"], {
+      const invocation = interpretedCommand(binary, ["login", "--help"], probeEnv, interpreter);
+      probe = spawnProcess(invocation.binary, invocation.args, {
         // Same provider-secret-scrubbed allowlist env as the real vendor
         // spawn — the probe must never inherit the Terminal's full env.
-        env: probeEnv,
+        env: invocation.env,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch {
@@ -523,7 +539,7 @@ function probeLoginHelp(
     probe.on("close", (code) => settle(code === 0 && retainedBytes > 0));
     const timer = setTimeout(() => {
       try {
-        probe.kill("SIGKILL");
+        killOwnedProcessTree(probe, "SIGKILL");
       } catch {
         // best-effort
       }

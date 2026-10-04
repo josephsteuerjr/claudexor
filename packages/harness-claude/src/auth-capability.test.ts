@@ -1,3 +1,4 @@
+import { runCliHarness } from "@claudexor/core";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +31,7 @@ it("verifies default-store Claude auth after the native adapter's effort prepara
       anthropicApiKey: unexpectedCredential,
       claudeOAuthToken: unexpectedCredential,
       resolveProfileSecret: unexpectedCredential,
-      runCliHarness: async function* (options) {
+      runCliHarness: (options) => {
         transport(options);
         expect(options.spec).toMatchObject({
           auth_preference: "subscription",
@@ -46,25 +47,29 @@ it("verifies default-store Claude auth after the native adapter's effort prepara
           options.spec.prompt,
         )?.[1];
         if (!challenge) throw new Error("missing capability challenge");
-        // Exercise the adapter's native parser and credential decoration, not
-        // a fake normalized started/message pair.
-        for (const frame of [
-          { type: "system", subtype: "init", session_id: "native-claude-smoke" },
-          {
-            type: "result",
-            subtype: "success",
-            result: challenge,
-            usage: { input_tokens: 1, output_tokens: 1 },
+        // Keep the real CLI loop, native parser and credential decoration.
+        // Only process I/O is substituted; the advisory arrives before init.
+        return runCliHarness({
+          ...options,
+          spawn: async function* (_bin, _args, spawnOptions) {
+            spawnOptions?.onSpawn?.({ write() {}, end() {}, closed: Promise.resolve() });
+            yield {
+              type: "launch_advisory",
+              detail: "Using the working fallback; preferred entry is broken",
+            };
+            for (const frame of [
+              { type: "system", subtype: "init", session_id: "native-claude-smoke" },
+              {
+                type: "result",
+                subtype: "success",
+                result: challenge,
+                usage: { input_tokens: 1, output_tokens: 1 },
+              },
+            ])
+              yield { type: "stdout", line: JSON.stringify(frame) };
+            yield { type: "exit", code: 0, signal: null };
           },
-        ]) {
-          yield* options.parseEvent(frame, options.spec.session_id) ?? [];
-        }
-        // The shared CLI runloop owns process-exit completion.
-        yield {
-          type: "completed",
-          session_id: options.spec.session_id,
-          ts: new Date().toISOString(),
-        };
+        });
       },
     });
     const verifier = new AuthCapabilityVerifier(
@@ -114,6 +119,11 @@ it("verifies default-store Claude auth after the native adapter's effort prepara
       credential_route: "vendor_native",
       credential_source: "native_session",
       payload: { native_session_id: "native-claude-smoke" },
+    });
+    expect(events[2]).toMatchObject({
+      type: "status",
+      text: "Using the working fallback; preferred entry is broken",
+      payload: { launch_advisory: true },
     });
     expect(events.some((event) => event.type === "message" && event.final === true)).toBe(true);
     expect(events.at(-1)?.type).toBe("completed");

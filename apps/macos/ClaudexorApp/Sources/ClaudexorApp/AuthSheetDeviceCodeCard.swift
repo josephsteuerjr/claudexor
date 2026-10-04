@@ -30,12 +30,12 @@ struct AuthSheetDeviceCodeCard: View {
     let job: SetupJob
     let waiting: Bool
     let actionInFlight: Bool
-    let cancel: () -> Void
+    let cancel: (() -> Void)?
     /// Explicit opt-in for a device-auth-disabled org — switches to the
     /// app-server browser-callback flow. Never invoked silently, and rendered
     /// only where the flow exists (codex): an action that cannot work is not a
     /// thing to explain.
-    let useBrowserCallback: () -> Void
+    let useBrowserCallback: (() -> Void)?
     /// Deliver the pasted one-time code (`oauth_url_input` only). Returns the
     /// daemon's refusal reason, or nil once it was accepted; the card holds the
     /// value no longer than the call.
@@ -48,7 +48,7 @@ struct AuthSheetDeviceCodeCard: View {
     /// cannot be extended, so a new link is the only act left that works. The
     /// flag says whether the CARD asked (unattended) or the USER pressed the
     /// button, which is what the sheet's budget is spent and re-armed on.
-    let reissue: (_ automatic: Bool) -> Void
+    let reissue: ((_ automatic: Bool) -> Void)?
 
     @State private var session = EphemeralSignInSession()
     @State private var copied = false
@@ -122,23 +122,21 @@ struct AuthSheetDeviceCodeCard: View {
                 } else {
                     Text(linkIntro)
                         .font(.caption).foregroundStyle(.secondary)
-                    if acceptsCode {
-                        // The link IS the handoff for this flow, so it is shown
-                        // in full, selectable and copyable — a browser button
-                        // alone strands anyone signing in on another device.
-                        // Struck through once the window lapsed: the URL is dead
-                        // then, and a live-looking link is a false promise.
-                        Text(disclosure.verificationUrl)
-                            .font(.system(.caption, design: .monospaced))
-                            .strikethrough(windowLapsed)
-                            .foregroundStyle(windowLapsed ? .secondary : .primary)
-                            .padding(Theme.Spacing.sm)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.surfaceCode, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
-                            .textSelection(.enabled)
-                            .accessibilityLabel(AuthSheetPresentation.signInLinkLabel(
-                                url: disclosure.verificationUrl, lapsed: windowLapsed))
-                    }
+                    // The link IS the handoff for this flow, so it is shown
+                    // in full, selectable and copyable — a browser button
+                    // alone strands anyone signing in on another device.
+                    // Struck through once the window lapsed: the URL is dead
+                    // then, and a live-looking link is a false promise.
+                    Text(disclosure.verificationUrl)
+                        .font(.system(.caption, design: .monospaced))
+                        .strikethrough(windowLapsed)
+                        .foregroundStyle(windowLapsed ? .secondary : .primary)
+                        .padding(Theme.Spacing.sm)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.surfaceCode, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
+                        .textSelection(.enabled)
+                        .accessibilityLabel(AuthSheetPresentation.signInLinkLabel(
+                            url: disclosure.verificationUrl, lapsed: windowLapsed))
                 }
 
                 // Every control here ACTS ON the disclosed URL, so all three go
@@ -157,25 +155,23 @@ struct AuthSheetDeviceCodeCard: View {
                           ? AuthSheetPresentation.lapsedSignInLinkHelp
                           : "Open the \(vendor) sign-in page in a private browser session.")
 
-                    if disclosure.hasUserCode || acceptsCode {
-                        // A plain fallback to the default browser for anyone who
-                        // prefers it; the honest wording below applies to the
-                        // private-session button only.
-                        Button {
-                            if let url = URL(string: disclosure.verificationUrl) {
-                                NSWorkspace.shared.open(url)
-                            }
-                        } label: {
-                            Label("Open in browser", systemImage: "safari")
+                    // A plain fallback to the default browser for anyone who
+                    // prefers it; the honest wording below applies to the
+                    // private-session button only.
+                    Button {
+                        if let url = URL(string: disclosure.verificationUrl) {
+                            NSWorkspace.shared.open(url)
                         }
-                        .buttonStyle(.bordered)
-                        .disabled(windowLapsed)
-                        .help(windowLapsed
-                              ? AuthSheetPresentation.lapsedSignInLinkHelp
-                              : "Open the \(vendor) sign-in page in your default browser.")
+                    } label: {
+                        Label("Open in browser", systemImage: "safari")
                     }
+                    .buttonStyle(.bordered)
+                    .disabled(windowLapsed)
+                    .help(windowLapsed
+                          ? AuthSheetPresentation.lapsedSignInLinkHelp
+                          : "Open the \(vendor) sign-in page in your default browser.")
 
-                    if acceptsCode {
+                    if !disclosure.hasUserCode {
                         // Copies the LINK, not the code — the sign-in can be
                         // finished in any browser or on a phone.
                         Button {
@@ -214,20 +210,22 @@ struct AuthSheetDeviceCodeCard: View {
                 }
 
                 HStack(spacing: Theme.Spacing.sm) {
-                    Button("Cancel", role: .destructive) {
-                        session.cancel()
-                        cancel()
+                    if let cancel {
+                        Button("Cancel", role: .destructive) {
+                            session.cancel()
+                            cancel()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(actionInFlight)
+                        .help("Cancel this sign-in.")
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(actionInFlight)
-                    .help("Cancel this sign-in.")
 
                     Spacer(minLength: 0)
 
                     // Explicit opt-in, never a silent fallback: for orgs that
                     // disable device-code login (ChatGPT → Security). Absent
                     // entirely on a login that has no such flow to switch to.
-                    if card.offersBrowserCallback {
+                    if card.offersBrowserCallback, let useBrowserCallback {
                         Button {
                             session.cancel()
                             useBrowserCallback()
@@ -292,9 +290,9 @@ struct AuthSheetDeviceCodeCard: View {
     private func lapse(reissuing: Bool) {
         guard AuthSheetPresentation.deadlineMayLapse(
             codeDelivered: codeDelivered, sending: sending) else { return }
-        let replacing = reissuing && autoReissueArmed
+        let replacing = reissuing && autoReissueArmed && reissue != nil
         lapsedWindow = replacing ? .replacing : .dead
-        if replacing { reissue(true) }
+        if replacing { reissue?(true) }
     }
 
     /// The `oauth_url_input` paste half. Four honest states: ready to paste,
@@ -362,7 +360,7 @@ struct AuthSheetDeviceCodeCard: View {
     /// ONLY way forward, quiet where the sign-in may still be completing and
     /// pressing it would throw a live token exchange away.
     @ViewBuilder private func newLinkButton(prominent: Bool) -> some View {
-        if prominent {
+        if let reissue, prominent {
             Button { reissue(false) } label: { Label("Get a new link", systemImage: "arrow.clockwise") }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accentSolid)
@@ -370,7 +368,7 @@ struct AuthSheetDeviceCodeCard: View {
                 .help(actionInFlight
                       ? "Wait for the current action to finish."
                       : "Start a fresh \(vendor) sign-in and show a new link.")
-        } else {
+        } else if let reissue {
             Button { reissue(false) } label: { Label("Get a new link", systemImage: "arrow.clockwise") }
                 .buttonStyle(.bordered)
                 .disabled(actionInFlight)

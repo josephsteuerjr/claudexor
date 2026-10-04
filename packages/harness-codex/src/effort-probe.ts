@@ -1,21 +1,15 @@
+import {
+  prepareHarnessCommand,
+  killOwnedProcessTree,
+  harnessBinaryIdentityOnPath,
+  harnessRuntimeEnv,
+} from "@claudexor/core";
 /**
- * Per-model effort discovery for codex.
- *
- * Codex advertises reasoning-effort vocabularies PER MODEL and exposes them
- * machine-readably: `codex app-server --stdio` speaks JSON-RPC, and the v2
- * `model/list` request answers with `data[].supportedReasoningEfforts` +
- * `defaultReasoningEffort`. The ceiling is genuinely model-scoped — gpt-5.6-sol
- * takes `ultra` while gpt-5.4 stops at `xhigh` — so a harness-wide ladder is
- * always wrong for some model.
- *
- * The vendor's own generated schema types `ReasoningEffort` as "a non-empty
- * reasoning effort value advertised by the model" (a bounded string, NOT an
- * enum). We mirror that: whatever the probe reports is what we advertise, so a
- * level newer than this repo starts working the moment codex ships it.
- *
- * A probe is never load-bearing. Missing binary, an older app-server without
- * `model/list`, a timeout or malformed output all fall back to the recorded
- * snapshot below and the run proceeds.
+ * Per-model effort discovery through Codex app-server model/list.
+ * Vocabularies and defaults belong to each model, not the whole harness.
+ * The vendor defines effort as an advertised nonempty string, so new values
+ * need no repository enum update. A missing CLI, unsupported query, timeout
+ * or malformed answer falls back to the recorded snapshot below.
  */
 import { spawn } from "node:child_process";
 import type { HarnessEvent, HarnessRunSpec, ModelEffortCapability } from "@claudexor/schema";
@@ -208,9 +202,14 @@ export async function probeCodexEfforts(
   return await new Promise<CodexEffortCatalog | null>((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(bin, ["app-server", "--stdio"], {
+      const command = prepareHarnessCommand(
+        bin,
+        ["app-server", "--stdio"],
+        opts.env ?? harnessRuntimeEnv(),
+      );
+      child = spawn(command.binary, command.args, {
         stdio: ["pipe", "pipe", "ignore"],
-        ...(opts.env ? { env: opts.env } : {}),
+        env: command.env,
       });
     } catch {
       resolve(null);
@@ -223,7 +222,7 @@ export async function probeCodexEfforts(
       settled = true;
       clearTimeout(timer);
       try {
-        child.kill("SIGKILL");
+        killOwnedProcessTree(child, "SIGKILL");
       } catch {
         /* the child is already gone; nothing to clean up */
       }
@@ -382,7 +381,10 @@ export type CodexEffortProbe = (
 function codexEffortCacheKey(bin: string, env?: NodeJS.ProcessEnv): string {
   // A JSON-encoded pair, not a joined string: both halves are paths, so any
   // printable separator would let two different (home, bin) pairs share a key.
-  return JSON.stringify([env?.["CODEX_HOME"] ?? "", bin]);
+  return JSON.stringify([
+    env?.["CODEX_HOME"] ?? "",
+    harnessBinaryIdentityOnPath(bin, env?.PATH ?? harnessRuntimeEnv().PATH ?? "") ?? bin,
+  ]);
 }
 
 /**

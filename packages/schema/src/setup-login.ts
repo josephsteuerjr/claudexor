@@ -33,6 +33,16 @@ export const SetupLoginManifest = z
     jobDir: SetupLoginProtocol.SetupLoginAbsolutePath,
     binary: SetupLoginProtocol.SetupLoginAbsolutePath,
     args: z.array(z.string()),
+    /** Optional physical transport for a sealed logical Node entrypoint. The
+     * entrypoint's existing executable evidence remains authoritative. */
+    interpreter: z
+      .object({
+        binary: SetupLoginProtocol.SetupLoginAbsolutePath,
+        args: z.array(z.string()),
+        env: z.record(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     cwd: SetupLoginProtocol.SetupLoginAbsolutePath,
     /** Scoped config dir for an INV-135 profile login (claude CLAUDE_CONFIG_DIR /
      * codex CODEX_HOME). OPTIONAL, not defaulted: absent on default-store jobs so

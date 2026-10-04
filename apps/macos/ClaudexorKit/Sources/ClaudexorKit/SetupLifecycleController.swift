@@ -91,6 +91,17 @@ public actor SetupLifecycleController {
 
     public func snapshot() -> SetupLifecycleSnapshot { current }
 
+    /// Observe an already-created job by identity, without creating a login or
+    /// substituting the latest job for another account of the same harness.
+    public func observeJob(jobId: String) {
+        stopObservation(markDetached: false)
+        publish(job: nil, connection: .recovering, reconnectAttempt: 0, error: nil)
+        let observedGeneration = generation
+        observationTask = Task { [weak self] in
+            await self?.observe(jobId: jobId, generation: observedGeneration)
+        }
+    }
+
     /// Recover the harness's one daemon-owned native-login job. Reopening the
     /// sheet must not make it invisible or permit a duplicate start.
     public func recoverActiveJob(harness: String) async {
@@ -209,8 +220,12 @@ public actor SetupLifecycleController {
     /// itself only ever reaches the gateway: never a snapshot, log, or field.
     public func submitInput(_ value: String) async -> String? {
         guard let job = current.job else { return "No sign-in is waiting for a code." }
+        let requestGeneration = generation
         do {
             let updated = try await gateway.submitSetupJobInput(jobId: job.jobId, value: value)
+            guard generation == requestGeneration, !Task.isCancelled else {
+                return "The sign-in view changed while input was being delivered. Recheck its status."
+            }
             adoptAndObserve(updated, deviceCode: .preserveSameAwaiting)
             return nil
         } catch let GatewayError.http(status, body) where status == 409 {

@@ -47,7 +47,8 @@ import { authLoginHarnessList, isKnownAuthLoginHarness } from "./auth-login-harn
 export { authLoginHarnessList, isKnownAuthLoginHarness } from "./auth-login-harnesses.js";
 import { DAEMON_START_READY_TIMEOUT_MS, ensureDaemon, waitForDaemonReady } from "./daemon-run.js";
 import { controlApiFetch } from "./live.js";
-import { streamDurableCodexLogin, terminalLoginFallback } from "./setup-login-inline.js";
+import { streamDurableLogin } from "./setup-login-inline.js";
+import { terminalLoginFallback } from "./setup-login-fallback.js";
 import { readDaemonDiagnosticTail } from "./startup-diagnostics.js";
 
 interface OperatorDaemonStopDeps {
@@ -470,20 +471,20 @@ export async function authCommand(
     }
     const job = ControlSetupJob.parse(await response.json());
     const accepted = !["failed", "cancelled", "timed_out", "not_supported"].includes(job.state);
-    // D-17: the codex device-code flow (default; not --browser-redirect) has no
-    // Terminal — follow the durable job to its outcome, disclosing the one-time
-    // code inline (TTY) or as a `--json` disclosure. On the typed
-    // device_auth_unsupported miss the stream OFFERS the legacy Terminal
-    // fallback (a y/N prompt on a TTY, a typed `nextAction` in `--json`) — a
-    // real one-action fork, not a prose dead-end (audit point 8).
-    if (accepted && harness === "codex" && !browserRedirect) {
+    // Daemon-hosted login discloses its interaction in the job snapshot:
+    // URL-only, device code, or URL plus one-shot completion input. The explicit
+    // legacy browser redirect retains its actual external-terminal handoff.
+    if (accepted && job.transport === "daemon" && !browserRedirect) {
       if (!json) print(`${harness} login is managed by claudexord as ${job.jobId}.`);
-      return streamDurableCodexLogin(addr, job.jobId, {
+      return streamDurableLogin(addr, job.jobId, {
         label: harness,
         json,
+        resumeCommand: `claudexor auth login ${harness}`,
         ...(options.acpTerminal
           ? { detachExitCode: 130 }
-          : { fallback: { harness: "codex" as const } }),
+          : harness === "codex"
+            ? { fallback: { harness: "codex" as const } }
+            : {}),
       });
     }
     if (json) {
@@ -493,7 +494,7 @@ export async function authCommand(
     }
     print(
       accepted
-        ? `${harness} login is managed by claudexord as ${job.jobId}; follow the opened Terminal and setup status.`
+        ? `${harness} login is managed by claudexord as ${job.jobId}: ${job.message}`
         : `${harness} login was not started: ${job.message}`,
     );
     return accepted ? 0 : 1;

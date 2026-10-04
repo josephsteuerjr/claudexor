@@ -848,6 +848,9 @@ Codex's direct `model/list` and quota app-server probes use that same producer,
 so a GUI-launched daemon can discover models and quota from the CLI it found
 during login. Host toolchain PATH is composed before a scoped HOME patch;
 credential homes and provider-variable scrubbing remain specific to each probe.
+The same runtime environment producer supplies an absent OS login name from
+`os.userInfo()`, preserving supplied identity and later environment
+patches. It never derives the name from a profile or scratch HOME.
 The shared `spawnProcess`/`runCaptureRaw` helpers also request `windowsHide`:
 every child they start is a fully piped background process. On Windows this
 requests a hidden console for the direct child at spawn; it does not control
@@ -2724,6 +2727,15 @@ by its request; cursor and sequence then fence ordering within that job.
 Every machine fallback and UI continuation takes its credential `profileId`
 from the server-owned setup job, never from the sheet or caller that happens to
 be observing it.
+CLI login follows the declared disclosure flow for each accepted daemon job.
+URL-only flows wait without requesting a code; URL-plus-input sends the pasted
+value to that exact job. A corrected URL replaces its earlier disclosure.
+`--json` returns one disclosure or terminal object: a disclosed active login is
+not a completed login. Repeating the same login command while its target remains
+active reuses that job; after termination it starts a new login, so machine
+observers poll the returned job ID instead. The remote Mac view observes that
+same exact-job lifecycle through its selected GatewayClient, preserving its
+connection/action lease and keeping Close distinct from Cancel.
 
 The daemon writes a private runner manifest; the device-code runner is launched
 DETACHED (no Terminal, not macOS-gated), the Terminal fallback via
@@ -2790,10 +2802,11 @@ cooperative TERM, so both escalation steps are one `taskkill /PID <leader> /T
 /F` of the recorded leader's tree, issued only while that identity still owns
 the PID, and emptiness is the LEADER's identity being gone afterwards — a
 leader-death proof, weaker than the POSIX group-ESRCH proof and recorded as
-such. The vendor binary is still executed without a shell: on win32 only an
-executable image (`.exe`/`.com`) resolves, so an npm `.cmd`/shell shim is
-refused with the install advisory rather than launched through `cmd.exe`.
-Terminal-stdin setup wraps that exact image with the adjacent ConPTY helper
+such. Native executables and standard npm Node entrypoints use one launch
+description; Node entrypoints preserve the vendor script and its interpreter
+arguments instead of passing prompt text through a command shell. An unknown
+custom batch file is not silently reinterpreted as a standard npm launcher.
+Terminal-stdin setup wraps that resolved invocation with the adjacent ConPTY helper
 only after its real `--probe` succeeds; doctor/quota print probes instead use
 a detached, console-free runner with piped stdin closed immediately. A null
 device is insufficient because the vendor treats character devices as interactive
@@ -3580,6 +3593,16 @@ report on a constrained OR validated route is a typed `work_report_contract`
 failure (never a prose success); a valid `needs_input`/`incomplete` report
 becomes a `work_state` veto.
 
+Claude API-error results retain the originating attempt's vendor message and
+nullable machine code as opaque failure evidence. A native stdout error result
+carrying `api_error_code: claude_code_version_too_old` additionally produces the
+`vendor_cli_too_old` request refusal: it names the selected entrypoint and observed
+CLI version when known, recommends updating that installation and stops account
+rotation. A generic HTTP 400 or a model answer quoting the error cannot produce
+that refusal. Older CLI streams can omit the machine code; their original message
+survives, while ordinary structural account failover remains available. No model
+minimum-version table or prose classifier substitutes for missing evidence.
+
 Context signals (D-16c) are a sibling of the transient-retry taxonomy and NEVER
 enter the retry loop. The claude adapter maps FIXTURE-PROVEN 2.1.165 frames onto
 the typed `context` field of `HarnessEvent`: result `terminal_reason` (`prompt_too_long` and
@@ -4043,24 +4066,21 @@ pathname because a new owner could have replaced it between observation and
 mutation. An unexpected filesystem or child-process exception is normalized by
 the canonical CLI projector as `harness_install_failed`; JSON mode still emits
 one object containing the full pre-execution disclosure.
-On Windows an npm global prefix holds only `.cmd`/sh/ps1 shims and no
-executable image, and Claudexor never spawns a harness through a shell (issue
-#191), so the local target is supported exactly where the pinned package
-yields a verified package-native image: `@openai/codex` resolves its optional
-`@openai/codex-win32-<arch>` platform package and executes
-`vendor/<triple>/bin/codex.exe` from it. Core's `runtime-env.ts` is the one
-owner of that layout (`npmGlobalPackagesDir`, `embeddedNpmCli`,
-`windowsNativeImageDir`): the installer runs the embedded
-`node_modules/npm/bin/npm-cli.js` beside `node.exe`, proves the image inside
-the prefix, and the normalized harness PATH carries that image dir on win32
-(`managedWindowsNativeImageDirs`) so doctor, login, runs and quota resolve the
-same `codex.exe` by bare name. The prefix is anchored on the same `HOME` the
-PATH producer reads (the user profile when unset). Every other vendor — an npm
-pin without a verified image (claude, opencode), an unsupported architecture,
-or a script vendor — is a typed `unsupported_platform` refusal before
-filesystem or child-process side effects, and the Windows CI lane installs the
-real pinned package with no ambient node/npm as the proof
-(`scripts/windows-local-install-smoke.mjs`). The omitted target remains `remote`,
+On Windows the installer and harness resolver use the package's declared entrypoint:
+a native program runs directly and a standard npm Node entrypoint runs through
+its selected interpreter. Managed Codex and Claude installs and user npm prefixes
+on the effective PATH share this owner. The logical vendor entrypoint remains
+the identity shown by doctor and used by version/help/model probes; a Node
+runtime alone is not a vendor identity. Script bytes remain part of login
+executable evidence, with the selected invocation carried through the existing
+manifest and permit. Ordinary missing PATH candidates are silent; a present
+broken preferred entry remains diagnostic even when a usable fallback is found.
+Explicit executable overrides never select a different installation implicitly.
+Installer success still requires the declared version to execute, so a placeholder
+file left by an incomplete package install cannot certify success. The Windows
+smoke is `scripts/windows-local-install-smoke.mjs`; native Windows login and Agent
+execution are separate acceptance claims, not consequences of package resolution.
+The omitted target remains `remote`,
 so the SSH installer's
 visible disclosure, confirmation, command, destination, and precedence
 contract are unchanged. After any successful local install, the embedding host

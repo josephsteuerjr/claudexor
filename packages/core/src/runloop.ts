@@ -46,6 +46,8 @@ export function abortSignalFromSpec(spec: HarnessRunSpec): AbortSignal | undefin
 export interface CliRunLoopOptions {
   bin: string;
   args: string[];
+  /** Native process I/O seam; event parsing and lifecycle remain production-owned. */
+  spawn?: typeof spawnProcess;
   spec: HarnessRunSpec;
   /** One-shot stdin payload. Mutually exclusive with the bidirectional session owner. */
   input?: string;
@@ -111,6 +113,19 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
   // termination, a stderr-only failure, or the loop's synthesized exit error.
   let harnessReportedError = false;
   let spawnFailed = false;
+  let launchAdvisory: string | null = null;
+  const takeLaunchAdvisory = (): HarnessEvent | null => {
+    if (!launchAdvisory) return null;
+    const text = redact(launchAdvisory);
+    launchAdvisory = null;
+    return {
+      type: "status",
+      session_id: spec.session_id,
+      ts: ts(),
+      text,
+      payload: { launch_advisory: true },
+    };
+  };
   let exitCode: number | null = null;
   let exitSignal: NodeJS.Signals | null = null;
   // QA-027: a cancellation whose whole-tree death proof could not confirm death
@@ -135,7 +150,7 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
     opts.session?.onIo?.(null, spec.session_id);
   };
   try {
-    for await (const ev of spawnProcess(opts.bin, opts.args, {
+    for await (const ev of (opts.spawn ?? spawnProcess)(opts.bin, opts.args, {
       cwd: spec.cwd,
       env: opts.env,
       inheritEnv: spec.env_inheritance,
@@ -157,6 +172,10 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
           }
         : {}),
     })) {
+      if (ev.type === "launch_advisory") {
+        launchAdvisory = ev.detail;
+        continue;
+      }
       if (ev.type === "stderr") {
         stderrRing.push(ev.line);
         if (stderrRing.length > STDERR_RING_MAX) stderrRing.shift();
@@ -185,6 +204,10 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
         for await (const out of opts.session.handle(obj, session.io)) {
           if (out.type === "error") sawError = harnessReportedError = true;
           yield out;
+          if (out.type === "started") {
+            const advisory = takeLaunchAdvisory();
+            if (advisory) yield advisory;
+          }
         }
         continue;
       }
@@ -202,6 +225,10 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
       for (const out of events) {
         if (out.type === "error") sawError = harnessReportedError = true;
         yield out;
+        if (out.type === "started") {
+          const advisory = takeLaunchAdvisory();
+          if (advisory) yield advisory;
+        }
         if (opts.stopAfterEvent?.(out)) {
           stop = true;
           break;
@@ -256,6 +283,9 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
   }
 
   const payload: Record<string, unknown> = {};
+  // No fabricated startup status when the vendor never started. Keep the
+  // selected/skipped evidence on the terminal diagnostic in that case.
+  if (launchAdvisory) payload["launch_advisory"] = redact(launchAdvisory);
   if (droppedUnparsedLines > 0) payload["dropped_unparsed_lines"] = droppedUnparsedLines;
   if (droppedUnrecognizedEvents > 0)
     payload["dropped_unrecognized_events"] = droppedUnrecognizedEvents;

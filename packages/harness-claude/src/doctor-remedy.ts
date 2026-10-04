@@ -1,3 +1,8 @@
+import {
+  brokenInstallAdvisory,
+  normalizedHarnessPath,
+  resolveHarnessCommandOnPath,
+} from "@claudexor/core";
 import { CLAUDE_KEYCHAIN_BRIDGE_ENV } from "./native-home.js";
 
 /**
@@ -14,4 +19,18 @@ export function claudeNativeLoginRemedy(
     return "the scoped Claude process could not bridge the macOS login Keychain — reopen Claudexor and retry Native setup, or configure an API key fallback";
   }
   return "open Accounts → Claude → Login (or Settings → Harnesses → Claude → Manage), then complete Native setup; alternatively configure an API key fallback";
+}
+
+/** Describe the same entrypoint whose version/help probe uses this PATH. */
+export function claudeInstallation(
+  binary: string,
+  patchPath?: string,
+): { path: string | null; advisory: string | null } {
+  const selected = resolveHarnessCommandOnPath(binary, patchPath ?? normalizedHarnessPath());
+  return {
+    path: selected.command?.entrypoint ?? null,
+    advisory:
+      selected.advisory ??
+      (patchPath === undefined && !selected.command ? brokenInstallAdvisory(binary) : null),
+  };
 }

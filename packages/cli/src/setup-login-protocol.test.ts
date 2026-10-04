@@ -121,6 +121,54 @@ function issuePermit(spec: SetupLoginManifest, issuedAt = new Date().toISOString
 }
 
 describe("setup-login sidecar protocol v2", () => {
+  it("preserves a sealed Node entrypoint, interpreter, help prefix and exact argv", async () => {
+    const script = `const fs = require('node:fs');
+if (process.argv.includes('--help')) console.log('--device-auth');
+else fs.writeFileSync('observed.json', JSON.stringify({ args: process.argv.slice(2), marker: process.env.LAUNCH_MARKER }));`;
+    const { manifestPath, spec } = prepare(script, {
+      args: ["login", "--device-auth", 'with spaces and "quotes"', ""],
+      interpreter: {
+        binary: process.execPath,
+        args: ["--no-warnings"],
+        env: { LAUNCH_MARKER: "sealed" },
+      },
+    });
+    expect(readLoginManifest(manifestPath).interpreter).toEqual(spec.interpreter);
+    expect(spec.executable.realpath).toBe(spec.binary);
+    expect(spec.executable.realpath).not.toBe(process.execPath);
+    issuePermit(spec);
+    expect(
+      await runSetupLoginWorker(manifestPath, {
+        processGroupService: processGroups(),
+        selfPid: 4242,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(readFileSync(join(spec.cwd, "observed.json"), "utf8"))).toEqual({
+      args: spec.args,
+      marker: "sealed",
+    });
+  });
+
+  it("still refuses changed script bytes when the sealed interpreter is unchanged", async () => {
+    const { manifestPath, spec } = prepare("process.exit(0);\n", {
+      interpreter: { binary: process.execPath, args: [] },
+    });
+    issuePermit(spec);
+    writeFileSync(spec.binary, "process.exit(17);\n");
+    let spawned = false;
+    expect(
+      await runSetupLoginWorker(manifestPath, {
+        processGroupService: processGroups(),
+        selfPid: 4242,
+        spawnProcess: (() => {
+          spawned = true;
+          throw new Error("unexpected spawn");
+        }) as never,
+      }),
+    ).toBe(1);
+    expect(spawned).toBe(false);
+  });
+
   it("passes the complete safe bootstrap environment to the detached worker", async () => {
     const { manifestPath } = prepare("#!/bin/sh\nexit 0\n");
     const safeEnvironment = {
