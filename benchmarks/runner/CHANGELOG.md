@@ -1,5 +1,12 @@
 # claudexor-benchmark-runner
 
+## 3.20.0
+
+### Patch Changes
+
+- Updated dependencies [c12828c]
+  - @claudexor/util@3.20.0
+
 ## 3.19.0
 
 ### Patch Changes
