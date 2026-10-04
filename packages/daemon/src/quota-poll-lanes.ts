@@ -1,4 +1,4 @@
-import { QUOTA_GAP_ABSENCE_REASONS } from "@claudexor/schema";
+import { QUOTA_GAP_ABSENCE_REASONS, quotaSourceTraits } from "@claudexor/schema";
 import type { QuotaAbsence, QuotaSnapshot, QuotaSubject } from "@claudexor/schema";
 import { QuotaPollPacer, type QuotaPacerStateStore } from "./quota-poll-pacer.js";
 import {
@@ -270,8 +270,8 @@ export function derivePollPacedRows(
   return rows;
 }
 
-/** Subject-identity cover sets over one active-snapshot view. Gap rows are
- * silenced only by the FRESH set; every other reason by any active snapshot. */
+/** Subject-identity cover sets over one active-snapshot view. A partial
+ * measured window cannot cover a failed or paced full-inventory read. */
 export function subjectCoverSets(active: readonly QuotaSnapshot[]): {
   covered: ReadonlySet<string>;
   freshCovered: ReadonlySet<string>;
@@ -280,7 +280,11 @@ export function subjectCoverSets(active: readonly QuotaSnapshot[]): {
     covered: new Set(active.map((snapshot) => quotaSubjectIdentity(snapshot.subject))),
     freshCovered: new Set(
       active
-        .filter((snapshot) => snapshot.freshness === "fresh")
+        .filter(
+          (snapshot) =>
+            snapshot.freshness === "fresh" &&
+            quotaSourceTraits(snapshot.source).snapshotMode === "full",
+        )
         .map((snapshot) => quotaSubjectIdentity(snapshot.subject)),
     ),
   };

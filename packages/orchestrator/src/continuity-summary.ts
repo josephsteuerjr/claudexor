@@ -20,7 +20,13 @@ import {
   type CredentialProfile,
   type HarnessEvent as HarnessEventType,
 } from "@claudexor/schema";
-import { AnswerAssembly, type HarnessAdapter, type ProcessingAdmission } from "@claudexor/core";
+import {
+  AnswerAssembly,
+  observeCredentialExecution,
+  type CredentialExecutionObserverFactory,
+  type HarnessAdapter,
+  type ProcessingAdmission,
+} from "@claudexor/core";
 import type { ContinuityTurn } from "./continuity.js";
 import { admitCurrentProfileDispatch, type ModelGovernedRoute } from "./modelGovernance.js";
 
@@ -56,6 +62,7 @@ export interface SummaryRunParams {
   physicalDispatchStarted?: () => void;
   billingVerificationForProfile?: ModelGovernedRoute["billingVerificationForProfile"];
   paidFallback?: ModelGovernedRoute["paidFallback"];
+  credentialObserverFactory?: CredentialExecutionObserverFactory;
 }
 
 function boundBytes(text: string, maxBytes: number): string {
@@ -141,7 +148,12 @@ export async function summarizeThreadPrefix(params: SummaryRunParams): Promise<s
       },
     });
     await admitCurrentProfileDispatch(params, spec);
-    for await (const raw of params.adapter.run(spec)) {
+    for await (const raw of observeCredentialExecution(
+      params.adapter.id,
+      spec,
+      params.adapter.run(spec),
+      params.credentialObserverFactory,
+    )) {
       if (abort.signal.aborted) return null;
       const event = raw as HarnessEventType;
       if (event.type === "error") return null;

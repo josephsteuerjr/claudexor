@@ -7,13 +7,16 @@
  */
 import {
   CredentialUnusableLedger,
+  CredentialGeneration,
   PreProgressRefusalLedger,
+  logPath,
   type QuotaRegistry,
 } from "@claudexor/daemon";
-import { Orchestrator } from "@claudexor/orchestrator";
+import { Orchestrator, createCredentialExecutionObserver } from "@claudexor/orchestrator";
 import type { normalizeRunStartRequest } from "@claudexor/control-api";
 import { buildRegistry } from "./registry.js";
 import type { RuntimeConcurrencyCaps } from "@claudexor/schema";
+import { logLine } from "./daemon-lifecycle.js";
 
 /**
  * Daemon-lifetime typed `credential_unusable` evidence (A7): in-memory and
@@ -21,7 +24,12 @@ import type { RuntimeConcurrencyCaps } from "@claudexor/schema";
  * after a restart, and a restart usually follows the re-login that heals a
  * dead credential. `claudexord` clears it on credential-generation changes.
  */
-export const credentialUnusableLedger = new CredentialUnusableLedger();
+const credentialGeneration = new CredentialGeneration();
+export const credentialUnusableLedger = new CredentialUnusableLedger(
+  undefined,
+  undefined,
+  credentialGeneration,
+);
 
 /**
  * Daemon-lifetime pre-progress refusal observations (#363): in-memory and
@@ -29,7 +37,11 @@ export const credentialUnusableLedger = new CredentialUnusableLedger();
  * call sites. Agent Runs produce them and every unpinned pool choice (runs,
  * reviewers, the Accounts `next_up` projection) reads them.
  */
-export const preProgressRefusalLedger = new PreProgressRefusalLedger();
+export const preProgressRefusalLedger = new PreProgressRefusalLedger(
+  undefined,
+  undefined,
+  credentialGeneration,
+);
 
 type OrchestratorDeps = ConstructorParameters<typeof Orchestrator>[0];
 
@@ -53,14 +65,48 @@ export function buildRunOrchestrator(args: {
     // poller reports a vendor rejecting a profile's credential, and run
     // admission is the surface that has to act on it.
     quotaAbsences: () => quotaStore().read().absences,
-    quotaEventSink: (harnessId, event) => {
-      quotaStore().ingest(harnessId, event);
-      // The same stream is the ledger's success telemetry: served tokens on a
-      // subject clear its stale dead-credential verdicts (clearing contract).
-      credentialUnusableLedger.observeEvent(harnessId, event);
+    credentialObserverFactory: (subject) => {
+      const binding = credentialUnusableLedger.bind(subject);
+      const observer = createCredentialExecutionObserver(credentialUnusableLedger, binding);
+      const maintain = (operation: () => void) => {
+        try {
+          operation();
+        } catch (error) {
+          logLine(
+            logPath(),
+            `account observation failed (${subject.harnessId}/${subject.profileId ?? "default"}): ${String(error)}`,
+          );
+        }
+      };
+      return {
+        observe: (event) =>
+          maintain(() => {
+            observer.observe(event);
+            // Numeric quota and cooldown observations remain useful while
+            // sessions run across managed login changes. Authentication proof
+            // has its separate generation/order authority in the observer.
+            const sameProfile =
+              event.credential_profile_id === undefined ||
+              event.credential_profile_id === subject.profileId;
+            const sameRoute =
+              subject.route === null ||
+              event.credential_route === undefined ||
+              event.credential_route === subject.route;
+            if (sameProfile && sameRoute) {
+              quotaStore().ingest(subject.harnessId, {
+                ...event,
+                ...(subject.profileId !== null ? { credential_profile_id: subject.profileId } : {}),
+                ...(event.credential_route === undefined && subject.route !== null
+                  ? { credential_route: subject.route }
+                  : {}),
+              });
+            }
+          }),
+        finish: () => maintain(() => observer.finish()),
+      };
     },
     credentialUnusable: () => credentialUnusableLedger.live(),
-    recordCredentialUnusable: (obs) => credentialUnusableLedger.record(obs),
+    credentialEvidence: credentialUnusableLedger,
     preProgressRefusals: preProgressRefusalLedger,
     reviewerPanel: p.reviewerPanel,
     reviewerModels:

@@ -1,6 +1,7 @@
 import { credentialMutationWindowOpen } from "@claudexor/core";
 import type { PreProgressRefusalObservation } from "@claudexor/schema";
 import { PreProgressRefusalObservation as PreProgressRefusalObservationSchema } from "@claudexor/schema";
+import { CredentialGeneration } from "./credential-generation.js";
 
 /** Observation retention, not a vendor reset time: the refusal was read from
  * typed attempt evidence, never from prose, so it names no reset. One hour is
@@ -44,15 +45,10 @@ const MAX_ROWS = 64;
  */
 export class PreProgressRefusalLedger {
   private rows = new Map<string, PreProgressRefusalObservation>();
-  /** Monotonic credential-change counter: the last change wholesale and per
-   * account (only accounts changed since the last wholesale change). */
-  private changes = 0;
-  private everyAccountChangedAt = 0;
-  private accountChangedAt = new Map<string, number>();
-
   constructor(
     private readonly now: () => Date = () => new Date(),
     private readonly mutating: (harnessId: string) => boolean = credentialMutationWindowOpen,
+    readonly credentials: CredentialGeneration = new CredentialGeneration(mutating),
   ) {}
 
   /** Validate and stamp, newest-wins per (subject, requested model). */
@@ -91,20 +87,14 @@ export class PreProgressRefusalLedger {
   /** The account's credential generation: it moves only when a credential
    * change voids the account's verdicts, never with evidence or expiry. */
   generation(harnessId: string, profileId: string): number {
-    // NaN equals nothing, itself included: a window-bound try never matches.
-    if (this.mutating(harnessId)) return Number.NaN;
-    return Math.max(
-      this.everyAccountChangedAt,
-      this.accountChangedAt.get(accountKey(harnessId, profileId)) ?? 0,
-    );
+    return this.credentials.generation(harnessId, profileId);
   }
 
   /** Credential generation changed wholesale (login/logout): every verdict
    * about the old generation is void. */
   noteCredentialChange(): void {
     this.rows.clear();
-    this.accountChangedAt.clear();
-    this.everyAccountChangedAt = ++this.changes;
+    this.credentials.noteCredentialChange();
   }
 
   /** ONE account's credential changed (a control-API profile mutation): only
@@ -113,7 +103,7 @@ export class PreProgressRefusalLedger {
     for (const [k, obs] of this.rows) {
       if (obs.harness_id === harnessId && obs.profile_id === profileId) this.rows.delete(k);
     }
-    this.accountChangedAt.set(accountKey(harnessId, profileId), ++this.changes);
+    this.credentials.clearSubject(harnessId, profileId);
   }
 
   private prune(): void {
@@ -129,8 +119,4 @@ function key(
 ): string {
   // `\u0001` keeps the null default model distinct from a model named "".
   return [obs.harness_id, obs.profile_id, obs.requested_model ?? "\u0001"].join("\0");
-}
-
-function accountKey(harnessId: string, profileId: string): string {
-  return [harnessId, profileId].join("\0");
 }

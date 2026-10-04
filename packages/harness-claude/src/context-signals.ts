@@ -1,5 +1,6 @@
 import type { HarnessEvent } from "@claudexor/schema";
 import { claudeQuotaModelAliases } from "./capability-profile.js";
+import { claudeQuotaEvents, claudeQuotaReset } from "./quota.js";
 
 /**
  * D-16c: claude 2.1.165 typed context / rate-limit signal mapping, extracted
@@ -44,20 +45,18 @@ export function claudeCompactBoundaryEvents(
 }
 
 /**
- * QA-015: the top-level typed `rate_limit_event` heartbeat. Always RECOGNIZED
- * (never a dropped event). The routine `allowed` and advisory
- * `allowed_warning` heartbeats surface NOTHING (arming a rate_limit signal on
- * either would falsely cool the account after a successful run); only a
- * rejecting status arms the TYPED `rate_limit` signal the budget layer reads.
- * Returns `[]` for a benign/advisory heartbeat.
+ * Numeric observations and rejection are independent. Allowed/warning frames
+ * may report measured windows without arming a cooldown. A rejecting frame
+ * retains its existing typed rate_limit signal alongside any measurements.
  */
 export function claudeRateLimitEvents(obj: Json, sessionId: string, ts: string): HarnessEvent[] {
   const info =
     obj.rate_limit_info && typeof obj.rate_limit_info === "object" ? obj.rate_limit_info : null;
   const status = info ? (info as Json).status : undefined;
-  if (status !== "rejected" && status !== "blocked") return [];
+  const measurements = claudeQuotaEvents(info, sessionId, ts);
+  if (status !== "rejected" && status !== "blocked") return measurements;
   const resetsRaw = info ? (info as Json).resetsAt : undefined;
-  const resetsAt = typeof resetsRaw === "number" ? new Date(resetsRaw * 1000).toISOString() : null;
+  const resetsAt = claudeQuotaReset(resetsRaw);
   const rateLimitType = info ? (info as Json).rateLimitType : undefined;
   const modelFamily =
     rateLimitType === "seven_day_opus"
@@ -67,6 +66,7 @@ export function claudeRateLimitEvents(obj: Json, sessionId: string, ts: string):
         : null;
   const appliesToModels = modelFamily ? claudeQuotaModelAliases(modelFamily) : null;
   return [
+    ...measurements,
     {
       type: "status",
       session_id: sessionId,

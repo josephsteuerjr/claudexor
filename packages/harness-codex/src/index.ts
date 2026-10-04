@@ -5,6 +5,8 @@ import {
   applyCodexRunProcessing,
 } from "./processing-session.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+export { parseCodexRateLimitsResponse } from "./quota.js";
+export { CodexRpcError, parseCodexRpcError, codexRpcErrorDetail } from "./rpc-error.js";
 export { createCodexModelAdapter } from "./model.js";
 export { describeCodexClientVersion } from "./http-client-version.js";
 import { withCodexVendorFailure } from "./vendor-failure.js";
@@ -76,7 +78,6 @@ import {
 } from "./missing-cli.js";
 export { BIN } from "./missing-cli.js";
 
-/** Exported for focused route-policy tests; runtime uses this exact selector. */
 export const selectCodexRunAuthRoute = selectStrictAuthRoute;
 
 export {
@@ -104,7 +105,6 @@ import {
   type CodexLoginProbe,
 } from "./auth.js";
 
-/** Native Codex sandbox mode per active access profile; null = native default. */
 function sandboxMode(access: AccessProfile): string | null {
   switch (access) {
     case "readonly":

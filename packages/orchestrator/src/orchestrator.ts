@@ -151,6 +151,8 @@ import {
 import { globalConfigDir, loadConfig } from "@claudexor/config";
 import type {
   AdapterRegistry,
+  CredentialExecutionObserverFactory,
+  CredentialEvidenceAuthority,
   HarnessAdapter,
   InteractionChannel,
   PreparedHarnessProcessing,
@@ -370,6 +372,8 @@ export interface OrchestratorDeps {
   credentialUnusable?: () => readonly CredentialUnusableObservation[];
   /** Evidence sink for a fresh differential-probe verdict (A7). */
   recordCredentialUnusable?: (obs: CredentialUnusableObservation) => void;
+  credentialObserverFactory?: CredentialExecutionObserverFactory;
+  credentialEvidence?: CredentialEvidenceAuthority;
   /** #363 cross-run pre-progress refusal memory; it only orders the pool. */
   preProgressRefusals?: PreProgressRefusalMemory;
   /** Typed per-harness run refusal while that harness's unified-accounts
@@ -1097,6 +1101,8 @@ export class Orchestrator {
     quotaAbsences: () => this.deps.quotaAbsences?.() ?? [],
     credentialUnusable: () => this.deps.credentialUnusable?.() ?? [],
     recordCredentialUnusable: (obs) => this.deps.recordCredentialUnusable?.(obs),
+    credentialObserverFactory: () => this.deps.credentialObserverFactory,
+    credentialEvidence: () => this.deps.credentialEvidence,
     preProgressRefusals: () => this.deps.preProgressRefusals,
     authPreferenceForHarness: (repoRoot, harnessId, runPreference) =>
       this.authPreferenceForHarness(repoRoot, harnessId, runPreference),
@@ -2195,6 +2201,7 @@ export class Orchestrator {
         processing,
         processingAdmission,
         physicalDispatchStarted,
+        credentialObserverFactory: this.deps.credentialObserverFactory,
         billingVerificationForProfile: (profile) =>
           this.credentials.selectedProfileBillingVerification(profile),
         paidFallback: this.config(runInput.repoRoot).global.routing.paid_fallback,
@@ -4459,6 +4466,7 @@ export class Orchestrator {
   ): ReturnType<typeof reviewCandidate> {
     return reviewCandidate({
       ...input,
+      credentialObserverFactory: this.deps.credentialObserverFactory,
       reviewerTimeoutMs: input.reviewerTimeoutMs ?? reviewerTimeoutMs(this.config(input.cwd)),
       transientRetryPolicy:
         input.transientRetryPolicy ?? transientRetryPolicy(this.config(input.cwd)),

@@ -505,8 +505,9 @@ describe("journal fold policy verdicts", () => {
       view("quota.subject.removed", { harness: "claude", subject_id: null }),
     );
     expect(removed.slot).toBe("q:claude\0:removed");
+    expect(removed.retire).toContain('q:windows:["claude",null]');
     expect(removed.retire).toHaveLength(
-      2 * CredentialRoute.options.length * QuotaSource.options.length,
+      1 + 2 * CredentialRoute.options.length * QuotaSource.options.length,
     );
     const nullKey = `q:${["claude", "vendor_native", "", "claude_oauth_usage"].join("\0")}`;
     expect(removed.retire).toContain(`${nullKey}:p`);

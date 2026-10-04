@@ -24,6 +24,10 @@ import {
   credentialProfilePolicyProblem,
   credentialProfilePolicyState,
   stampCredentialProfileSelection,
+  bindCredentialExecutionObserverFactory,
+  type CredentialExecutionObserverFactory,
+  type CredentialEvidenceAuthority,
+  credentialExecutionSubject,
 } from "@claudexor/core";
 import type { EventLog } from "@claudexor/event-log";
 import { accountPoolRows } from "./account-pool.js";
@@ -36,7 +40,6 @@ import {
   probeCredentialProfileStatus,
   profileStatusAdmits,
   selectedProfileAvailability,
-  vendorVerifiedProfileStatus,
   type ProfilePolicy,
   type VendorQuotaObservations,
 } from "./credential-profiles.js";
@@ -47,6 +50,7 @@ import {
 } from "./pre-progress-refusal.js";
 import type { TransientFailureObservation } from "./transientClassify.js";
 import type { RunInput } from "./orchestrator.js";
+import { composeCredentialProfileEvidence } from "./account-evidence.js";
 
 /** Model-first reviewer account resolution input, without a fabricated RunInput. */
 export interface ReviewerProfileResolutionInput {
@@ -74,6 +78,8 @@ export interface CredentialResolutionHost {
   quotaAbsences(): readonly QuotaAbsence[];
   credentialUnusable(): readonly CredentialUnusableObservation[];
   recordCredentialUnusable(obs: CredentialUnusableObservation): void;
+  credentialObserverFactory?(): CredentialExecutionObserverFactory | undefined;
+  credentialEvidence?(): CredentialEvidenceAuthority | undefined;
   /** #363 cross-run pre-progress refusal memory (absent = nothing remembered). */
   preProgressRefusals(): PreProgressRefusalMemory | undefined;
   authPreferenceForHarness(
@@ -153,6 +159,7 @@ export class OrchestratorCredentials {
    * profile is this run's explicit pin; only an unpinned choice may start on a
    * row's bounded last positive status answer. */
   stampProfileSelection(spec: HarnessRunSpec, input: RunInput, harnessId: string): void {
+    bindCredentialExecutionObserverFactory(spec, this.host.credentialObserverFactory?.());
     stampCredentialProfileSelection(spec, {
       pinned: this.effectiveProfileId(input, harnessId) !== null,
     });
@@ -223,6 +230,7 @@ export class OrchestratorCredentials {
     return {
       snapshots: this.host.quotaSnapshots(),
       absences: this.host.quotaAbsences(),
+      honored: this.host.credentialEvidence?.()?.honored?.(),
     };
   }
 
@@ -265,18 +273,28 @@ export class OrchestratorCredentials {
     transients: readonly TransientFailureObservation[],
     refusal: PreProgressRefusalSubject | null,
   ) {
+    const authority = this.host.credentialEvidence?.();
+    const binding = authority?.bind(credentialExecutionSubject(adapter.id, spec));
     return {
       probeCurrentSubject: currentSubjectProber({
         harnessId: adapter.id,
         profile: spec.credential_profile ?? null,
         model: spec.model_hint ?? null,
+        route: credentialExecutionSubject(adapter.id, spec).route,
         quota: this.vendorQuotaObservations(),
         transients,
         probe: adapter.probeCredentialProfile?.bind(adapter),
         // #363: a verdict about a credential the try no longer holds — a
         // login or profile change landed since it spawned — is not recorded.
         record: (obs) => {
-          if (refusal?.current() ?? true) this.host.recordCredentialUnusable(obs);
+          // Keep the verdict/event, while its dispatch-bound observer owns storage.
+          if (obs.source === "attempt_stream" && this.host.credentialObserverFactory?.()) return;
+          if (authority && binding)
+            authority.recordBound(binding, {
+              ...obs,
+              ...(binding.subject.route ? { credential_route: binding.subject.route } : {}),
+            });
+          else if (refusal?.current() ?? true) this.host.recordCredentialUnusable(obs);
         },
       }),
       liveUnusable: this.host.credentialUnusable(),
@@ -396,12 +414,17 @@ export class OrchestratorCredentials {
     // optional for legacy run admission; this caller opts into the stricter
     // reviewer contract without changing ordinary runs.
     if (pinnedProfile) {
-      const status = vendorVerifiedProfileStatus(
+      const status = composeCredentialProfileEvidence(
         await probeCredentialProfileStatus(
           pinnedProfile,
           adapter?.probeCredentialProfile?.bind(adapter),
         ),
-        quota,
+        {
+          quota,
+          unusable: this.host.credentialUnusable(),
+          model: input.model,
+          route: pinnedProfile.credential_kind === "api_key" ? "managed_api_key" : "vendor_native",
+        },
       );
       if (!profileStatusAdmits(pinnedProfile, status)) {
         throw new HarnessUnavailableError(
@@ -493,10 +516,11 @@ export class OrchestratorCredentials {
     const adapterProbe = adapter?.probeCredentialProfile?.bind(adapter);
     const probe = probes ? probes.reuse(profile, adapterProbe) : adapterProbe;
     return profileBillingVerification(
-      vendorVerifiedProfileStatus(
-        await probeCredentialProfileStatus(profile, probe),
-        this.vendorQuotaObservations(),
-      ),
+      composeCredentialProfileEvidence(await probeCredentialProfileStatus(profile, probe), {
+        quota: this.vendorQuotaObservations(),
+        unusable: this.host.credentialUnusable(),
+        route: profile.credential_kind === "api_key" ? "managed_api_key" : "vendor_native",
+      }),
     );
   }
 }

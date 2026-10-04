@@ -119,7 +119,9 @@ export async function main(): Promise<void> {
     const projectStoreSlot = journalManager.registerProjection(projectProjection());
     const quotaStoreSlot = journalManager.registerProjection(
       quotaProjection(
-        quotaRefreshers(),
+        quotaRefreshers((record) =>
+          logLine(logPath(), `quota.observation ${JSON.stringify(record)}`),
+        ),
         quotaSubjectUniverseFromConfig,
         undefined,
         // Daemon-private per-vendor rate-limit floors (never in the journal).

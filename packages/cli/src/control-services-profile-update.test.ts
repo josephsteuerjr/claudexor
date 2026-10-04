@@ -165,6 +165,7 @@ function services(
     refreshedQuota?: ControlQuotaResponse;
     refreshError?: Error;
     quotaEventCursor?: string;
+    readQuota?: ControlQuotaResponse;
   } = {},
 ) {
   const threads = {
@@ -188,7 +189,7 @@ function services(
   const quota = {
     removeSubject: () => 0,
     noteCredentialChange,
-    read: () => emptyQuota,
+    read: () => options.readQuota ?? emptyQuota,
     refresh: refreshQuota,
     refreshWithCursor: async () => ({
       response: await refreshQuota(),
@@ -247,12 +248,130 @@ describe("updateCredentialProfile (INV-135 Enabled toggle) + accounts projection
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
   afterEach(() => {
+    credentialUnusableLedger.noteCredentialChange();
+    vi.useRealTimers();
     if (prev === undefined) delete process.env.CLAUDEXOR_CONFIG_DIR;
     else process.env.CLAUDEXOR_CONFIG_DIR = prev;
     if (prevPath === undefined) delete process.env.PATH;
     else process.env.PATH = prevPath;
     vi.restoreAllMocks();
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("recomposes new refusals and expiry over cached probes while retaining account identity", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-04T09:00:00Z"));
+    const { profile } = registerConfigDirProfile({ harnessId: "claude", profileId: "a" });
+    registerConfigDirProfile({ harnessId: "claude", profileId: "b" });
+    gatewayMock.profileReadiness = { availability: "available", verification: "passed" };
+    writeFileSync(
+      join(profile.isolation_locator!, ".claude.json"),
+      JSON.stringify({
+        oauthAccount: { emailAddress: "a@example.test", organizationType: "claude_max" },
+      }),
+    );
+    const svc = services();
+    const initial = await svc.credentialProfiles();
+    expect(initial.accountPools.find((row) => row.harness_id === "claude")?.next_up).toEqual({
+      kind: "profile",
+      profileId: "a",
+    });
+    const probeCount = gatewayMock.profileProbeCalls.length;
+    const sweepCount = gatewayMock.calls.length;
+    credentialUnusableLedger.record({
+      harness_id: "claude",
+      profile_id: "a",
+      model: null,
+      credential_route: "vendor_native",
+      code: "auth_revoked",
+      source: "attempt_stream",
+      detail: "The provider rejected this credential",
+      observed_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 2_000).toISOString(),
+    });
+    const refused = await svc.credentialProfiles();
+    expect(refused.profiles.find((row) => row.profile.profile_id === "a")).toMatchObject({
+      status: { availability: "available", verification: "failed", verification_source: "vendor" },
+      identity: { email: "a@example.test" },
+    });
+    expect(refused.accountPools.find((row) => row.harness_id === "claude")?.next_up).toEqual({
+      kind: "profile",
+      profileId: "b",
+    });
+    vi.setSystemTime(new Date(Date.now() + 3_000));
+    const expired = await svc.credentialProfiles();
+    expect(
+      expired.profiles.find((row) => row.profile.profile_id === "a")?.status.verification,
+    ).toBe("passed");
+    expect(expired.accountPools.find((row) => row.harness_id === "claude")?.next_up).toEqual({
+      kind: "profile",
+      profileId: "a",
+    });
+    expect(gatewayMock.profileProbeCalls).toHaveLength(probeCount);
+    expect(gatewayMock.calls).toHaveLength(sweepCount);
+  });
+
+  it("applies a model refusal to next_up for that model without condemning the account row", async () => {
+    registerConfigDirProfile({ harnessId: "claude", profileId: "a" });
+    registerConfigDirProfile({ harnessId: "claude", profileId: "b" });
+    updateGlobalConfig((cfg) => {
+      cfg.harnesses.claude = { ...cfg.harnesses.claude!, default_model: "model-a" };
+      return cfg;
+    });
+    gatewayMock.profileReadiness = { availability: "available", verification: "passed" };
+    credentialUnusableLedger.record({
+      harness_id: "claude",
+      profile_id: "a",
+      model: "model-a",
+      credential_route: "vendor_native",
+      code: "capability_refused",
+      source: "attempt_stream",
+      detail: "The provider refused this model",
+      observed_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const result = await services().credentialProfiles();
+    expect(result.profiles.find((row) => row.profile.profile_id === "a")?.status.verification).toBe(
+      "passed",
+    );
+    expect(result.accountPools.find((row) => row.harness_id === "claude")?.next_up).toEqual({
+      kind: "profile",
+      profileId: "b",
+    });
+  });
+
+  it("uses newer served evidence without rewriting a poller refusal or leaking internal proof on the wire", async () => {
+    registerConfigDirProfile({ harnessId: "claude", profileId: "work" });
+    gatewayMock.profileReadiness = { availability: "available", verification: "passed" };
+    const quota = ControlQuotaResponse.parse({
+      snapshots: [],
+      refreshed_at: null,
+      absences: [
+        {
+          subject: { harness: "claude", credential_route: "vendor_native", subject_id: "work" },
+          reason: "auth_revoked",
+          detail: "Earlier usage endpoint rejection",
+          observed_at: new Date(Date.now() - 10_000).toISOString(),
+        },
+      ],
+    });
+    const svc = services({ readQuota: quota, refreshedQuota: quota });
+    expect((await svc.credentialProfiles()).profiles[0]?.status.verification).toBe("failed");
+    const before = gatewayMock.profileProbeCalls.length;
+    const binding = credentialUnusableLedger.bind({
+      harnessId: "claude",
+      profileId: "work",
+      route: "vendor_native",
+      requestedModel: "test-model",
+    });
+    credentialUnusableLedger.honorBound(binding, "test-model");
+    const healed = await svc.credentialProfiles();
+    expect(healed.profiles[0]?.status.verification).toBe("passed");
+    expect(gatewayMock.profileProbeCalls).toHaveLength(before);
+    const snapshot = await svc.credentialProfiles({ snapshot: true });
+    expect(snapshot).toHaveProperty("quota.absences.0.reason", "auth_revoked");
+    expect(JSON.stringify(snapshot)).not.toContain('"honored"');
+    expect(snapshot.profiles[0]?.status.verification).toBe("passed");
   });
 
   it("flips the profile's durable enabled flag and returns the receipt", async () => {
@@ -587,6 +706,7 @@ describe("updateCredentialProfile (INV-135 Enabled toggle) + accounts projection
     expect(snapshot.quota.snapshots).toEqual(
       refreshedQuota.snapshots.map((quota) => ({
         ...quota,
+        snapshot_id: `claude\0vendor_native\0${quota.subject.subject_id ?? ""}\0claude_oauth_usage`,
         availability: {
           state: "available",
           blocking_constraints: [],

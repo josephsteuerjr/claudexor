@@ -24,16 +24,18 @@ import type {
   CredentialProfile,
   CredentialProfileStatus,
   CredentialUnusableObservation,
+  CredentialRoute,
 } from "@claudexor/schema";
-import { liveUnusableFor } from "./credential-cooldown.js";
 import { staticRotationCandidates, type ProfilePolicy } from "./credential-profile-rotation.js";
 import {
   probeCredentialProfileStatus,
   profileStatusAdmits,
   vendorVerifiedProfileStatus,
+  vendorCredentialObservation,
   type VendorQuotaObservations,
 } from "./credential-profiles.js";
 import type { TransientFailureObservation } from "./transientClassify.js";
+import { composeCredentialProfileEvidence } from "./account-evidence.js";
 
 /** Bounded per-code TTLs (clearing contract, half one: self-expiry). A vendor
  * 401/403 is high-confidence and worth hours; an entitlement/probe verdict can
@@ -64,6 +66,32 @@ function observation(
   };
 }
 
+/** The cheap typed stream intake. No profile probing or routing policy. */
+export function credentialStreamRefusal(args: {
+  harnessId: string;
+  profileId: string | null;
+  model: string | null;
+  route?: CredentialRoute;
+  refusal: TransientFailureObservation;
+  now?: Date;
+}): CredentialUnusableObservation | null {
+  if (
+    args.refusal.retryable ||
+    !["auth_failed", "capability_refused"].includes(args.refusal.category)
+  )
+    return null;
+  return {
+    ...observation(
+      { harnessId: args.harnessId, profileId: args.profileId, now: args.now ?? new Date() },
+      args.refusal.category === "auth_failed" ? "auth_revoked" : "capability_refused",
+      "attempt_stream",
+      args.refusal.category === "auth_failed" ? null : args.model,
+      args.refusal.adapterCode,
+    ),
+    ...(args.route ? { credential_route: args.route } : {}),
+  };
+}
+
 /**
  * The differential verdict for ONE subject, from evidence that already exists.
  * Returns a typed observation ONLY when the evidence distinguishes a dead
@@ -75,6 +103,7 @@ export async function differentialSubjectVerdict(args: {
   /** The triggering subject: a pinned profile, or null for the default. */
   profile: CredentialProfile | null;
   model: string | null;
+  route?: CredentialRoute | null;
   quota: VendorQuotaObservations;
   /** THIS try's typed failure observations from the attempt stream. */
   transients: readonly TransientFailureObservation[];
@@ -83,6 +112,13 @@ export async function differentialSubjectVerdict(args: {
   now?: Date;
 }): Promise<CredentialUnusableObservation | null> {
   const profileId = args.profile?.profile_id ?? null;
+  const route =
+    args.route ??
+    (args.profile
+      ? args.profile.credential_kind === "api_key"
+        ? "managed_api_key"
+        : "vendor_native"
+      : null);
   const ctx = { harnessId: args.harnessId, profileId, now: args.now ?? new Date() };
   // 1. The attempt's own stream: a typed NON-RETRYABLE auth/entitlement
   // refusal the vendor just sent under this exact credential. An auth
@@ -92,30 +128,38 @@ export async function differentialSubjectVerdict(args: {
     (t) => !t.retryable && (t.category === "auth_failed" || t.category === "capability_refused"),
   );
   if (refusal) {
-    return observation(
-      ctx,
-      refusal.category === "auth_failed" ? "auth_revoked" : "capability_refused",
-      "attempt_stream",
-      refusal.category === "auth_failed" ? null : args.model,
-      refusal.adapterCode,
-    );
+    return credentialStreamRefusal({
+      ...ctx,
+      model: args.model,
+      route: route ?? undefined,
+      refusal,
+    });
   }
   // 2. The quota poller's last authenticated vendor contact: a typed
   // `auth_revoked` absence means the vendor rejected this subject's own token.
-  const revoked = args.quota.absences.find(
-    (a) =>
-      a.subject.harness === args.harnessId &&
-      (a.subject.subject_id ?? null) === profileId &&
-      a.reason === "auth_revoked",
-  );
-  if (revoked) return observation(ctx, "auth_revoked", "vendor_poller", null, revoked.detail);
+  const quota = route
+    ? {
+        snapshots: args.quota.snapshots.filter((item) => item.subject.credential_route === route),
+        absences: args.quota.absences.filter((item) => item.subject.credential_route === route),
+        honored: args.quota.honored?.filter((item) => item.credential_route === route),
+      }
+    : args.quota;
+  const vendor = vendorCredentialObservation(quota, args.harnessId, profileId);
+  if (vendor?.outcome === "revoked")
+    return observation(
+      { ...ctx, now: new Date(vendor.observed_at) },
+      "auth_revoked",
+      "vendor_poller",
+      null,
+      vendor.detail,
+    );
   // 3. The local doctor probe (pinned profiles only — the default subject has
   // no per-profile probe surface): a FAILED verification, vendor overlay
   // included, is a dead-credential fact the quota path cannot see.
   if (args.profile && args.probe) {
     const status = vendorVerifiedProfileStatus(
       await probeCredentialProfileStatus(args.profile, args.probe),
-      args.quota,
+      quota,
     );
     if (status.verification === "failed") {
       return observation(ctx, "verification_failed", "local_probe", null, status.detail ?? null);
@@ -136,6 +180,7 @@ export function currentSubjectProber(args: {
   harnessId: string;
   profile: CredentialProfile | null;
   model: string | null;
+  route?: CredentialRoute | null;
   quota: VendorQuotaObservations;
   transients: readonly TransientFailureObservation[];
   probe?: (profile: CredentialProfile) => Promise<CredentialProfileStatus>;
@@ -185,21 +230,23 @@ export async function readyProfilesForRotation(args: {
       profile,
       // Rotating INTO a profile the vendor has already rejected would spend a
       // whole attempt to rediscover the 401 the poller reported a minute ago.
-      status: vendorVerifiedProfileStatus(
+      status: composeCredentialProfileEvidence(
         await probeCredentialProfileStatus(profile, args.probe),
-        args.quota,
+        {
+          quota: args.quota,
+          unusable: args.unusable,
+          model: args.model,
+          route: profile.credential_kind === "api_key" ? "managed_api_key" : "vendor_native",
+        },
       ),
     })),
   );
   return new Set(
     entries
-      .filter(
-        ({ profile, status }) =>
-          // Pool and rotation choices are unpinned by construction (a pin
-          // never rotates): a last positive after a timeout may admit (#363).
-          profileStatusAdmits(profile, status, { unpinned: true }) &&
-          liveUnusableFor(args.unusable ?? [], args.harnessId, profile.profile_id, args.model) ===
-            null,
+      .filter(({ profile, status }) =>
+        // Pool and rotation choices are unpinned by construction (a pin
+        // never rotates): a last positive after a timeout may admit (#363).
+        profileStatusAdmits(profile, status, { unpinned: true }),
       )
       .map(({ profile }) => profile.profile_id),
   );

@@ -228,6 +228,128 @@ async function fixture(options: { lazy?: boolean; adapter?: ModelAdapter } = {})
 }
 
 describe("production model service composition", () => {
+  it("retains a dispatched model refusal at model scope while an unqualified catalog remains usable", async () => {
+    const f = await fixture();
+    f.failures.a = "model_unavailable";
+    f.failureContext.a = { httpStatus: 404, vendorCode: "model_not_found" };
+    const failed = await f.run({ mode: "pin", profileId: "a" });
+    expect(failed.problem?.code).toBe("model_unavailable");
+    expect(f.unusable.live()).toMatchObject([
+      { profile_id: "a", model: "test-model", code: "capability_refused" },
+    ]);
+    expect((await f.run()).dispatch.route?.credentialProfileId).toBe("b");
+    await expect(f.services.routes.modelCatalog("codex", "a")).resolves.toMatchObject({
+      credentialProfileId: "a",
+    });
+  });
+
+  it("does not turn a generic pre-dispatch model preparation failure into an account restriction", async () => {
+    const f = await fixture();
+    f.invoke.mockImplementationOnce(async (request, context) =>
+      ModelCallResult.parse({
+        outcome: "failed",
+        message: null,
+        route: {
+          source: "codex",
+          credentialProfileId: context.profile.profile_id,
+          accountFingerprint: context.profile.profile_id,
+          model: request.model,
+        },
+        usage: {},
+        cost: { knowledge: "unknown", billing: "unknown", source: "fixture", provenance: [] },
+        appliedOptions: {},
+        problem: { code: "model_unavailable", message: "preparation failed", retryable: false },
+      }),
+    );
+    await f.run({ mode: "pin", profileId: "a" });
+    expect(f.unusable.live()).toEqual([]);
+    expect((await f.run({ mode: "pin", profileId: "a" })).state).toBe("succeeded");
+  });
+
+  it.each(["late_failure", "late_success", "concurrent_success"] as const)(
+    "retains operation results without allowing %s to overwrite newer account evidence",
+    async (scenario) => {
+      const f = await fixture();
+      if (scenario === "late_failure") {
+        f.failures.a = "auth_required";
+        f.failureContext.a = { httpStatus: 401 };
+      }
+      let release!: () => void;
+      let started!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const active = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const invoke = f.invoke.getMockImplementation()!;
+      f.invoke.mockImplementationOnce(async (request, context) => {
+        const result = await invoke(request, context);
+        started();
+        await gate;
+        return result;
+      });
+      const pending = f.run({ mode: "pin", profileId: "a" });
+      await active;
+      if (scenario !== "concurrent_success") f.unusable.clearSubject("codex", "a");
+      if (scenario !== "late_failure")
+        f.unusable.record({
+          harness_id: "codex",
+          profile_id: "a",
+          credential_route: "vendor_native",
+          model: null,
+          code: "auth_revoked",
+          source: "attempt_stream",
+          detail: "newer refusal",
+          observed_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        });
+      release();
+      const result = await pending;
+      expect(result.state).toBe(scenario === "late_failure" ? "failed" : "succeeded");
+      if (scenario === "late_failure") {
+        expect(result.problem?.code).toBe("auth_required");
+        expect(f.unusable.live()).toEqual([]);
+        expect(f.quota.read().snapshots).toEqual([]);
+      } else expect(f.unusable.live()).toMatchObject([{ detail: "newer refusal" }]);
+      expect(f.invoke).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("binds a catalog refusal before its RPC, so a later login cannot be poisoned", async () => {
+    const f = await fixture();
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const active = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    f.catalog.mockImplementationOnce(async () => {
+      started();
+      await gate;
+      throw Object.assign(new Error("vendor refusal"), {
+        problem: ControlProblem.parse({
+          code: "auth_required",
+          message: "vendor refusal",
+          retryable: false,
+        }),
+      });
+    });
+    const pending = f.services.routes.modelCatalog("codex", "a");
+    const settled = pending.catch((error: unknown) => error);
+    await active;
+    f.unusable.clearSubject("codex", "a");
+    release();
+    expect(await settled).toMatchObject({ problem: { code: "auth_required" } });
+    expect(f.unusable.live()).toEqual([]);
+    expect(f.invoke).not.toHaveBeenCalled();
+    await expect(f.services.routes.modelCatalog("codex", "a")).resolves.toMatchObject({
+      credentialProfileId: "a",
+    });
+  });
+
   it("preserves raw Ultra preference order through catalog parsing into the only generation", async () => {
     const provider = vi.fn<typeof fetch>(async (_url, init) => {
       if (init?.method !== "POST")
@@ -832,7 +954,7 @@ describe("production model service composition", () => {
     g.failures.a = "auth_required";
     await g.run({ mode: "pin", profileId: "a" });
     expect(g.unusable.live()).toMatchObject([
-      { profile_id: "a", code: "auth_revoked", model: null, detail: "auth_required" },
+      { profile_id: "a", code: "auth_revoked", model: null, detail: "authentication_failed" },
     ]);
     expect(g.quota.read().snapshots).toEqual([]);
   });

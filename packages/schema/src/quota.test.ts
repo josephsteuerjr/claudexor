@@ -37,11 +37,13 @@ describe("quotaSnapshotAvailability", () => {
       "codex_app_server",
     ]);
     expect(QUOTA_SOURCE_TRAITS.claude_statusline).toEqual({
+      snapshotMode: "full",
       vendorAuthenticated: false,
       refreshDemandHarness: null,
       producedByRefresher: true,
     });
     expect(QUOTA_SOURCE_TRAITS.claude_api_retry).toEqual({
+      snapshotMode: "full",
       vendorAuthenticated: false,
       refreshDemandHarness: null,
       producedByRefresher: false,

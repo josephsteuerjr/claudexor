@@ -15,12 +15,12 @@ import {
 } from "@claudexor/core";
 import {
   credentialPoolExhausted,
-  liveUnusableFor,
   profileQuotaBlock,
   type PoolExhaustionCandidate,
   type QuotaBlock,
 } from "./credential-cooldown.js";
 import { readyProfilesForRotation } from "./credential-differential.js";
+import { applicableCredentialUnusable } from "./account-evidence.js";
 import { preflightDefaultSubject } from "./credential-preflight.js";
 import {
   effectiveLimitAction,
@@ -210,8 +210,15 @@ function poolExhaustionCandidates(ctx: AccountResolutionContext, ready: Readonly
         : profileQuotaBlock(snapshots, harnessId, row.profile_id, limitSubjectRoute(row), model);
       const vendor = vendorCredentialObservation(ctx.quota, harnessId, row.profile_id);
       const dead =
-        liveUnusableFor(ctx.unusable, harnessId, row.profile_id, model) ??
-        (vendor?.outcome === "revoked" ? { code: "auth_revoked" } : null);
+        applicableCredentialUnusable(
+          { harness_id: harnessId, profile_id: row.profile_id },
+          {
+            unusable: ctx.unusable,
+            quota: ctx.quota,
+            model,
+            route: row.credential_kind === "api_key" ? "managed_api_key" : "vendor_native",
+          },
+        ) ?? (vendor?.outcome === "revoked" ? { code: "auth_revoked" } : null);
       // Label precedence mirrors PR-A's rotationExhaustionCandidates: a
       // not-ready row is not a POOL MEMBER, so its windows never join the
       // earliest-reset fold (an unready row's reset promises no reopen).
@@ -290,7 +297,15 @@ export async function resolveAccountForRun(
     // A7: a prior typed auth/credential failure is stronger than the adapter's
     // bounded stale LKG. Check the ledger before quota or stale admission so a
     // revoked pinned token can never reach the vendor CLI.
-    const dead = liveUnusableFor(ctx.unusable, harnessId, pinned.profile_id, model);
+    const dead = applicableCredentialUnusable(
+      { harness_id: harnessId, profile_id: pinned.profile_id },
+      {
+        unusable: ctx.unusable,
+        quota,
+        model,
+        route: pinned.credential_kind === "api_key" ? "managed_api_key" : "vendor_native",
+      },
+    );
     if (dead) throw pinnedCredentialUnusable(pinned.profile_id, harnessId, dead);
     const breach = profileHeadroomBreach(
       snapshots,
@@ -426,7 +441,17 @@ export async function resolveAccountForRun(
     // row at this composition point too (this file's contract: condemned rows
     // are refused at readiness composition, never re-discovered by spending
     // an attempt) — the binding re-pools with the disclosed lane switch.
-    const dead = bound ? liveUnusableFor(ctx.unusable, harnessId, boundId, model) : null;
+    const dead = bound
+      ? applicableCredentialUnusable(
+          { harness_id: harnessId, profile_id: boundId },
+          {
+            unusable: ctx.unusable,
+            quota,
+            model,
+            route: "vendor_native",
+          },
+        )
+      : null;
     if (ctx.excludedProfileIds?.has(boundId)) {
       boundSwitchReason = "the bound account does not support the requested model";
     } else if (bound && dead) {

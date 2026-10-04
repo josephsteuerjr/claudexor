@@ -258,7 +258,7 @@ describe("codex live-message fixture (turn/steer)", () => {
     ]);
     // The vendor echoed the steer as a userMessage carrying our clientId → one
     // typed receipt; the model answered MANGO and steps 4..12 never ran.
-    expect(events.filter((event) => event.type === "status")).toEqual([
+    expect(events.filter((event) => event.type === "status" && !event.quota)).toEqual([
       expect.objectContaining({
         payload: {
           code: "live_input_delivered",
@@ -267,6 +267,14 @@ describe("codex live-message fixture (turn/steer)", () => {
         },
       }),
     ]);
+    const quotaEvents = events.filter((event) => event.quota);
+    expect(quotaEvents).toHaveLength(4);
+    expect(quotaEvents.every((event) => event.quota?.source === "codex_app_server_event")).toBe(
+      true,
+    );
+    expect(
+      quotaEvents.every((event) => event.type === "status" && !event.usage && !event.rate_limit),
+    ).toBe(true);
     const expectations = manifest.fixtures[name]?.expectations;
     expect(expectations).toBeTruthy();
     expect(streamExpectationViolations(events, expectations!)).toEqual([]);
@@ -277,14 +285,14 @@ describe("codex live-message fixture (turn/steer)", () => {
     expect(stats.toolResults).toBe(3);
     expect(stats.statuslessToolResults).toBe(0);
     expect(stats.usageEvents).toBe(4);
-    // Clean terminal: the steer tainted nothing. The 26 dropped frames are the
+    // Clean terminal: steer and quota tainted nothing. The 22 dropped frames are the
     // recording's unmapped notifications (12 agentMessage deltas, 3 command
-    // output deltas, 4 rate-limit updates, account/updated, remoteControl,
+    // output deltas, account/updated, remoteControl,
     // thread/started, the clientId:null prompt pair, two empty agentMessage
     // item/started frames); the two echo frames are NOT among them.
     expect(events.at(-1)).toMatchObject({
       type: "completed",
-      payload: { native_session_id: "thread-fixture", dropped_unrecognized_events: 26 },
+      payload: { native_session_id: "thread-fixture", dropped_unrecognized_events: 22 },
     });
     expect(events.at(-1)?.payload).not.toHaveProperty("harness_reported_error");
   });

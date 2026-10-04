@@ -3,6 +3,9 @@ import type { HarnessEvent, HarnessRunSpec, HarnessRequestRefusal } from "@claud
 import { nowIso } from "@claudexor/util";
 import { CODEX_EFFORT_SNAPSHOT, codexEffortFor, type CodexEffortCatalog } from "./effort-probe.js";
 import { parseCodexEvent, type CodexParseState } from "./parse.js";
+import { codexRateLimitEvents } from "./quota.js";
+import { CodexRpcError } from "./rpc-error.js";
+export { CodexRpcError } from "./rpc-error.js";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -14,18 +17,6 @@ export function asObject(value: unknown): JsonObject | null {
 
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** A JSON-RPC error answer, kept typed so callers classify by provenance, never by prose (INV-049). */
-export class CodexRpcError extends Error {
-  constructor(
-    readonly code: number | null,
-    message: string,
-    readonly data: unknown = null,
-  ) {
-    super(message);
-    this.name = "CodexRpcError";
-  }
 }
 
 /** Native machine evidence, never a match against the vendor's error wording. */
@@ -403,6 +394,7 @@ export function codexAppServerEvents(
   const method = notification["method"];
   const params = asObject(notification["params"]);
   if (!params) return null;
+  if (method === "account/rateLimits/updated") return codexRateLimitEvents(params, sessionId);
   if (method === "error" && params["willRetry"] === true) {
     const message = asObject(params["error"])?.["message"];
     return [

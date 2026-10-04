@@ -603,6 +603,12 @@ frequency and volume are. The contracts:
     api_key_route`); an unpinned composer chip stays
     "Automatic" because next-up may rotate. Auth remains the key management surface.
 
+    A current credential-wide refusal uses that same compact readiness status and
+    its detail, retaining the account name, email and last-known quota. A refusal
+    scoped to one model does not mark the whole row failed; the engine applies it
+    when computing `next_up` for the configured model. No second auth indicator
+    or additional client-side readiness calculation is introduced.
+
     Do not globally rename generic `Automatic`: the unpinned route may use the
     policy API-key fallback, which is not an account row.
 

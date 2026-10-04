@@ -1,11 +1,12 @@
 import { credentialProfilePolicyState, type HarnessAdapter } from "@claudexor/core";
 import {
-  liveUnusableFor,
+  composeCredentialProfileEvidence,
+  applicableCredentialUnusable,
   profileQuotaBlock,
   probeCredentialProfileStatus,
   profileStatusAdmits,
   resolveCredentialProfile,
-  vendorVerifiedProfileStatus,
+  type VendorQuotaObservations,
 } from "@claudexor/orchestrator";
 import {
   ControlProblem,
@@ -13,14 +14,12 @@ import {
   type CredentialProfile,
   type CredentialUnusableObservation,
   type GlobalConfig,
-  type QuotaAbsence,
-  type QuotaSnapshot,
 } from "@claudexor/schema";
 import { redactSecrets } from "@claudexor/util";
 
 export interface AccountCatalogContext {
   config: GlobalConfig;
-  quota: { snapshots: readonly QuotaSnapshot[]; absences: readonly QuotaAbsence[] };
+  quota: VendorQuotaObservations;
   unusable?: readonly CredentialUnusableObservation[];
 }
 
@@ -82,27 +81,36 @@ async function accountAvailability(
         "The enabled profile set exceeds this platform's credential policy",
       ),
     );
-  const dead = liveUnusableFor(context.unusable ?? [], profile.harness_id, profile.profile_id);
-  if (dead)
-    return unavailable(
-      catalogProblem(
-        dead.code === "auth_revoked" ? "auth_required" : "credential_unusable",
-        "Current vendor evidence marks this credential unavailable",
-        { observedAt: dead.observed_at },
-      ),
-    );
-  const status = vendorVerifiedProfileStatus(
+  const evidence = {
+    quota: context.quota,
+    unusable: context.unusable ?? [],
+    model: null,
+    route:
+      profile.credential_kind === "api_key"
+        ? ("managed_api_key" as const)
+        : ("vendor_native" as const),
+  };
+  const status = composeCredentialProfileEvidence(
     await probeCredentialProfileStatus(profile, adapter?.probeCredentialProfile?.bind(adapter)),
-    context.quota,
+    evidence,
   );
   if (!profileStatusAdmits(profile, status)) {
-    const revoked = status.verification_source === "vendor" && status.verification === "failed";
+    const refusal = applicableCredentialUnusable(status, evidence);
+    const revoked = refusal
+      ? refusal.code === "auth_revoked"
+      : status.verification_source === "vendor" && status.verification === "failed";
     const unknown = !revoked && (status.availability === "unknown" || status.stale === true);
     return {
       ...row,
       availability: unknown ? "unknown" : "unavailable",
       problem: catalogProblem(
-        unknown ? "catalog_account_status_unknown" : revoked ? "auth_required" : "auth_unavailable",
+        unknown
+          ? "catalog_account_status_unknown"
+          : revoked
+            ? "auth_required"
+            : refusal
+              ? "credential_unusable"
+              : "auth_unavailable",
         "The account has no verified current catalog credential",
         { observedAt: status.last_verified_at },
       ),

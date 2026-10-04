@@ -9,7 +9,6 @@ import {
   differentialSubjectVerdict,
   readyProfilesForRotation,
 } from "./credential-differential.js";
-import { liveUnusableFor } from "./credential-cooldown.js";
 import type { TransientFailureObservation } from "./transientClassify.js";
 
 const work: CredentialProfile = {
@@ -271,19 +270,5 @@ describe("readyProfilesForRotation (A7 live-observation refusal at the ONE compo
     const scoped = obs({ profile_id: "other", code: "capability_refused", model: "opus" });
     expect(await readyWith([scoped], "opus")).toEqual(new Set());
     expect(await readyWith([scoped], "sonnet")).toEqual(new Set(["other"]));
-  });
-});
-
-describe("liveUnusableFor (the one matcher)", () => {
-  it("matches subject + model + liveness exactly", () => {
-    const wide = obs({});
-    expect(liveUnusableFor([wide], "claude", "work")).toBe(wide);
-    expect(liveUnusableFor([wide], "claude", "work", "opus")).toBe(wide);
-    expect(liveUnusableFor([wide], "claude", null)).toBeNull();
-    expect(liveUnusableFor([wide], "codex", "work")).toBeNull();
-    const scoped = obs({ model: "opus" });
-    expect(liveUnusableFor([scoped], "claude", "work", "opus")).toBe(scoped);
-    expect(liveUnusableFor([scoped], "claude", "work")).toBeNull();
-    expect(liveUnusableFor([scoped], "claude", "work", "sonnet")).toBeNull();
   });
 });

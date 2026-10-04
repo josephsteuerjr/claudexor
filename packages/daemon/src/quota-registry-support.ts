@@ -7,6 +7,7 @@
 import {
   REACTIVE_COOLDOWN_SOURCE,
   legacyV320QuotaSource,
+  quotaSnapshotIdentity,
   vendorResetDayCooldownEnd,
   type CredentialRoute,
   type HarnessEvent,
@@ -81,13 +82,7 @@ export function sameQuotaEvidence(a: QuotaSnapshot, b: QuotaSnapshot): boolean {
 }
 
 export function snapshotKey(snapshot: QuotaSnapshot): string {
-  const subject = snapshot.subject;
-  return [
-    subject.harness,
-    subject.credential_route,
-    subject.subject_id ?? "",
-    snapshot.source,
-  ].join("\0");
+  return quotaSnapshotIdentity(snapshot);
 }
 
 /** Exact durable payload accepted by the strict v3.2.0 quota schemas. Keep an

@@ -50,6 +50,7 @@ import {
   CredentialRoute,
   QuotaSnapshot as QuotaSnapshotSchema,
   QuotaSource,
+  QuotaWindowObservation,
   TERMINAL_CONTROL_SETUP_JOB_STATES,
 } from "@claudexor/schema";
 import { legacyV320Snapshot, snapshotKey } from "./quota-registry-support.js";
@@ -85,6 +86,15 @@ function journalFoldVerdict(record: FoldRecord): FoldVerdict {
         return slotOrKeep(scopedPreparedKey(record.payload), (key) => `q:${key}:p`);
       case "quota.snapshot.upserted":
         return slotOrKeep(upsertedKey(record.payload), (key) => `q:${key}:u`);
+      case "quota.window.observed": {
+        const observation = QuotaWindowObservation.safeParse(record.payload);
+        if (!observation.success) return KEEP;
+        const snapshot = observation.data.snapshot;
+        return {
+          slot: `q:window:${snapshotKey(snapshot)}`,
+          group: quotaWindowGroup(snapshot.subject.harness, snapshot.subject.subject_id),
+        };
+      }
       case "quota.subject.removed":
         return removedSubjectVerdict(record.payload);
       case "thread.head.updated":
@@ -216,7 +226,7 @@ function removedSubjectVerdict(payload: unknown): FoldVerdict {
   const subjectId = value?.subject_id;
   if (harness === null || (typeof subjectId !== "string" && subjectId !== null)) return KEEP;
   const subject = subjectId ?? "";
-  const retire: string[] = [];
+  const retire: string[] = [quotaWindowGroup(harness, subjectId)];
   for (const route of CredentialRoute.options) {
     for (const source of QuotaSource.options) {
       const key = [harness, route, subject, source].join("\0");
@@ -224,6 +234,10 @@ function removedSubjectVerdict(payload: unknown): FoldVerdict {
     }
   }
   return { slot: `q:${harness}\0${subject}:removed`, retire };
+}
+
+function quotaWindowGroup(harness: string, subjectId: string | null): string {
+  return `q:windows:${JSON.stringify([harness, subjectId])}`;
 }
 
 function setupSavedVerdict(payload: unknown): FoldVerdict {
