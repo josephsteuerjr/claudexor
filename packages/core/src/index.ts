@@ -18,6 +18,7 @@ export * from "./auth-readiness.js";
 export * from "./auth-capability-verifier.js";
 export * from "./env-scope.js";
 export * from "./runtime-env.js";
+export * from "./npm-launch.js";
 export * from "./executable-inspection.js";
 export * from "./instructions.js";
 export * from "./browser-mcp.js";

@@ -581,6 +581,24 @@ describe("Codex transport-aware native doctor", () => {
 });
 
 describe("Codex missing-CLI diagnosis", () => {
+  it("discloses a broken preferred entry without rejecting the working fallback", async () => {
+    const advisory = "Using /fixture/codex; skipped /preferred/codex (symlink target is missing)";
+    const adapter = createCodexAdapter({
+      ...NO_EFFORT_PROBE,
+      detectVersion: async () => "codex-cli 0.156.1",
+      brokenInstallAdvisory: () => advisory,
+      probeLogin: async () => ({ authed: true, method: "chatgpt", probeError: null }),
+      hasApiKey: () => false,
+    });
+    const report = await adapter.doctor({ cwd: "/fixture", authPreference: "subscription" });
+    expect(report.status).toBe("ok");
+    expect(report.checks.find((check) => check.id === "installed")).toMatchObject({
+      status: "pass",
+      detail: expect.stringContaining(advisory),
+    });
+    expect(report.reasons).toEqual([]);
+  });
+
   // This fixture models PATH lookup, independently of an operator's explicit
   // binary override. Version/advisory I/O is injected, so no vendor is probed.
   async function pathMissReport(advisory: string | null) {

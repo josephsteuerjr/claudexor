@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { HarnessRunSpec, type HarnessEvent } from "@claudexor/schema";
@@ -617,4 +620,43 @@ describe("runCliHarness session onIo + hold", () => {
     }
     expect(calls).toEqual(["io", "null"]);
   }, 15_000);
+});
+
+it.each([true, false])("retains fallback provenance with native-start=%s", async (started) => {
+  const root = mkdtempSync(join(tmpdir(), "runloop-fallback-"));
+  try {
+    const first = join(root, "first"),
+      second = join(root, "second");
+    mkdirSync(first);
+    mkdirSync(second);
+    const name = process.platform === "win32" ? "fixture.exe" : "fixture";
+    const broken = join(first, name),
+      working = join(second, name);
+    symlinkSync(join(root, "missing"), broken);
+    symlinkSync(process.execPath, working);
+    const events: HarnessEvent[] = [];
+    for await (const event of runCliHarness({
+      bin: name,
+      args: ["-e", `console.log('{}'); process.exit(${started ? 0 : 17})`],
+      spec: spec(),
+      env: { PATH: [first, second].join(delimiter) },
+      parseEvent: (_obj, session_id) =>
+        started ? [{ type: "started", session_id, ts: new Date().toISOString() }] : [],
+    }))
+      events.push(event);
+    const advisory = events.find((event) => event.payload?.launch_advisory === true);
+    if (started) {
+      expect(events[0]?.type).toBe("started");
+      expect(advisory?.type).toBe("status");
+      expect(advisory?.text).toContain(broken);
+      expect(advisory?.text).toContain(working);
+    } else {
+      expect(advisory).toBeUndefined();
+      expect(events.at(-1)?.payload?.launch_advisory).toContain(broken);
+      expect(events.at(-1)?.payload?.launch_advisory).toContain(working);
+    }
+    expect(events.at(-1)?.payload?.exit_code).toBe(started ? 0 : 17);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

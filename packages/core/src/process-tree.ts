@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 /**
  * Whole-tree termination (QA-027). `spawnProcess` puts the direct harness child
  * in its OWN process group so a cancel/timeout can signal the group. But a
@@ -511,4 +512,24 @@ export async function reapProcessTree(
     }
     await sleep(probeIntervalMs);
   }
+}
+
+/** Stop a directly owned child before its wrapper can orphan the vendor payload.
+ * The ChildProcess handle pins ownership until exit; preserve Windows' existing
+ * weaker whole-tree proof and return a failed taskkill to callers needing it. */
+export function killOwnedProcessTree(
+  child: ChildProcess,
+  signal: NodeJS.Signals = "SIGTERM",
+  platform: NodeJS.Platform = process.platform,
+  killTree: typeof killWindowsProcessTree = killWindowsProcessTree,
+): WindowsKillTreeResult | null {
+  if (child.exitCode != null || child.signalCode != null) return null;
+  if (platform === "win32" && child.pid) {
+    const result = killTree(child.pid);
+    if (result.status !== "failed") return result;
+    child.kill(signal);
+    return result;
+  }
+  child.kill(signal);
+  return null;
 }

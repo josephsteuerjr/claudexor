@@ -7,8 +7,6 @@ import {
 } from "./processing.js";
 import type {
   AccessProfile,
-  AuthSourceReadiness,
-  ConformanceReport,
   CredentialProfile,
   CredentialProfileStatus,
   EffortHint,
@@ -16,27 +14,22 @@ import type {
   HarnessManifest,
   HarnessRunSpec,
 } from "@claudexor/schema";
-import {
-  ConformanceReport as ConformanceReportSchema,
-  HarnessManifest as HarnessManifestSchema,
-} from "@claudexor/schema";
-import type { DoctorSpec, HarnessAdapter, InteractionChannel } from "@claudexor/core";
+import { HarnessManifest as HarnessManifestSchema } from "@claudexor/schema";
+import type { HarnessAdapter, InteractionChannel } from "@claudexor/core";
 import {
   abortSignalFromSpec,
+  composeSpawnEnv,
+  resolveHarnessCommandOnPath,
   HarnessUnavailableError,
   throwIfEffortRejected,
   interactionChannelFromSpec,
   needsScopedHomeKeychainBridge,
   normalizeEffort,
   providerScrubEnv,
-  resolveHarnessBinary,
   runCapture,
   runCliHarness,
   PROVIDER_SECRET_ENV,
   selectStrictAuthRoute,
-  selectedAuthAvailable,
-  selectedAuthReady,
-  shouldVerifyApiKey,
 } from "@claudexor/core";
 import { resolveSecret } from "@claudexor/secrets";
 import { CLAUDEXOR_VERSION, nowIso, redactSecrets } from "@claudexor/util";
@@ -46,14 +39,15 @@ import {
   CLAUDE_KNOWN_MODELS_VERIFIED_AGAINST,
 } from "./capability-profile.js";
 export { CLAUDE_MANAGED_LOGIN, claudeQuotaModelAliases } from "./capability-profile.js";
-import { claudeNativeLoginRemedy } from "./doctor-remedy.js";
+import { claudeInstallation } from "./doctor-remedy.js";
+import { claudeDoctor } from "./doctor.js";
 import { claudeNativeHomeEnv, defaultNativeClaudeConfigDir } from "./native-home.js";
 export { claudeAccountIdentity, defaultNativeClaudeConfigDir } from "./native-home.js";
 import { createClaudeParser } from "./parse.js";
+import { withClaudeApiFailureParser, withClaudeVendorFailure } from "./vendor-failure.js";
 import { probeClaudeCredentialProfile, resolveClaudeProfileRoute } from "./profile.js";
 export { canonicalProfileConfigDir } from "./profile.js";
 import {
-  claudeAuthSourceReadiness,
   probeClaudeAuthStatus,
   redactClaudeDoctorDetail,
   staleClaudeAuthStatusEvent,
@@ -254,8 +248,9 @@ export type ClaudeProfileRuntimeDeps = Pick<
   "probeAuthStatus" | "resolveProfileSecret"
 >;
 
-type ClaudeRuntimeDeps = {
+export type ClaudeRuntimeDeps = {
   detectVersion: typeof detectClaudeVersion;
+  installation: typeof claudeInstallation;
   probeAuthStatus: typeof probeAuthStatus;
   anthropicApiKey: typeof anthropicApiKey;
   claudeOAuthToken: typeof claudeOAuthToken;
@@ -275,6 +270,7 @@ type ClaudeRuntimeDeps = {
 export function createClaudeAdapter(deps: Partial<ClaudeRuntimeDeps> = {}): HarnessAdapter {
   const runtime: ClaudeRuntimeDeps = {
     detectVersion: detectClaudeVersion,
+    installation: claudeInstallation,
     probeAuthStatus,
     anthropicApiKey,
     claudeOAuthToken,
@@ -300,7 +296,12 @@ export function createClaudeAdapter(deps: Partial<ClaudeRuntimeDeps> = {}): Harn
       const version = await runtime.detectVersion();
       if (version === null) {
         throw new HarnessUnavailableError(
-          "claude CLI not found on PATH (set CLAUDEXOR_CLAUDE_BIN to override)",
+          [
+            "claude CLI not found on PATH (set CLAUDEXOR_CLAUDE_BIN to override)",
+            runtime.installation(BIN).advisory,
+          ]
+            .filter(Boolean)
+            .join(" — "),
         );
       }
       const apiKey = runtime.anthropicApiKey() !== null;
@@ -388,217 +389,7 @@ export function createClaudeAdapter(deps: Partial<ClaudeRuntimeDeps> = {}): Harn
       });
     },
 
-    async doctor(_spec: DoctorSpec): Promise<ConformanceReport> {
-      const version = await runtime.detectVersion(_spec.abortSignal);
-      if (version === null) {
-        return ConformanceReportSchema.parse({
-          harness_id: "claude",
-          status: "unavailable",
-          checks: [{ id: "installed", status: "fail", detail: "claude not found on PATH" }],
-          reasons: ["claude CLI not found (install Claude Code or set CLAUDEXOR_CLAUDE_BIN)"],
-        });
-      }
-      const readonlyProfile = await runtime.probeReadonlyProfile(_spec.abortSignal);
-      const requestedSource = _spec.authSource;
-      const probeNative = requestedSource === undefined || requestedSource === "native_session";
-      const probeOAuth = requestedSource === undefined || requestedSource === "oauth_token_env";
-      const probeApi = requestedSource === undefined || requestedSource === "api_key_env";
-      const nativeEnv = probeNative ? claudeNativeEnv(_spec.env) : _spec.env;
-      const login: ClaudeAuthStatusProbe = probeNative
-        ? await runtime.probeAuthStatus(BIN, {
-            env: nativeEnv,
-            abortSignal: _spec.abortSignal,
-          })
-        : { loggedIn: false, authed: false, authMethod: null, probeError: null };
-      const nativeCliReady = login.authed && login.stale !== true;
-      // Native-session and stored setup-token proofs are separate sources.
-      const oauthToken = probeOAuth ? runtime.claudeOAuthToken() : null;
-      const oauthTokenAvailable = oauthToken !== null;
-      const apiKey = probeApi && runtime.anthropicApiKey() !== null;
-      const preference =
-        requestedSource === "native_session" || requestedSource === "oauth_token_env"
-          ? "subscription"
-          : requestedSource === "api_key_env"
-            ? "api_key"
-            : (_spec.authPreference ?? "auto");
-      const shouldSmokeOAuth =
-        probeOAuth && oauthToken !== null && !nativeCliReady && preference !== "api_key";
-      const oauthSmoke =
-        shouldSmokeOAuth && oauthToken
-          ? await runtime.smokeIsolatedOAuthToken(oauthToken, _spec.abortSignal)
-          : {
-              ok: false,
-              detail: oauthTokenAvailable
-                ? "verification not run for the unselected setup-token route"
-                : "no Claude setup-token available",
-            };
-      const nativeAvailable = login.loggedIn || oauthTokenAvailable;
-      const subscriptionReady = nativeCliReady || oauthSmoke.ok;
-      const shouldSmokeKey =
-        probeApi &&
-        shouldVerifyApiKey({ preference, apiKeyAvailable: apiKey, nativeReady: subscriptionReady });
-      const apiSmoke = shouldSmokeKey
-        ? await runtime.smokeIsolatedApiKey(_spec.abortSignal)
-        : {
-            ok: false,
-            detail: apiKey
-              ? "verification not run for the unselected API-key route"
-              : "no API key fallback available",
-          };
-      const ok = selectedAuthReady({
-        preference,
-        nativeReady: subscriptionReady,
-        apiKeyReady: apiSmoke.ok,
-      });
-      const selectedAvailable = selectedAuthAvailable({
-        preference,
-        nativeAvailable,
-        apiKeyAvailable: apiKey,
-      });
-      const probeUnknown =
-        preference !== "api_key" &&
-        (login.probeError !== null || login.stale === true) &&
-        !oauthTokenAvailable;
-      // INV-067: name the real cause + designed remedy (see doctor-remedy.ts).
-      const nativeLoginRemedy = claudeNativeLoginRemedy(nativeEnv);
-      const allIntents = [
-        "plan",
-        "spec",
-        "implement",
-        "repair",
-        "create_from_scratch",
-        "review",
-        "verify",
-        "synthesize",
-        "explain",
-        "audit",
-      ];
-      const binPath = resolveHarnessBinary(BIN);
-      const producedSources = claudeAuthSourceReadiness({
-        native: login,
-        oauthAvailable: oauthTokenAvailable,
-        oauthVerification: oauthSmoke.ok ? "passed" : shouldSmokeOAuth ? "failed" : "not_run",
-        oauthDetail: oauthSmoke.detail,
-        apiKeyAvailable: apiKey,
-        apiKeyVerification: apiSmoke.ok ? "passed" : shouldSmokeKey ? "failed" : "not_run",
-        apiKeyDetail: apiSmoke.detail,
-      });
-      const authSources: AuthSourceReadiness[] =
-        requestedSource === undefined
-          ? producedSources
-          : producedSources.filter((source) => source.source === requestedSource);
-      if (requestedSource !== undefined && authSources.length === 0) {
-        authSources.push({
-          source: requestedSource,
-          availability: "unavailable",
-          verification: "not_run",
-          detail: `Claude does not support ${requestedSource}`,
-        });
-      }
-      const authReasons = ok
-        ? []
-        : preference === "subscription"
-          ? [
-              login.stale && !oauthTokenAvailable
-                ? `Claude native-session auth-status probe is stale; using last-known-good session${
-                    login.staleAgeMs === undefined ? "" : ` (${login.staleAgeMs}ms old)`
-                  }`
-                : login.probeError && !oauthTokenAvailable
-                  ? `Claude native-session probe failed: ${redactClaudeDoctorDetail(login.probeError)}`
-                  : oauthTokenAvailable
-                    ? `Claude setup-token verification failed: ${oauthSmoke.detail}`
-                    : `Claude subscription route is not ready: ${nativeLoginRemedy}`,
-            ]
-          : preference === "api_key"
-            ? [
-                apiKey
-                  ? `isolated Claude API-key smoke failed: ${apiSmoke.detail}`
-                  : "Claude API-key route is not configured",
-              ]
-            : login.stale
-              ? [
-                  `Claude native-session auth-status probe is stale; using last-known-good session${
-                    login.staleAgeMs === undefined ? "" : ` (${login.staleAgeMs}ms old)`
-                  }`,
-                ]
-              : apiKey
-                ? [`isolated Claude API-key smoke failed: ${apiSmoke.detail}`]
-                : login.probeError
-                  ? [
-                      `Claude native-session probe failed: ${redactClaudeDoctorDetail(login.probeError)}`,
-                    ]
-                  : [`not authenticated: ${nativeLoginRemedy}`];
-      return ConformanceReportSchema.parse({
-        harness_id: "claude",
-        status: ok
-          ? readonlyProfile.supported
-            ? "ok"
-            : "degraded"
-          : selectedAvailable || probeUnknown
-            ? "degraded"
-            : "unavailable",
-        checks: [
-          {
-            id: "installed",
-            status: "pass",
-            detail: binPath ? `${version} at ${binPath}` : version,
-          },
-          {
-            id: "readonly_enforcement",
-            status: readonlyProfile.supported ? "pass" : "fail",
-            detail: readonlyProfile.detail,
-          },
-          ...(probeNative
-            ? [
-                {
-                  id: "native_session",
-                  status: nativeCliReady ? "pass" : "fail",
-                  detail: nativeCliReady
-                    ? "vendor status confirmed authMethod=claude.ai in the exact run environment"
-                    : login.stale
-                      ? `auth-status probe is stale; using last-known-good native session${
-                          login.staleAgeMs === undefined ? "" : ` (${login.staleAgeMs}ms old)`
-                        }`
-                      : login.probeError
-                        ? `auth-status probe failed (NOT an auth verdict): ${redactClaudeDoctorDetail(login.probeError)}`
-                        : login.loggedIn
-                          ? `logged in via ${login.authMethod ?? "unknown"}, not claude.ai`
-                          : "not logged in (run `claudexor auth login claude`)",
-                },
-              ]
-            : []),
-          ...(probeOAuth
-            ? [
-                {
-                  id: "oauth_setup_token",
-                  status: oauthSmoke.ok ? "pass" : shouldSmokeOAuth ? "fail" : "skip",
-                  detail: oauthSmoke.detail,
-                },
-              ]
-            : []),
-          ...(probeApi
-            ? [
-                {
-                  id: "stored_key",
-                  status: apiKey ? "pass" : "fail",
-                  detail: apiKey
-                    ? "anthropic secret/env available (API-key fallback)"
-                    : "no anthropic key fallback",
-                },
-                {
-                  id: "isolated_api_smoke",
-                  status: apiSmoke.ok ? "pass" : shouldSmokeKey ? "fail" : "skip",
-                  detail: apiSmoke.detail,
-                },
-              ]
-            : []),
-        ],
-        auth_sources: authSources,
-        enabled_intents: ok ? allIntents : [],
-        disabled_intents: ok ? [] : allIntents,
-        reasons: [...authReasons, ...(readonlyProfile.supported ? [] : [readonlyProfile.detail])],
-      });
-    },
+    doctor: (spec) => claudeDoctor(spec, runtime, claudeNativeEnv),
 
     run(spec: HarnessRunSpec): AsyncIterable<HarnessEvent> {
       return runClaude(spec, runtime, live);
@@ -926,13 +717,17 @@ async function* runClaude(
   const credentialSource = useSubscription ? subscriptionSource! : ("api_key_env" as const);
   const observeProcessing =
     processing && claudeProcessingObserver(processing, spec.processing_cost_basis!);
-  const baseParser = createClaudeParser({
-    deniedTools: toolPermissionSets(spec).deny,
-    requiredMcpServers: (spec.extra_mcp_servers ?? [])
-      .filter((server) => server.required)
-      .map((server) => server.name),
-  });
-  yield* withClaudeInstructionsFile(spec.instructions, (instructionsPath) =>
+  const baseParser = withClaudeApiFailureParser(
+    createClaudeParser({
+      deniedTools: toolPermissionSets(spec).deny,
+      requiredMcpServers: (spec.extra_mcp_servers ?? [])
+        .filter((server) => server.required)
+        .map((server) => server.name),
+    }),
+    resolveHarnessCommandOnPath(BIN, composeSpawnEnv(spec.env_inheritance, env).PATH ?? "").command
+      ?.entrypoint ?? null,
+  );
+  const events = withClaudeInstructionsFile(spec.instructions, (instructionsPath) =>
     runtime.runCliHarness({
       bin: BIN,
       args: claudeArgsForSpec(
@@ -975,4 +770,5 @@ async function* runClaude(
         : { input: spec.prompt }),
     }),
   );
+  yield* withClaudeVendorFailure(events);
 }

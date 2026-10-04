@@ -1,3 +1,4 @@
+import { prepareHarnessCommand, killOwnedProcessTree } from "@claudexor/core";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -178,12 +179,13 @@ async function readCodexCandidate(
         ? { binary: harnessBinaryIdentity(bin ?? CODEX_BIN, invocation.env) }
         : {}),
     });
-  const child = start(bin ?? CODEX_BIN, invocation.args, {
+  const command = prepareHarnessCommand(bin ?? CODEX_BIN, invocation.args, invocation.env);
+  const child = start(command.binary, command.args, {
     stdio: ["pipe", "pipe", "pipe"],
-    env: invocation.env,
+    env: command.env,
   });
   const lines = createInterface({ input: child.stdout });
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  const timeout = setTimeout(() => killOwnedProcessTree(child, "SIGKILL"), 10_000);
   child.stderr.resume();
   const responses = new Map<
     number,
@@ -286,7 +288,7 @@ async function readCodexCandidate(
     clearTimeout(timeout);
     lines.close();
     child.stdin.destroy();
-    child.kill("SIGTERM");
+    killOwnedProcessTree(child, "SIGTERM");
   }
 }
 
