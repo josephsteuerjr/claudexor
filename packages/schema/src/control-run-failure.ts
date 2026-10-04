@@ -27,6 +27,7 @@ export const RunFailureCode = z
      * member reopens — or null when any member's reset is unknown. */
     "credential_pool_exhausted",
     "input_too_large",
+    "vendor_cli_too_old",
     /* Active scoped-HOME/evidence refusals plus the historical confinement
      * decoder code. Attempt-loop failures must be listed here or
      * `declaredFailure` drops them to `code: null` and the terminal states less

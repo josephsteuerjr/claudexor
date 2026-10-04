@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { spawnSync as spawnChildSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLAUDE_VENDOR_CLI_VERSION } from "@claudexor/harness-claude";
 import { CODEX_VENDOR_CLI_VERSION } from "@claudexor/harness-codex";
@@ -130,8 +130,23 @@ const installNpmFixture = (
   );
   if (windows) {
     writeExecutable(join(root, fixture.binary), "");
-    writeExecutable(join(root, `${fixture.binary}.cmd`), "@ECHO off\r\n");
-    const binary = join(WINDOWS_CODEX_IMAGE_DIR(root), `${fixture.binary}.exe`);
+    const binary =
+      harness === "codex"
+        ? join(WINDOWS_CODEX_IMAGE_DIR(root), `${fixture.binary}.exe`)
+        : join(packageRoot, "bin", `${fixture.binary}.exe`);
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: fixture.npmPackage,
+        version: options.packageVersion ?? fixture.version,
+        bin: { [fixture.binary]: relative(packageRoot, binary) },
+      }),
+    );
+    const targetPath = relative(root, binary).split("/").join("\\");
+    writeExecutable(
+      join(root, `${fixture.binary}.cmd`),
+      `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\${targetPath}"   %*\r\n`,
+    );
     if (options.image !== false) writeExecutable(binary, options.binaryBody ?? "MZ-fixture");
     return { binary, packageRoot };
   }
@@ -461,8 +476,7 @@ describe("harness install --target local", () => {
 
   it("refuses a local Windows install typed, before side effects, for every vendor without a verified image", () => {
     for (const [harness, reason] of [
-      ["claude", "no Claudexor-verified native Windows image"],
-      ["opencode", "no Claudexor-verified native Windows image"],
+      ["opencode", "npm entrypoint has not been verified for Windows"],
       ["cursor", "not supported on Windows for cursor"],
       ["agy", "not supported on Windows for agy"],
     ] as const) {
@@ -496,7 +510,7 @@ describe("harness install --target local", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("installs codex on Windows with the embedded npm-cli.js and proves the package-native codex.exe", () => {
+  it("installs a native Codex npm bin on Windows using the embedded npm CLI", () => {
     const home = mkdtempSync(join(tmpdir(), "claudexor-win-codex-"));
     const spawn = installerSpawn({ home, harness: "codex", target: "local", layout: "win32" });
     const secrets = { OPENAI_API_KEY: "sk-never", ANTHROPIC_API_KEY: "never" };
@@ -572,6 +586,39 @@ describe("harness install --target local", () => {
     }
   });
 
+  it("installs Claude's declared Windows executable through the same npm proof", () => {
+    const home = mkdtempSync(join(tmpdir(), "claudexor-win-claude-"));
+    const spawn = installerSpawn({ home, harness: "claude", target: "local", layout: "win32" });
+    try {
+      const result = runHarnessInstaller("claude", {
+        home,
+        nodePath: "/runtime/node/node.exe",
+        target: "local",
+        platform: "win32",
+        arch: "x64",
+        spawn: spawn as never,
+        exists: () => true,
+        lock: false,
+        sourceEnv: { PATH: "" },
+      });
+      expect(result).toEqual({
+        exitCode: 0,
+        installedBinary: join(
+          vendorRoot(home, "local"),
+          "node_modules",
+          "@anthropic-ai",
+          "claude-code",
+          "bin",
+          "claude.exe",
+        ),
+        installedVersion: CLAUDE_VENDOR_CLI_VERSION,
+      });
+      expect(spawn).toHaveBeenCalledTimes(2);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a shim-only Windows install (platform package missing) as a verification failure", () => {
     const home = mkdtempSync(join(tmpdir(), "claudexor-win-shim-only-"));
     const spawn = installerSpawn({
@@ -594,7 +641,7 @@ describe("harness install --target local", () => {
         sourceEnv: { PATH: "" },
       });
       expect(result).toMatchObject({ exitCode: 1, code: "install_verification_failed" });
-      expect(result.refusal).toContain("package-native Windows image is missing");
+      expect(result.refusal).toContain("standard npm Windows entrypoint is missing");
       expect(spawn).toHaveBeenCalledOnce();
       expect(existsSync(join(vendorRoot(home, "local"), "codex.cmd"))).toBe(true);
     } finally {
@@ -978,7 +1025,7 @@ describe("harness install --target local", () => {
     const stdout = captureStdout();
     const spawn = vi.fn(() => ({ status: 0 }) as never);
     const code = harnessInstallCommand(
-      args(["harness", "install", "claude"], { target: "local", yes: true }),
+      args(["harness", "install", "opencode"], { target: "local", yes: true }),
       true,
       { platform: "win32", arch: "x64", spawn: spawn as never },
     );
@@ -989,10 +1036,9 @@ describe("harness install --target local", () => {
       dryRun: false,
       exitCode: 1,
       code: "unsupported_platform",
-      harness: "claude",
+      harness: "opencode",
       target: "local",
-      installLocation:
-        "~/.claudexor/node/node_modules/@anthropic-ai/claude-code (no Claudexor-runnable Windows image in this release)",
+      installLocation: "~/.claudexor/node/node_modules/opencode-ai (npm executable entrypoint)",
     });
     expect(spawn).not.toHaveBeenCalled();
   });
@@ -1002,8 +1048,7 @@ describe("harness install --target local", () => {
     const stdout = captureStdout();
     const stderr = captureStderr();
     const spawn = installerSpawn({ home, harness: "codex", target: "local", layout: "win32" });
-    const imageDir =
-      "~/.claudexor/node/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin";
+    const imageDir = "~/.claudexor/node/node_modules/@openai/codex (npm executable entrypoint)";
     try {
       const dryRunCode = harnessInstallCommand(
         args(["harness", "install", "codex"], { target: "local", "dry-run": true }),

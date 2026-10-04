@@ -66,7 +66,14 @@ import {
 } from "./app-server-run.js";
 import { decorateCodexEvent, type CodexEventDecoration } from "./event-decoration.js";
 
-import { BIN, detectVersion, missingCliError, missingCliReport, probeEnv } from "./missing-cli.js";
+import {
+  BIN,
+  detectVersion,
+  installedCliCheck,
+  missingCliError,
+  missingCliReport,
+  probeEnv,
+} from "./missing-cli.js";
 export { BIN } from "./missing-cli.js";
 
 /** Exported for focused route-policy tests; runtime uses this exact selector. */
@@ -75,6 +82,7 @@ export const selectCodexRunAuthRoute = selectStrictAuthRoute;
 export {
   CODEX_FILE_AUTH_ARGS,
   CODEX_FILE_AUTH_OVERRIDE,
+  redactCodexDoctorDetail,
   codexAuthModeAt,
   defaultNativeCodexHome,
   ensureCodexApiAuth,
@@ -85,6 +93,8 @@ export { CODEX_MANAGED_LOGIN } from "./capability-profile.js";
 import {
   CODEX_FILE_AUTH_ARGS,
   CODEX_PROJECT_DOC_FALLBACK_ARGS,
+  codexNativeReadiness,
+  redactCodexDoctorDetail,
   codexApiKey,
   codexAuthModeAt,
   defaultNativeCodexHome,
@@ -113,10 +123,6 @@ function sandboxArgs(access: AccessProfile): string[] {
   return mode ? ["--sandbox", mode] : [];
 }
 
-export function redactCodexDoctorDetail(text: string): string {
-  return redactSecrets(text).slice(0, 500);
-}
-
 export function codexNativeEnv(
   base?: Record<string, string | null | undefined>,
   codexHome?: string,
@@ -125,39 +131,6 @@ export function codexNativeEnv(
     ...(base ?? {}),
     ...providerScrubEnv(),
     CODEX_HOME: codexHome ?? defaultNativeCodexHome(base),
-  };
-}
-
-function codexNativeReadiness(login: CodexLoginProbe): AuthSourceReadiness {
-  if (login.probeError) {
-    return {
-      source: "native_session",
-      availability: "unknown",
-      verification: "not_run",
-      detail: `login-status probe failed: ${redactCodexDoctorDetail(login.probeError)}`,
-    };
-  }
-  if (login.method === "chatgpt") {
-    return {
-      source: "native_session",
-      availability: "available",
-      verification: "passed",
-      detail: "vendor status confirmed a native ChatGPT session in the exact run environment",
-    };
-  }
-  if (login.authed) {
-    return {
-      source: "native_session",
-      availability: "available",
-      verification: "failed",
-      detail: `Codex is authenticated via ${login.method}, not ChatGPT subscription auth`,
-    };
-  }
-  return {
-    source: "native_session",
-    availability: "unavailable",
-    verification: "not_run",
-    detail: "native Codex session is not logged in",
   };
 }
 
@@ -527,6 +500,7 @@ export function createCodexAdapter(deps: Partial<CodexRuntimeDeps> = {}): Harnes
         "audit",
       ];
       const binPath = resolveHarnessBinary(BIN, probeEnv(_spec.env));
+      const installAdvisory = runtime.brokenInstallAdvisory(BIN, probeEnv(_spec.env));
       const apiSource: AuthSourceReadiness = {
         source: "provider_auth_file",
         availability: apiKey ? "available" : "unavailable",
@@ -552,11 +526,11 @@ export function createCodexAdapter(deps: Partial<CodexRuntimeDeps> = {}): Harnes
         harness_id: "codex",
         status: ok ? "ok" : selectedAvailable || probeUnknown ? "degraded" : "unavailable",
         checks: [
-          {
-            id: "installed",
-            status: "pass",
-            detail: binPath ? `${version} at ${binPath}` : version,
-          },
+          installedCliCheck(
+            version,
+            binPath,
+            installAdvisory && redactCodexDoctorDetail(installAdvisory),
+          ),
           ...(probeNative
             ? [
                 {

@@ -174,7 +174,7 @@ extension AppModel {
                 remoteConnectionMessages[connectionID] =
                     "\(HarnessFamily(rawValue: harness.rawValue).label) sign-in started."
                 remoteDeviceLogin = RemoteDeviceLoginRequest(
-                    lease: lease, jobID: job.jobId)
+                    lease: lease, jobID: job.jobId, initialJob: job)
                 handedOff = true
             }
         } catch {

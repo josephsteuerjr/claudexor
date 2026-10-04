@@ -76,12 +76,14 @@ must provide the toolchain's own npm entrypoint next to the Node it runs the
 CLI on: `<node-root>/bin/node` plus `<node-root>/lib/node_modules/npm/bin/npm-cli.js`
 on POSIX, `<node-dir>\node.exe` plus `<node-dir>\node_modules\npm\bin\npm-cli.js`
 (the official zip layout) on Windows; no system/PATH npm is used. On Windows
-the local target is supported for Codex only: npm's `.cmd` shim is never the
-launcher, the receipt's `installedBinary` is the package-native
-`codex.exe` under `~/.claudexor/node/node_modules/@openai/codex/node_modules/@openai/codex-win32-<arch>/vendor/<triple>/bin`,
-and the host's `HOME` (or the user profile when unset) anchors that root exactly
-as the engine's own harness PATH does. Every other vendor is a typed
-`unsupported_platform` refusal before any side effect. The existing signed runtime manifest remains the
+the local target resolves the npm package's declared native or Node entrypoint
+for Codex and Claude. The receipt identifies the vendor entrypoint rather than
+merely `node.exe`; launch, doctor and login share the resolved invocation.
+User npm prefixes on the effective PATH use the same lookup. Custom batch
+programs are not treated as standard npm wrappers, and an explicit binary
+path remains exact. The host's HOME (or user profile when unset) anchors the
+managed toolchain; profile and scratch homes do not choose another installation.
+The existing signed runtime manifest remains the
 publication authority, so an embedder does not create a second artifact or
 trust root.
 
@@ -1036,9 +1038,9 @@ PATH, else Cursor's primary `agent` only when its realpath is the installer's
 `…/cursor-agent/versions/<v>/cursor-agent`; that `agent` is spawned by absolute
 path, resolved per call by discovery, doctor, status, models, the API-key
 smoke, runs and login, and never executed to identify it. This fallback covers
-Cursor's POSIX installer layout. On native Windows the shared resolver accepts
-executable images (`.exe`/`.com`) only; `.cmd`/`.ps1` launcher installations
-remain unavailable. This alias fallback does not add Windows `agent.exe`
+Cursor's POSIX installer layout. On native Windows the shared resolver supports native images and standard npm
+Node entrypoints; Cursor's non-npm `.cmd`/`.ps1` launcher installations are not
+thereby a supported route. This alias fallback does not add Windows `agent.exe`
 discovery or change explicit overrides and the existing `cursor-agent` route.
 Wire: `cursor-agent -p --output-format stream-json <sandbox
 args> [--stream-partial-output]` with the composed prompt on piped stdin (no

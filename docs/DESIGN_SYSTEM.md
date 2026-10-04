@@ -1190,6 +1190,13 @@ views in the shared design-system files; screens compose them.
   explicit "Get a new link" re-arms it. A window the VENDOR owns cannot be extended, so the job carries
   that fact and the Extend control does not render — the app never offers what
   the daemon will refuse.
+- **Remote login.** The remote sheet uses the same flow-driven link/code
+  presentation and setup lifecycle controller for its exact remote job. Titles
+  and readiness name that job's harness and profile. Pasted input is sent once
+  through the selected connection; a reply from an obsolete connection or
+  detached observation cannot reopen it. Close keeps the server login active,
+  while Cancel requests cancellation. Only implemented actions are offered;
+  a localhost browser callback on the remote host is not a local-browser action.
 - **Thread workspace (trailing `.inspector`).** ONE panel whose identity is the
   CURRENT THREAD's workspace (D42), with three always-present tabs
   (`WorkspaceTab`: `changes`, `artifacts`, `evidence`, via the shared

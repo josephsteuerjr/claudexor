@@ -1030,8 +1030,7 @@ export function createSetupJobManager(opts: SetupJobManagerOptions = {}) {
   ): ControlSetupJob {
     const deviceCode = spec.loginMode === "device_code";
     const clientPty = job.transport === "client_pty";
-    // Daemon-hosted modes never touch Terminal and run on any posix platform;
-    // only the legacy Terminal handoff (codex browser_redirect) is macOS-only.
+    // Only legacy Terminal handoff is macOS-only; daemon-hosted flows are portable.
     const daemonHosted = deviceCode || isUrlDisclosureLoginMode(spec.loginMode);
     if (!daemonHosted && job.transport !== "client_pty" && platform !== "darwin") {
       return finish(
@@ -1044,13 +1043,13 @@ export function createSetupJobManager(opts: SetupJobManagerOptions = {}) {
       );
     }
     try {
+      if (spec.launchAdvisory)
+        spec = { ...spec, displayCommand: `${spec.displayCommand} (${spec.launchAdvisory})` };
       const paths = store.paths(job.jobId);
       const executionId = randomUUID();
       const executable = captureExecutableEvidence(spec.binary);
       const authorizedCommandDigest = commandDigest(executable, spec.args);
-      // A vendor window shorter than ours governs: counting past the moment it
-      // gave up would promise a login that is already over — and it cannot be
-      // extended either, which the job says out loud so no surface offers to.
+      // A shorter vendor-owned window governs and cannot be extended by the UI.
       const vendorCapped = (spec.loginWindowMs ?? Infinity) < loginTimeoutMs;
       const { loginDeadlineAt, permitDeadlineAt, permitWaitMs } = setupLoginDeadlines(
         now(),
@@ -1078,6 +1077,7 @@ export function createSetupJobManager(opts: SetupJobManagerOptions = {}) {
         jobDir: paths.dir,
         binary: executable.realpath,
         args: [...spec.args],
+        ...(spec.interpreter ? { interpreter: spec.interpreter } : {}),
         cwd: paths.dir,
         ...(targetConfigDir ? { profileConfigDir: targetConfigDir } : {}),
         // These fields describe DAEMON-owned disclosure/control only. A
@@ -1412,7 +1412,7 @@ export function createSetupJobManager(opts: SetupJobManagerOptions = {}) {
           jobId,
           "not_supported",
           "not_supported",
-          `${harness} native login is unavailable; install the vendor CLI first.`,
+          `${harness} native login is unavailable; ${NativeLogin.nativeLoginUnavailableDetail(harness) ?? "install the vendor CLI first"}.`,
         );
       return startObservableLogin(base, spec, profileBinding?.configDir);
     },

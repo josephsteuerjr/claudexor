@@ -524,13 +524,14 @@ describe("Windows npm layout and the package-native image (issue #191)", () => {
     expect(managedWindowsNativeImageDirs("/home/u", "ia32")).toEqual([]);
   });
 
-  it("puts the managed image dir on the win32 harness PATH only, right after the managed bin", () => {
+  it("puts the managed npm prefix before the legacy native image fallback on win32 only", () => {
     const home = join(root, "home");
     const env = { HOME: home, PATH: "" } as NodeJS.ProcessEnv;
     const win = normalizedHarnessPath(env, "/no/such/node", "win32", "x64").split(delimiter);
     const managedBin = join(managedNodeRoot(home), "bin");
     const imageDir = windowsNativeImageDir(managedNodeRoot(home), "@openai/codex", "x64")!;
-    expect(win.indexOf(imageDir)).toBe(win.indexOf(managedBin) + 1);
+    expect(win.indexOf(managedNodeRoot(home))).toBe(win.indexOf(managedBin) + 1);
+    expect(win.indexOf(imageDir)).toBe(win.indexOf(managedNodeRoot(home)) + 1);
     for (const platform of ["darwin", "linux"] as const) {
       const posix = normalizedHarnessPath(env, "/no/such/node", platform, "x64");
       expect(posix.split(delimiter).some((entry) => entry.includes("node_modules"))).toBe(false);

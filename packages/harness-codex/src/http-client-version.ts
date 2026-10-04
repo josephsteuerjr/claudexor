@@ -1,3 +1,4 @@
+import { harnessBinaryIdentityOnPath } from "@claudexor/core";
 /**
  * The client version Claudexor's OWN Codex HTTP transport declares when it reads
  * an account's model catalog (`GET /backend-api/codex/models?client_version=…`).
@@ -27,8 +28,7 @@
  * + mtime) so an in-place upgrade of the CLI is seen on the next catalog read
  * without a daemon restart, while the hot path pays one `stat`, never a spawn.
  */
-import { realpathSync, statSync } from "node:fs";
-import { resolveHarnessBinary } from "@claudexor/core";
+
 import type { ControlModelCatalogResponse } from "@claudexor/schema";
 import type { PinnedVendorCliVersion } from "@claudexor/util";
 import { BIN, detectVersion, probeEnv } from "./missing-cli.js";
@@ -87,15 +87,8 @@ export function clearCodexClientVersionMemo(): void {
 /** The bytes the transport would spawn: realpath + inode + size + mtime. A
  * reinstall or a re-pointed symlink changes at least one part. */
 function binaryIdentityKey(bin: string, env: NodeJS.ProcessEnv): string | null {
-  const resolved = resolveHarnessBinary(bin, env);
-  if (!resolved) return null;
-  try {
-    const path = realpathSync(resolved);
-    const stat = statSync(path);
-    return JSON.stringify([path, stat.ino, stat.size, stat.mtimeMs]);
-  } catch {
-    return null;
-  }
+  const identity = harnessBinaryIdentityOnPath(bin, env.PATH ?? "");
+  return identity ? JSON.stringify(identity) : null;
 }
 
 /** The version the catalog read declares: the verified transport level, raised

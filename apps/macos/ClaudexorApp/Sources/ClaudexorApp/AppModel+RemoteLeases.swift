@@ -135,6 +135,7 @@ struct RemotePreviewRequest: Identifiable, Equatable {
 struct RemoteDeviceLoginRequest: Identifiable, Equatable {
     let lease: RemoteActionLease
     let jobID: String
+    var initialJob: SetupJob? = nil
 
     var id: UUID { lease.token }
     var connectionID: UUID { lease.connectionID }

@@ -1,3 +1,4 @@
+import type { AuthSourceReadiness } from "@claudexor/schema";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { labelStreams, providerScrubEnv, runCapture } from "@claudexor/core";
@@ -230,4 +231,41 @@ export function codexAuthModeAt(
   } catch {
     return null;
   }
+}
+
+export function redactCodexDoctorDetail(text: string): string {
+  return redactSecrets(text).slice(0, 500);
+}
+
+export function codexNativeReadiness(login: CodexLoginProbe): AuthSourceReadiness {
+  if (login.probeError) {
+    return {
+      source: "native_session",
+      availability: "unknown",
+      verification: "not_run",
+      detail: `login-status probe failed: ${redactCodexDoctorDetail(login.probeError)}`,
+    };
+  }
+  if (login.method === "chatgpt") {
+    return {
+      source: "native_session",
+      availability: "available",
+      verification: "passed",
+      detail: "vendor status confirmed a native ChatGPT session in the exact run environment",
+    };
+  }
+  if (login.authed) {
+    return {
+      source: "native_session",
+      availability: "available",
+      verification: "failed",
+      detail: `Codex is authenticated via ${login.method}, not ChatGPT subscription auth`,
+    };
+  }
+  return {
+    source: "native_session",
+    availability: "unavailable",
+    verification: "not_run",
+    detail: "native Codex session is not logged in",
+  };
 }

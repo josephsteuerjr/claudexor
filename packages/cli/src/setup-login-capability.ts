@@ -1,3 +1,5 @@
+import { nativeLoginUnavailableDetail } from "./native-login.js";
+import { interpretedCommand } from "@claudexor/core";
 import type { HarnessAdapter } from "@claudexor/core";
 import type {
   ControlSetupJobTransport,
@@ -75,7 +77,9 @@ export async function projectSetupLoginCapability(
       status: "vendor_binary_unavailable",
       backend: null,
       capability: null,
-      detail: "the managed vendor login command is unavailable on this host",
+      detail:
+        nativeLoginUnavailableDetail(harness) ??
+        "the managed vendor login command is unavailable on this host",
     };
   }
 
@@ -99,9 +103,10 @@ export async function projectSetupLoginCapability(
     };
   }
 
+  const invocation = interpretedCommand(spec.binary, spec.args, {}, spec.interpreter);
   const resolution = await (options.resolveTerminalTransport ?? resolvePtyWrappedCommand)(
-    spec.binary,
-    spec.args,
+    invocation.binary,
+    invocation.args,
   );
   if (resolution.status === "ready") {
     return {

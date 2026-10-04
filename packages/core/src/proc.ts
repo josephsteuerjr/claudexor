@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { registerChildProcess, unregisterChildProcess } from "./process-registry.js";
 import { readProcessLines, type ProcessStreamLimits } from "./process-lines.js";
-import { composeBaseEnv } from "./env-scope.js";
+import { composeSpawnEnv } from "./env-scope.js";
+import { prepareHarnessCommand } from "./runtime-env.js";
 import {
   killWindowsProcessTree,
   reapProcessTree,
@@ -97,6 +98,7 @@ export interface ChildStdin {
 }
 
 export type ProcEvent =
+  | { type: "launch_advisory"; detail: string }
   | { type: "stdout"; line: string; wire?: string }
   | { type: "stderr"; line: string }
   | { type: "exit"; code: number | null; signal: NodeJS.Signals | null }
@@ -124,12 +126,9 @@ export async function* spawnProcess(
   args: string[],
   opts: SpawnOptions = {},
 ): AsyncGenerator<ProcEvent> {
-  const env: NodeJS.ProcessEnv = composeBaseEnv(opts.inheritEnv ?? "mirror_native");
-  for (const [key, value] of Object.entries(opts.env ?? {})) {
-    if (value === undefined || value === null) delete env[key];
-    else env[key] = value;
-  }
-  const child = spawn(cmd, args, {
+  const invocation = prepareHarnessCommand(cmd, args, composeSpawnEnv(opts.inheritEnv, opts.env));
+  const env = invocation.env;
+  const child = spawn(invocation.binary, invocation.args, {
     cwd: opts.cwd,
     env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -343,6 +342,8 @@ export async function* spawnProcess(
   };
 
   try {
+    if (invocation.resolution.advisory)
+      yield { type: "launch_advisory", detail: invocation.resolution.advisory };
     for (;;) {
       if (queue.length > 0) {
         const event = queue.shift() as ProcEvent;
@@ -474,12 +475,9 @@ export async function runCaptureRaw(
   args: string[],
   opts: SpawnOptions = {},
 ): Promise<CaptureResult> {
-  const env: NodeJS.ProcessEnv = composeBaseEnv(opts.inheritEnv ?? "mirror_native");
-  for (const [key, value] of Object.entries(opts.env ?? {})) {
-    if (value === undefined || value === null) delete env[key];
-    else env[key] = value;
-  }
-  const child = spawn(cmd, args, {
+  const invocation = prepareHarnessCommand(cmd, args, composeSpawnEnv(opts.inheritEnv, opts.env));
+  const env = invocation.env;
+  const child = spawn(invocation.binary, invocation.args, {
     cwd: opts.cwd,
     env,
     stdio: ["pipe", "pipe", "pipe"],
