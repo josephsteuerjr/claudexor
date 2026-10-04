@@ -3466,7 +3466,8 @@ app-server `account/rateLimits/updated` notifications use incremental sources
 `claude_rate_limit_event` and `codex_app_server_event`. They produce ordinary
 singleton-window snapshots with independent observation time and freshness.
 `quotaSnapshotIdentity` in schema includes subject, route, source and, for these
-sources, the stable vendor window identity, duration and applicability. Percent,
+sources, the stable vendor window identity, duration and applicability, including
+normalized model-prefix sets. Empty prefix sets preserve existing identities. Percent,
 reset instant and observation time do not change identity. Registry, budget cache
 and journal fold/replay share that key; control projections derive `snapshot_id`
 for Swift instead of making the UI duplicate source policy. Full-reader sources
@@ -3478,6 +3479,17 @@ Incremental snapshots use `quota.window.observed` in the same global journal,
 with window slots grouped by subject for removal and compaction. Older readers
 ignore that record rather than consuming a fabricated primary/cooldown snapshot.
 The existing full-source rollback representation remains unchanged.
+
+A newer authenticated full read can supersede an older incremental observation
+of the same measured window, duration, applicability, account and route. The
+registry writes its full witness and `quota.window.superseded` atomically in
+the existing journal, then removes that exact effective window. Its cutoff
+survives later full-inventory replacement, display aging and compaction, so an
+old delayed event cannot resurrect a cleared limit. Newer partial evidence is
+admitted again; equal timestamps remain conservative. Missing or unmeasured
+windows do not supersede known limits. Subject removal clears observations
+and cutoffs together. Older rollback readers ignore the new record and may
+conservatively retain old window evidence under their earlier semantics.
 Unknown native applicability is retained as numerical diagnostic evidence rather
 than turned into an account-wide restriction. An overage name does not identify
 an additional model family. Numeric source units are translated by each adapter:

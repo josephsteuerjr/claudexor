@@ -109,21 +109,19 @@ cat "$HOME/models.tsv"
     const rows = await instance.models!({ cwd: root });
     expect(rows.every((row) => row.origin === "hint")).toBe(true);
     expect(rows.map((row) => row.id)).toEqual(
-      expect.arrayContaining([
-        "claude-opus-5-5-high",
-        "claude-sonnet-5-5-medium",
-        "claude-sonnet-4-6",
-        "claude-opus-4-6-thinking",
-      ]),
+      expect.arrayContaining(["claude-sonnet-4-6", "claude-opus-4-6-thinking"]),
     );
     expect(manifest.capabilities.model_inventory_absence).toBe("advisory");
-    expect(
-      validateModel(
-        "vendor-future-id",
-        rows.map((row) => row.id),
-        "api",
-        manifest.capabilities.model_inventory_absence!,
-      ),
-    ).toMatchObject({ status: "ok", unverified: true });
+    for (const model of ["claude-opus-5-5-high", "claude-sonnet-5-5-medium", "vendor-future-id"]) {
+      expect(rows.map((row) => row.id)).not.toContain(model);
+      expect(
+        validateModel(
+          model,
+          rows.map((row) => row.id),
+          "manifest",
+          manifest.capabilities.model_inventory_absence!,
+        ),
+      ).toMatchObject({ status: "ok", unverified: true });
+    }
   });
 });

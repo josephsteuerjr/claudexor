@@ -39,6 +39,38 @@ describe("budget incremental quota storage", () => {
     expect(ledger.cooldownActive("claude", "vendor_native", "work", now, "opus")).toBe(false);
   });
 
+  it("keeps prefix-scoped sibling windows independent in storage and admission", () => {
+    const ledger = new BudgetLedger();
+    const scoped = (prefix: string, ratio: number): QuotaSnapshot => {
+      const value = snapshot("weekly", ratio, []);
+      return {
+        ...value,
+        constraints: [{ ...value.constraints[0]!, applies_to_model_prefixes: [prefix] }],
+      };
+    };
+    ledger.observeQuotaSnapshot(scoped("claude-opus-", 1));
+    ledger.observeQuotaSnapshot(scoped("claude-sonnet-", 0.1));
+    expect(ledger.cooldownActive("claude", "vendor_native", "work", now, "claude-opus-next")).toBe(
+      true,
+    );
+    expect(
+      ledger.cooldownActive("claude", "vendor_native", "work", now, "claude-sonnet-next"),
+    ).toBe(false);
+    expect(ledger.cooldownActive("claude", "vendor_native", "other", now, "claude-opus-next")).toBe(
+      false,
+    );
+    expect(
+      ledger.cooldownActive("claude", "managed_api_key", "work", now, "claude-opus-next"),
+    ).toBe(false);
+    expect(
+      ledger.bindingPaceSlack("claude", "vendor_native", "work", now, "unknown-model"),
+    ).toBeNull();
+    ledger.observeQuotaSnapshot(scoped("claude-opus-", 0.1));
+    expect(ledger.cooldownActive("claude", "vendor_native", "work", now, "claude-opus-next")).toBe(
+      false,
+    );
+  });
+
   it("does not collapse independent applicability on the same vendor window", () => {
     const ledger = new BudgetLedger();
     ledger.observeQuotaSnapshot(snapshot("weekly", 1, ["opus"]));

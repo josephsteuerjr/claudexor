@@ -81,6 +81,7 @@ function pollerRejection(absence: QuotaAbsence): CredentialUnusableObservation {
       null,
       absence.detail,
     ),
+    credential_route: absence.subject.credential_route,
     expires_at: new Date(Date.now() + UNUSABLE_TTL_MS.auth_revoked).toISOString(),
   };
 }
@@ -88,7 +89,21 @@ function pollerRejection(absence: QuotaAbsence): CredentialUnusableObservation {
 export function pollerCredentialRejections(
   quota: VendorQuotaObservations,
 ): CredentialUnusableObservation[] {
-  return quota.absences.filter((row) => row.reason === "auth_revoked").map(pollerRejection);
+  return quota.absences
+    .filter((row) => {
+      if (row.reason !== "auth_revoked") return false;
+      const route = row.subject.credential_route;
+      const evidence = {
+        snapshots: quota.snapshots.filter((item) => item.subject.credential_route === route),
+        absences: quota.absences.filter((item) => item.subject.credential_route === route),
+        honored: quota.honored?.filter((item) => item.credential_route === route),
+      };
+      return (
+        vendorCredentialObservation(evidence, row.subject.harness, row.subject.subject_id)
+          ?.outcome === "revoked"
+      );
+    })
+    .map(pollerRejection);
 }
 
 /** The cheap typed stream intake. No profile probing or routing policy. */
@@ -169,15 +184,10 @@ export async function differentialSubjectVerdict(args: {
         honored: args.quota.honored?.filter((item) => item.credential_route === route),
       }
     : args.quota;
-  const vendor = vendorCredentialObservation(quota, args.harnessId, profileId);
-  if (vendor?.outcome === "revoked")
-    return observation(
-      { ...ctx, now: new Date(vendor.observed_at) },
-      "auth_revoked",
-      "vendor_poller",
-      null,
-      vendor.detail,
-    );
+  const rejected = pollerCredentialRejections(quota).find(
+    (item) => item.harness_id === args.harnessId && item.profile_id === profileId,
+  );
+  if (rejected) return rejected;
   // 3. The local doctor probe (pinned profiles only — the default subject has
   // no per-profile probe surface): a FAILED verification, vendor overlay
   // included, is a dead-credential fact the quota path cannot see.

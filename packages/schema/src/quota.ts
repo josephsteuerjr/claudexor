@@ -216,12 +216,17 @@ export type QuotaSnapshot = z.infer<typeof QuotaSnapshot>;
  * label and observation time. Unknown applicability is not representable as
  * a global constraint: producers retain it as diagnostic evidence instead. */
 export function quotaConstraintIdentity(constraint: QuotaConstraint): string {
-  return JSON.stringify([
+  const fields: unknown[] = [
     constraint.id,
     constraint.window_seconds,
     constraint.applies_to_models == null ? null : [...new Set(constraint.applies_to_models)].sort(),
     constraint.applies_to_unspecified_model === true,
-  ]);
+  ];
+  // Preserve already-issued identities when no family scope was declared.
+  if (constraint.applies_to_model_prefixes?.length) {
+    fields.push([...new Set(constraint.applies_to_model_prefixes)].sort());
+  }
+  return JSON.stringify(fields);
 }
 
 /** One schema-owned storage identity for registry, budget and projections.
@@ -261,6 +266,14 @@ export const QuotaWindowObservation = z
     }
   });
 export type QuotaWindowObservation = z.infer<typeof QuotaWindowObservation>;
+
+/** A newer full read superseded this exact incremental window. The cutoff
+ * survives later full-inventory replacement and rejects delayed older events;
+ * raw measurements remain ordinary journal history until compaction. */
+export const QuotaWindowSupersession = QuotaSnapshot.pick({ subject: true, observed_at: true })
+  .extend({ version: z.literal(1), snapshot_id: z.string().min(1) })
+  .strict();
+export type QuotaWindowSupersession = z.infer<typeof QuotaWindowSupersession>;
 
 export const QuotaAbsenceReason = z
   .enum([

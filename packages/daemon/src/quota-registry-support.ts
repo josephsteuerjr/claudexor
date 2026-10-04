@@ -9,6 +9,8 @@ import {
   legacyV320QuotaSource,
   quotaSourceTraits,
   quotaSnapshotIdentity,
+  quotaConstraintIdentity,
+  type QuotaWindowSupersession,
   QuotaWindowObservation,
   vendorResetDayCooldownEnd,
   type CredentialRoute,
@@ -72,6 +74,35 @@ export function reactiveCooldownSnapshot(
       },
     ],
   };
+}
+
+/** Snapshots older than this are pruned from every projection read (W17):
+ * a day-old observation is not quota truth, just footer clutter. */
+const MAX_SNAPSHOT_AGE_MS = 24 * 60 * 60_000;
+
+/** Freshness-annotated snapshots with expired (>24h) observations pruned.
+ * An old observation whose constraint still EXTENDS into the future (a
+ * weekly cooldown/reset seen once) is kept and stale-marked: pruning it
+ * would hide a live cap from both the footer and the router's ledger. */
+export function activeQuotaSnapshots(
+  snapshots: readonly QuotaSnapshot[],
+  now: number,
+): QuotaSnapshot[] {
+  return snapshots
+    .map((snapshot) => withoutExpiredScopedCooldowns(snapshot, now))
+    .filter((snapshot): snapshot is QuotaSnapshot => snapshot !== null)
+    .filter((snapshot) => {
+      const observed = Date.parse(snapshot.observed_at);
+      if (!Number.isFinite(observed)) return false;
+      if (now - observed <= MAX_SNAPSHOT_AGE_MS) return true;
+      return snapshot.constraints.some((constraint) =>
+        [constraint.cooldown_until, constraint.resets_at].some((raw) => {
+          const at = raw ? Date.parse(raw) : Number.NaN;
+          return Number.isFinite(at) && at > now;
+        }),
+      );
+    })
+    .map((snapshot) => staleAt(snapshot, now));
 }
 
 export const QUOTA_FRESHNESS_TTL_MS = 5 * 60_000;
@@ -147,6 +178,72 @@ function quotaModelScope(constraint: QuotaConstraint) {
     ...scope,
     applies_to_models: [...(scope.applies_to_models ?? [])].sort(),
     applies_to_unspecified_model: scope.applies_to_unspecified_model ?? false,
+  };
+}
+
+/** Match only a measured replacement of the exact known window, never an
+ * absent window, unknown usage, another credential or a different scope. */
+function windowSupersession(
+  existing: QuotaSnapshot,
+  observation: QuotaSnapshot,
+  now: Date,
+): QuotaWindowSupersession | null {
+  if (
+    quotaSourceTraits(existing.source).snapshotMode !== "window" ||
+    !quotaSourceTraits(observation.source).vendorAuthenticated ||
+    quotaSourceTraits(observation.source).refreshDemandHarness !== observation.subject.harness ||
+    staleAt(observation, now.getTime()).freshness !== "fresh" ||
+    existing.subject.harness !== observation.subject.harness ||
+    existing.subject.credential_route !== observation.subject.credential_route ||
+    existing.subject.subject_id !== observation.subject.subject_id ||
+    Date.parse(observation.observed_at) <= Date.parse(existing.observed_at)
+  )
+    return null;
+  const identity = quotaConstraintIdentity(existing.constraints[0]!);
+  if (
+    !observation.constraints.some(
+      (constraint) =>
+        constraint.used_ratio !== null && quotaConstraintIdentity(constraint) === identity,
+    )
+  )
+    return null;
+  return {
+    version: 1,
+    subject: existing.subject,
+    snapshot_id: snapshotKey(existing),
+    observed_at: observation.observed_at,
+  };
+}
+
+/** One reconciliation over the current raw snapshots; the registry commits all
+ * returned facts together before updating any in-memory projection. */
+export function reconcileQuotaSnapshot(
+  value: QuotaSnapshot,
+  existing: readonly QuotaSnapshot[],
+  now: Date,
+) {
+  let snapshot = value;
+  const witnesses: QuotaSnapshot[] = [];
+  const supersessions: QuotaWindowSupersession[] = [];
+  for (const observation of existing) {
+    const atObservation = new Date(observation.observed_at);
+    const reduced = withoutSupersededQuotaConstraints(snapshot, observation, atObservation);
+    const supersession = windowSupersession(snapshot, observation, atObservation);
+    if (reduced !== snapshot || supersession) witnesses.push(observation);
+    if (supersession) supersessions.push(supersession);
+    snapshot = reduced;
+  }
+  const retired = existing.flatMap((prior) => {
+    const supersession = windowSupersession(prior, snapshot, now);
+    if (supersession) supersessions.push(supersession);
+    const next = withoutSupersededQuotaConstraints(prior, snapshot, now);
+    return next === prior ? [] : [next];
+  });
+  return {
+    snapshot,
+    updates: [...witnesses, snapshot, ...retired],
+    supersessions,
+    reconciled: witnesses.length > 0 || retired.length > 0 || supersessions.length > 0,
   };
 }
 

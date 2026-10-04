@@ -250,6 +250,32 @@ import Testing
         #expect(sameOpus.constraints.first?.presentationID == opus.constraints.first?.presentationID)
     }
 
+    @Test func prefixScopeParticipatesInWindowIdentityWithoutChangingLegacyIDs() throws {
+        let bare = window("weekly", label: "Week", appliesToModels: [])
+        func scoped(_ prefixes: [String]) -> [String: Any] {
+            var value = bare
+            value["applies_to_model_prefixes"] = prefixes
+            return value
+        }
+        let claude = try snapshot(source: "claude_rate_limit_event", snapshotId: "window-claude",
+                                  constraints: [scoped(["claude-", "gpt-", "claude-"])])
+        let gemini = try snapshot(source: "claude_rate_limit_event", snapshotId: "window-gemini",
+                                  constraints: [scoped(["gemini-"])])
+        let group = try #require(QuotaPresentation.groups(from: [claude, gemini], now: now).first)
+        #expect(group.windows.count == 2)
+        #expect(Set(group.windows.map(\.id)).count == 2)
+        #expect(group.hasOnlyScopedWindows)
+        #expect(Set(group.windows.map { QuotaPresentation.modelScopeLabel($0.appliesToModels ?? []) })
+                == ["Claude, Gpt only", "Gemini only"])
+        let equivalent = try snapshot(constraints: [scoped(["gpt-", "claude-"])])
+        #expect(equivalent.constraints.first?.presentationID == claude.constraints.first?.presentationID)
+        let legacy = try snapshot(constraints: [bare])
+        let empty = try snapshot(constraints: [scoped([])])
+        #expect(legacy.constraints.first?.presentationID == empty.constraints.first?.presentationID)
+        #expect(legacy.constraints.first?.presentationID == #"["weekly",3600,[],false]"#)
+        #expect(legacy.constraints.first?.presentationID != claude.constraints.first?.presentationID)
+    }
+
     @Test func credentialRouteHumanizerCoversEveryWireValueAndDegradesHonestly() {
         #expect(humanizeCredentialRoute("vendor_native") == "Subscription")
         #expect(humanizeCredentialRoute("managed_api_key") == "API key")

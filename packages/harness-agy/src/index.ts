@@ -74,9 +74,11 @@ async function detectVersion(): Promise<string | null> {
 
 /** Historical menu hints; account-specific presence comes from `models()`.
  * Effort rides the vendor slug and the separate effort ladder stays empty.
- * The 5.5 ids were recorded alongside Gemini 3.8 on 2026-10-03 while the
- * binary self-updated from 1.1.13 to 1.2.16; this is not a new fixture pin.
- * Older 4.6 routes remain hints: one account's absence cannot retire them. */
+ * New Claude ids come from the profile listing instead of extending this
+ * version-stamped fallback. Inherited Gemini 3.8 hints were recorded on
+ * 2026-10-03 while the binary self-updated from 1.1.13 to 1.2.16, so those
+ * additions did not re-verify the fixture pin. Older 4.6 routes remain hints:
+ * one account's absence cannot retire them. */
 const AGY_KNOWN_MODELS = [
   "gemini-3.8-flash-high",
   "gemini-3.8-flash-medium",
@@ -92,12 +94,6 @@ const AGY_KNOWN_MODELS = [
   "gemini-3.5-flash-low",
   "gemini-3.1-pro-high",
   "gemini-3.1-pro-low",
-  "claude-opus-5-5-low",
-  "claude-opus-5-5-medium",
-  "claude-opus-5-5-high",
-  "claude-sonnet-5-5-low",
-  "claude-sonnet-5-5-medium",
-  "claude-sonnet-5-5-high",
   "claude-sonnet-4-6",
   "claude-opus-4-6-thinking",
   "gpt-oss-120b-medium",

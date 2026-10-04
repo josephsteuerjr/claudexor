@@ -3,12 +3,16 @@ import type {
   CredentialProfile,
   CredentialProfileStatus,
   CredentialUnusableObservation,
+  QuotaAbsence,
 } from "@claudexor/schema";
 import {
   currentSubjectProber,
   differentialSubjectVerdict,
   readyProfilesForRotation,
+  pollerCredentialRejections,
 } from "./credential-differential.js";
+import { CredentialUnusableLedger } from "../../daemon/src/credential-unusable-ledger.js";
+import type { VendorQuotaObservations } from "./credential-profiles.js";
 import type { TransientFailureObservation } from "./transientClassify.js";
 
 const work: CredentialProfile = {
@@ -23,6 +27,131 @@ const work: CredentialProfile = {
 };
 
 const emptyQuota = { snapshots: [], absences: [] };
+
+describe("current poller diagnostics after dispatch-bound recovery", () => {
+  function fixture() {
+    let clock = Date.now();
+    const ledger = new CredentialUnusableLedger(() => new Date(clock));
+    const refusal: QuotaAbsence = {
+      subject: {
+        harness: "claude",
+        credential_route: "vendor_native",
+        plan_label: null,
+        subject_id: "work",
+      },
+      reason: "auth_revoked",
+      detail: "original poll rejection",
+      observed_at: new Date(clock).toISOString(),
+    };
+    const subject = {
+      harnessId: "claude",
+      profileId: "work",
+      route: "vendor_native" as const,
+      requestedModel: null,
+    };
+    const evidence = (): VendorQuotaObservations => ({
+      snapshots: [],
+      absences: [refusal],
+      honored: ledger.honored(),
+    });
+    return {
+      ledger,
+      refusal,
+      subject,
+      evidence,
+      later() {
+        clock += 1000;
+        return new Date(clock).toISOString();
+      },
+    };
+  }
+
+  it("keeps exact route and original observation time, without a second stored poller copy", () => {
+    const f = fixture();
+    const [derived] = pollerCredentialRejections(f.evidence());
+    expect(derived).toMatchObject({
+      observed_at: f.refusal.observed_at,
+      source: "vendor_poller",
+      credential_route: "vendor_native",
+      detail: f.refusal.detail,
+    });
+    f.ledger.recordBound(f.ledger.bind(f.subject), derived!);
+    expect(f.ledger.live()).toEqual([]);
+    expect(pollerCredentialRejections(f.evidence())).toHaveLength(1);
+  });
+
+  it("honored contact suppresses old poller diagnostics while a new refusal is still visible", async () => {
+    const f = fixture();
+    const binding = f.ledger.bind(f.subject);
+    f.ledger.honorBound(binding, null, f.later());
+    expect(pollerCredentialRejections(f.evidence())).toEqual([]);
+    expect(
+      await differentialSubjectVerdict({
+        harnessId: "claude",
+        profile: work,
+        model: null,
+        quota: f.evidence(),
+        transients: [],
+        probe: passingProbe,
+      }),
+    ).toBeNull();
+    f.refusal.observed_at = f.later();
+    expect(pollerCredentialRejections(f.evidence())).toHaveLength(1);
+    expect(
+      await differentialSubjectVerdict({
+        harnessId: "claude",
+        profile: work,
+        model: null,
+        quota: f.evidence(),
+        transients: [],
+        probe: passingProbe,
+      }),
+    ).toMatchObject({
+      code: "auth_revoked",
+      credential_route: "vendor_native",
+      observed_at: f.refusal.observed_at,
+    });
+  });
+
+  it("does not let another route or model-only evidence clear the native account refusal", () => {
+    const f = fixture();
+    const newer = f.later();
+    for (const altered of [
+      { credential_route: "managed_api_key" as const, model: null },
+      { credential_route: "vendor_native" as const, model: "only-model" },
+    ]) {
+      const quota = {
+        ...f.evidence(),
+        honored: [{ harness_id: "claude", profile_id: "work", observed_at: newer, ...altered }],
+      };
+      expect(pollerCredentialRejections(quota)).toHaveLength(1);
+    }
+  });
+
+  it("preserves dispatch order when an old execution finishes after a newer refusal", () => {
+    const f = fixture();
+    const older = f.ledger.bind(f.subject);
+    const newer = f.ledger.bind(f.subject);
+    f.refusal.observed_at = f.later();
+    f.ledger.recordBound(newer, {
+      harness_id: "claude",
+      profile_id: "work",
+      credential_route: "vendor_native",
+      model: null,
+      source: "attempt_stream",
+      code: "auth_revoked",
+      detail: "newer execution rejected",
+      observed_at: f.refusal.observed_at,
+      expires_at: new Date(Date.parse(f.refusal.observed_at) + 60_000).toISOString(),
+    });
+    f.ledger.honorBound(older, null, f.later());
+    expect(f.ledger.honored()).toEqual([]);
+    expect(pollerCredentialRejections(f.evidence())).toHaveLength(1);
+    f.ledger.honorBound(f.ledger.bind(f.subject), null, f.later());
+    expect(pollerCredentialRejections(f.evidence())).toEqual([]);
+    expect(f.ledger.live()).toEqual([]);
+  });
+});
 
 function transient(
   category: TransientFailureObservation["category"],

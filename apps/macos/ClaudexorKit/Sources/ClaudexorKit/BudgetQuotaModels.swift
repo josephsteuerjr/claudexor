@@ -102,8 +102,12 @@ public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
     /// reset or display label. Distinct applicability must remain visible.
     public var presentationID: String {
         let scope: Any = appliesToModels.map { Array(Set($0)).sorted() as Any } ?? NSNull()
-        let fields: [Any] = [id, windowSeconds as Any? ?? NSNull(), scope,
+        var fields: [Any] = [id, windowSeconds as Any? ?? NSNull(), scope,
                              appliesToUnspecifiedModel == true]
+        // Match the schema identity while preserving existing no-prefix ids.
+        if let prefixes = appliesToModelPrefixes, !prefixes.isEmpty {
+            fields.append(Array(Set(prefixes)).sorted())
+        }
         let data = try? JSONSerialization.data(withJSONObject: fields)
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? id
     }

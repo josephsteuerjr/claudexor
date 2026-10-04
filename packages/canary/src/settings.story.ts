@@ -64,7 +64,11 @@ describe("settings canary golden stories", () => {
 
   it.each([
     { harness: "codex", unknown: "gpt-ghost-9000", listed: "gpt-5.5" },
-    { harness: "agy", unknown: "agy-ghost-9000", listed: "claude-opus-5-5-high" },
+    {
+      harness: "agy",
+      unknown: "claude-opus-5-5-high",
+      listed: "claude-opus-4-6-thinking",
+    },
   ])(
     "[INV-104:settings-write-advisory] $harness persists an unlisted model and says so once",
     ({ harness, unknown, listed }) => {

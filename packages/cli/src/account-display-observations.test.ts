@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { updateGlobalConfig } from "@claudexor/config";
 import type { HarnessAdapter } from "@claudexor/core";
 import type { QuotaRegistry } from "@claudexor/daemon";
+import { CredentialUnusableLedger } from "../../daemon/src/credential-unusable-ledger.js";
 import { createFakeHarness } from "@claudexor/harness-fake";
 import { probeCredentialProfileStatus, profileStatusAdmits } from "@claudexor/orchestrator";
 import {
@@ -23,7 +24,10 @@ import {
   STATUS_PROJECTION_TTL_MS,
 } from "./status-projection-cache.js";
 
-const owned = vi.hoisted(() => ({ adapters: new Map<string, HarnessAdapter>() }));
+const owned = vi.hoisted(() => ({
+  adapters: new Map<string, HarnessAdapter>(),
+  evidence: null as Pick<CredentialUnusableLedger, "live" | "honored"> | null,
+}));
 vi.mock("./registry.js", async (original) => ({
   ...(await original<typeof import("./registry.js")>()),
   buildRegistry: () => owned.adapters,
@@ -31,7 +35,10 @@ vi.mock("./registry.js", async (original) => ({
 }));
 vi.mock("./run-orchestrator.js", () => ({
   preProgressRefusalLedger: { live: () => [] },
-  credentialUnusableLedger: { live: () => [], honored: () => [] },
+  credentialUnusableLedger: {
+    live: () => owned.evidence?.live() ?? [],
+    honored: () => owned.evidence?.honored() ?? [],
+  },
 }));
 vi.mock("@claudexor/workspace", async (original) => ({
   ...(await original<typeof import("@claudexor/workspace")>()),
@@ -43,6 +50,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-10-04T12:00:00Z"));
   accountObservations.invalidate();
   owned.adapters.clear();
+  owned.evidence = null;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -95,7 +103,8 @@ function fixture() {
       cwd: "/display-fixture",
       registry: owned.adapters,
       config,
-      quota,
+      quota: { ...quota, honored: owned.evidence?.honored() ?? [] },
+      unusable: owned.evidence?.live() ?? [],
     });
   return {
     profile,
@@ -114,6 +123,49 @@ function fixture() {
 }
 
 describe("Accounts display acquisition", () => {
+  it("composes route-matching recovery over retained observations without reacquiring displays", async () => {
+    const f = fixture();
+    const ledger = new CredentialUnusableLedger();
+    owned.evidence = ledger;
+    await Promise.all([f.service.credentialProfiles(), f.catalog()]);
+    const rejectedAt = new Date().toISOString();
+    const refusal: QuotaAbsence = {
+      subject: {
+        harness: f.profile.harness_id,
+        credential_route: "vendor_native",
+        subject_id: f.profile.profile_id,
+        plan_label: null,
+      },
+      reason: "auth_revoked",
+      detail: "original vendor refusal",
+      observed_at: rejectedAt,
+    };
+    f.setQuota({ snapshots: [], absences: [refusal], refreshed_at: null });
+    expect((await f.service.credentialProfiles()).profiles[0]?.status.verification).toBe("failed");
+    expect((await f.catalog()).accounts[0]?.problem?.code).toBe("auth_required");
+    const subject = {
+      harnessId: f.profile.harness_id,
+      profileId: f.profile.profile_id,
+      route: "vendor_native" as const,
+      requestedModel: null,
+    };
+    vi.setSystemTime(Date.now() + 1000);
+    ledger.honorBound(ledger.bind({ ...subject, route: "managed_api_key" }), null);
+    expect((await f.service.credentialProfiles()).profiles[0]?.status.verification).toBe("failed");
+    expect((await f.catalog()).accounts[0]?.problem?.code).toBe("auth_required");
+    ledger.honorBound(ledger.bind(subject), null);
+    const recovered = await f.service.credentialProfiles();
+    expect(recovered.profiles[0]?.status.verification).toBe("passed");
+    expect(recovered.accountPools[0]?.next_up.kind).toBe("profile");
+    expect((await f.catalog()).accounts[0]?.availability).toBe("available");
+    vi.setSystemTime(Date.now() + 1000);
+    refusal.observed_at = new Date().toISOString();
+    expect((await f.service.credentialProfiles()).profiles[0]?.status.verification).toBe("failed");
+    expect((await f.catalog()).accounts[0]?.problem?.code).toBe("auth_required");
+    expect(f.probe).toHaveBeenCalledTimes(1);
+    expect(f.models).toHaveBeenCalledTimes(1);
+  });
+
   it("coalesces concurrent profile and catalog reads, then TTL ages evidence without probing again", async () => {
     const f = fixture();
     let release!: (value: CredentialProfileStatus) => void;

@@ -54,6 +54,38 @@ describe("quota window identity", () => {
     );
   });
 
+  it("includes family applicability without changing existing no-prefix identities", () => {
+    const legacy = JSON.stringify([constraint.id, constraint.window_seconds, null, false]);
+    expect(quotaConstraintIdentity(constraint)).toBe(legacy);
+    expect(quotaConstraintIdentity({ ...constraint, applies_to_model_prefixes: [] })).toBe(legacy);
+    const scoped = {
+      ...constraint,
+      applies_to_models: [],
+      applies_to_model_prefixes: ["claude-", "gpt-", "claude-"],
+    };
+    expect(quotaConstraintIdentity(scoped)).toBe(
+      quotaConstraintIdentity({ ...scoped, applies_to_model_prefixes: ["gpt-", "claude-"] }),
+    );
+    expect(quotaConstraintIdentity(scoped)).not.toBe(
+      quotaConstraintIdentity({ ...scoped, applies_to_model_prefixes: ["gemini-"] }),
+    );
+    expect(quotaConstraintIdentity(scoped)).not.toBe(legacy);
+    const scopedSnapshot = { ...snapshot, constraints: [scoped] };
+    expect(quotaSnapshotIdentity(scopedSnapshot)).not.toBe(
+      quotaSnapshotIdentity({
+        ...scopedSnapshot,
+        constraints: [{ ...scoped, applies_to_model_prefixes: ["gemini-"] }],
+      }),
+    );
+    const full = { ...scopedSnapshot, source: "agy_command_usage" as const };
+    expect(quotaSnapshotIdentity(full)).toBe(
+      quotaSnapshotIdentity({
+        ...full,
+        constraints: [{ ...scoped, applies_to_model_prefixes: ["gemini-"] }],
+      }),
+    );
+  });
+
   it("keeps full inventory slots stable and singleton observations independent", () => {
     const full = { ...snapshot, source: "claude_oauth_usage" as const };
     expect(quotaSnapshotIdentity({ ...full, constraints: [] })).toBe(quotaSnapshotIdentity(full));

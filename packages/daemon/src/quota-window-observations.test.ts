@@ -136,7 +136,7 @@ describe("incremental quota observations", () => {
       [{ vendor: "claude", refresh: async () => ({ snapshots: [] }) }],
       () => new Date(NOW),
       () => [subject],
-      { load: () => NOW + 3600000, save: () => {} },
+      { load: () => NOW + 3600000 },
     );
     registry.upsert(partial("five_hour"));
     expect(registry.read().absences[0]?.reason).toBe("poll_paced");
