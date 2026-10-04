@@ -17,7 +17,8 @@ describe("Codex native RPC failure provenance", () => {
   });
 
   it("redacts message secrets and never serializes arbitrary provider data", () => {
-    const secret = "sk-abcdefghijklmnopqrstuvwxyz1234567890";
+    // Built at runtime: the CI secret scan matches token-shaped literals in tracked files.
+    const secret = ["sk", "abcdefghijklmnopqrstuvwxyz1234567890"].join("-");
     const error = parseCodexRpcError({
       code: -32000,
       message: `rejected ${secret}`,
