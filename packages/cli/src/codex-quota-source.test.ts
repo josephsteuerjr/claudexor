@@ -1,5 +1,8 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
+import { PassThrough, Writable } from "node:stream";
+import type { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { defaultNativeCodexHome } from "@claudexor/harness-codex";
 import {
@@ -9,6 +12,71 @@ import {
 } from "./codex-quota-source.js";
 
 describe("Codex app-server quota source", () => {
+  it.each([
+    {
+      code: -32603,
+      message: "usage endpoint rejected the read",
+      data: { code: "missing_scope", status: 403 },
+    },
+    { code: -32000, message: "the vendor operation timed out", data: { token: "private-value" } },
+  ])(
+    "keeps safe native refusal detail without turning RPC errors into auth or transport claims",
+    async (error) => {
+      const home = defaultNativeCodexHome();
+      mkdirSync(home, { recursive: true });
+      const authPath = join(home, "auth.json");
+      writeFileSync(authPath, "{}\n");
+      const requests: string[] = [];
+      const start = (() => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const child = new EventEmitter();
+        const stdin = new Writable({
+          write(chunk, _encoding, callback) {
+            const request = JSON.parse(String(chunk)) as { method: string; id?: number };
+            requests.push(request.method);
+            if (request.id !== undefined)
+              queueMicrotask(() =>
+                stdout.write(
+                  `${JSON.stringify(
+                    request.method === "account/rateLimits/read"
+                      ? { id: request.id, error }
+                      : { id: request.id, result: {} },
+                  )}\n`,
+                ),
+              );
+            callback();
+          },
+        });
+        return Object.assign(child, {
+          stdout,
+          stderr,
+          stdin,
+          kill() {
+            stdout.end();
+            stderr.end();
+            child.emit("exit", 0, null);
+            return true;
+          },
+        });
+      }) as unknown as typeof spawn;
+      try {
+        const result = await refreshCodexQuota({ spawn: start });
+        expect(result.snapshots).toEqual([]);
+        expect(result.absences).toHaveLength(1);
+        expect(result.absences?.[0]).toMatchObject({ reason: "refresh_failed" });
+        expect(result.absences?.[0]?.detail).toContain(`"rpc_code":${error.code}`);
+        expect(result.absences?.[0]?.detail).toContain(error.message);
+        expect(result.absences?.[0]?.detail).not.toContain("private-value");
+        if (error.data.code)
+          expect(result.absences?.[0]?.detail).toContain('"native_code":"missing_scope"');
+        expect(requests).toEqual(["initialize", "initialized", "account/rateLimits/read"]);
+      } finally {
+        rmSync(authPath, { force: true });
+      }
+    },
+  );
+
   it("keeps every bucket/window and vendor metadata without an aggregate", () => {
     const [snapshot] = parseCodexRateLimitsResponse(
       {

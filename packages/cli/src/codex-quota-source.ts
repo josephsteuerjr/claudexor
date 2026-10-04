@@ -10,10 +10,16 @@ import {
   canonicalCodexProfileHome,
   defaultNativeCodexHome,
   redactCodexDoctorDetail,
+  parseCodexRateLimitsResponse,
+  CodexRpcError,
+  parseCodexRpcError,
+  codexRpcErrorDetail,
 } from "@claudexor/harness-codex";
-import type { QuotaAbsence, QuotaConstraint, QuotaSnapshot } from "@claudexor/schema";
+import type { QuotaAbsence, QuotaSnapshot } from "@claudexor/schema";
 import { noProjectRepoRoot } from "@claudexor/util";
 import { readAccountsMigrationFile } from "./accounts-unified-migration.js";
+
+export { parseCodexRateLimitsResponse } from "@claudexor/harness-codex";
 
 const CODEX_BIN = process.env.CLAUDEXOR_CODEX_BIN || "codex";
 
@@ -23,7 +29,7 @@ const CODEX_BIN = process.env.CLAUDEXOR_CODEX_BIN || "codex";
  * cannot be observed yields a typed absence CLAIM, never a throw — a single
  * account's failure must never blind the others (release cut V11a). */
 export async function refreshCodexQuota(
-  options: { bin?: string; baseEnv?: NodeJS.ProcessEnv } = {},
+  options: { bin?: string; baseEnv?: NodeJS.ProcessEnv; spawn?: typeof spawn } = {},
 ): Promise<QuotaRefreshResult> {
   const snapshots: QuotaSnapshot[] = [];
   const absences: QuotaAbsence[] = [];
@@ -53,6 +59,7 @@ export async function refreshCodexQuota(
           candidate.home,
           options.baseEnv,
           options.bin,
+          options.spawn,
         )),
       );
     } catch (error) {
@@ -116,9 +123,10 @@ async function readCodexCandidate(
   codexHome: string,
   baseEnv: NodeJS.ProcessEnv | undefined,
   bin?: string,
+  start: typeof spawn = spawn,
 ): Promise<QuotaSnapshot[]> {
   const invocation = codexQuotaInvocation(baseEnv, codexHome);
-  const child = spawn(bin ?? CODEX_BIN, invocation.args, {
+  const child = start(bin ?? CODEX_BIN, invocation.args, {
     stdio: ["pipe", "pipe", "pipe"],
     env: invocation.env,
   });
@@ -156,7 +164,7 @@ async function readCodexCandidate(
         if (!pending) return;
         clearTimeout(pending.timer);
         responses.delete(value["id"]);
-        if (value["error"]) pending.reject(new Error("request was refused by Codex app-server"));
+        if (value["error"]) pending.reject(parseCodexRpcError(value["error"]));
         else pending.resolve(value);
       }
     } catch {
@@ -193,12 +201,18 @@ async function readCodexCandidate(
     if (!result || typeof result !== "object") throw new Error("Codex quota response is missing");
     return parseCodexRateLimitsResponse(result, new Date(), subjectId);
   } catch (error) {
-    const raw = error instanceof Error ? error.message : String(error);
+    const raw =
+      error instanceof CodexRpcError
+        ? codexRpcErrorDetail(error)
+        : error instanceof Error
+          ? error.message
+          : String(error);
     // A spawn/exit/stdin transport fault (missing binary, crash, timeout) is a
     // transport absence; an app-server refusal we cannot prove is auth-shaped
     // stays refresh_failed (we never fabricate not_logged_in we can't tell).
     const transport =
-      processFailure !== null || /spawn|ENOENT|exited|timed out|code=|signal=/.test(raw);
+      !(error instanceof CodexRpcError) &&
+      (processFailure !== null || /spawn|ENOENT|exited|timed out|code=|signal=/.test(raw));
     const reason: QuotaAbsence["reason"] = transport ? "transport_unavailable" : "refresh_failed";
     throw Object.assign(
       new Error(`Codex app-server quota refresh failed: ${redactCodexDoctorDetail(raw)}`),
@@ -210,76 +224,6 @@ async function readCodexCandidate(
     child.stdin.destroy();
     child.kill("SIGTERM");
   }
-}
-
-export function parseCodexRateLimitsResponse(
-  value: unknown,
-  observedAt: Date,
-  subjectId: string | null = null,
-): QuotaSnapshot[] {
-  if (!value || typeof value !== "object") return [];
-  const response = value as Record<string, unknown>;
-  const historical = objectOrNull(response["rateLimits"]);
-  const byId = objectOrNull(response["rateLimitsByLimitId"]);
-  const buckets = byId
-    ? Object.entries(byId).flatMap(([id, item]) => {
-        const bucket = objectOrNull(item);
-        return bucket ? [[id, bucket] as const] : [];
-      })
-    : historical
-      ? [[String(historical["limitId"] ?? "default"), historical] as const]
-      : [];
-  const constraints: QuotaConstraint[] = [];
-  for (const [fallbackId, bucket] of buckets) {
-    const bucketId = textOrNull(bucket["limitId"]) ?? fallbackId;
-    const bucketLabel = textOrNull(bucket["limitName"]) ?? bucketId;
-    for (const [windowName, candidate] of Object.entries(bucket)) {
-      const window = objectOrNull(candidate);
-      if (!window || !isRateLimitWindow(window)) continue;
-      const usedPercent = finiteNumber(window["usedPercent"]);
-      const durationMins = finiteNumber(window["windowDurationMins"]);
-      const resetSeconds = finiteNumber(window["resetsAt"]);
-      constraints.push({
-        id: `${bucketId}:${windowName}`,
-        label: `${bucketLabel} ${windowName}`,
-        used_ratio: usedPercent === null ? null : Math.min(1, Math.max(0, usedPercent / 100)),
-        window_seconds: durationMins !== null && durationMins > 0 ? durationMins * 60 : null,
-        resets_at: resetSeconds === null ? null : new Date(resetSeconds * 1000).toISOString(),
-        cooldown_until: null,
-      });
-    }
-  }
-  // Live-verified shape (codex 0.142.2, 2026-07-17): a TOP-LEVEL
-  // `rateLimitResetCredits: {availableCount, credits[]}` beside the buckets
-  // (PR#28143). Zero credits stay silent; a positive balance is a visible
-  // fact row so the footer never hides granted headroom.
-  const resetCredits = objectOrNull(response["rateLimitResetCredits"]);
-  const availableCredits = resetCredits ? finiteNumber(resetCredits["availableCount"]) : null;
-  if (availableCredits !== null && availableCredits > 0) {
-    constraints.push({
-      id: "reset_credits",
-      label: `${availableCredits} reset credit${availableCredits === 1 ? "" : "s"} available`,
-      used_ratio: null,
-      window_seconds: null,
-      resets_at: null,
-      cooldown_until: null,
-    });
-  }
-  if (buckets.length === 0) return [];
-  return [
-    {
-      subject: {
-        harness: "codex",
-        credential_route: "vendor_native",
-        plan_label: historical ? textOrNull(historical["planType"]) : null,
-        subject_id: subjectId,
-      },
-      constraints,
-      source: "codex_app_server",
-      observed_at: observedAt.toISOString(),
-      freshness: "fresh",
-    },
-  ];
 }
 
 export function codexQuotaInvocation(
@@ -298,24 +242,4 @@ export function codexQuotaInvocation(
     args: [...CODEX_FILE_AUTH_ARGS, "app-server", "--stdio"],
     env,
   };
-}
-
-function isRateLimitWindow(value: Record<string, unknown>): boolean {
-  return ["usedPercent", "windowDurationMins", "resetsAt"].some((key) =>
-    Object.prototype.hasOwnProperty.call(value, key),
-  );
-}
-
-function objectOrNull(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function textOrNull(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
 }

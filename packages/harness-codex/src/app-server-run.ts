@@ -6,7 +6,6 @@ import type { CodexEffortCatalog } from "./effort-probe.js";
 import {
   asObject,
   CodexAppServerController,
-  CodexRpcError,
   codexAppServerEvents,
   codexAppServerThreadParams,
   codexRequestRefusal,
@@ -18,6 +17,7 @@ import {
   type JsonObject,
 } from "./app-server-protocol.js";
 import { parseCodexEvent, parseCodexStderrFailure, type CodexParseState } from "./parse.js";
+import { parseCodexRpcError } from "./rpc-error.js";
 
 export { CodexAppServerController } from "./app-server-protocol.js";
 export { codexAppServerEvents, codexAppServerThreadParams } from "./app-server-protocol.js";
@@ -95,14 +95,7 @@ export async function* runCodexAppServer(
       const rpcError = asObject(object["error"]);
       if (rpcError) {
         if (request.taint) harnessReportedError = true;
-        const code = typeof rpcError["code"] === "number" ? rpcError["code"] : null;
-        request.reject(
-          new CodexRpcError(
-            code,
-            String(rpcError["message"] ?? "Codex app-server request failed"),
-            rpcError["data"],
-          ),
-        );
+        request.reject(parseCodexRpcError(rpcError));
         return;
       }
       const result = asObject(object["result"]);
