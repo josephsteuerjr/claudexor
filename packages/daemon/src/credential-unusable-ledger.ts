@@ -37,8 +37,8 @@ interface Success {
  * Clearing contract (all three, per the design roast):
  * 1. self-expiry — every row carries `expires_at`, clamped to 24h max;
  * 2. a covering dispatch-bound successful model response hides the live
- *    verdict; its bounded negative witnesses remain until expiry or generation
- *    clearing so a later concurrent refusal cannot lose either boundary;
+ *    verdict; its bounded negative witnesses remain until expiry, generation
+ *    clearing or memory eviction so concurrent refusals keep both boundaries;
  * 3. a credential-generation change voids the verdicts about the changed
  *    generation: a login/logout clears the WHOLE ledger
  *    (`noteCredentialChange`, wired in claudexord's setup lifecycle), while a
@@ -129,6 +129,17 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
       const oldest = [...this.successes.entries()]
         .flatMap(([k, points]) => points.map((point) => ({ k, point })))
         .reduce((a, b) => (a.point.expires <= b.point.expires ? a : b));
+      const remaining = this.positivePoints().filter((point) => point !== oldest.point);
+      for (const [k, refusal] of this.rows) {
+        if (
+          this.covers(k, refusal, oldest.point) &&
+          !remaining.some((point) => this.covers(k, refusal, point))
+        ) {
+          // Forgetting recovery proof must not resurrect an already-healed refusal.
+          this.rows.delete(k);
+          this.orders.delete(k);
+        }
+      }
       const retained = this.successes.get(oldest.k)!.filter((point) => point !== oldest.point);
       if (retained.length) this.successes.set(oldest.k, retained);
       else this.successes.delete(oldest.k);
