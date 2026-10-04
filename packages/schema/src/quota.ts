@@ -10,6 +10,8 @@ export const QuotaSource = z
     "claude_oauth_usage",
     "agy_command_usage",
     "cursor_rate_limit",
+    "claude_rate_limit_event",
+    "codex_app_server_event",
   ])
   .describe("Machine-readable source of quota evidence, classified by schema-owned traits.");
 export type QuotaSource = z.infer<typeof QuotaSource>;
@@ -18,6 +20,9 @@ export type QuotaSource = z.infer<typeof QuotaSource>;
  * exhaustive registry beside the QuotaSource vocabulary so consumers cannot
  * silently invent their own source classifications. */
 export interface QuotaSourceTraits {
+  /** A full source replaces its inventory; an incremental source reports
+   * independently aged singleton windows. */
+  readonly snapshotMode: "full" | "window";
   /** The source is a vendor response authenticated with this subject's own
    * credential, and therefore evidence of credential liveness. */
   readonly vendorAuthenticated: boolean;
@@ -31,31 +36,37 @@ export interface QuotaSourceTraits {
 
 export const QUOTA_SOURCE_TRAITS = {
   codex_app_server: {
+    snapshotMode: "full",
     vendorAuthenticated: true,
     refreshDemandHarness: "codex",
     producedByRefresher: true,
   },
   codex_rollout: {
+    snapshotMode: "full",
     vendorAuthenticated: false,
     refreshDemandHarness: null,
     producedByRefresher: false,
   },
   claude_statusline: {
+    snapshotMode: "full",
     vendorAuthenticated: false,
     refreshDemandHarness: null,
     producedByRefresher: true,
   },
   claude_api_retry: {
+    snapshotMode: "full",
     vendorAuthenticated: false,
     refreshDemandHarness: null,
     producedByRefresher: false,
   },
   claude_oauth_usage: {
+    snapshotMode: "full",
     vendorAuthenticated: true,
     refreshDemandHarness: "claude",
     producedByRefresher: true,
   },
   agy_command_usage: {
+    snapshotMode: "full",
     // agy's `/quota` print-mode command is authenticated with the profile's
     // own token, produced by a top-level refresher, and creates refresh demand
     // for agy (its profiles only — agy has no default subject, PLAN Л-4).
@@ -64,11 +75,24 @@ export const QUOTA_SOURCE_TRAITS = {
     producedByRefresher: true,
   },
   cursor_rate_limit: {
+    snapshotMode: "full",
     // Reactive spool evidence classified from cursor-agent's vendor-limit
     // prose (A1/A4): cursor exposes no quota API, so no refresher can produce
     // or refresh this source — like claude_api_retry it exists only while a
     // typed `rate_limit` event's cooldown does.
     vendorAuthenticated: false,
+    refreshDemandHarness: null,
+    producedByRefresher: false,
+  },
+  claude_rate_limit_event: {
+    snapshotMode: "window",
+    vendorAuthenticated: true,
+    refreshDemandHarness: null,
+    producedByRefresher: false,
+  },
+  codex_app_server_event: {
+    snapshotMode: "window",
+    vendorAuthenticated: true,
     refreshDemandHarness: null,
     producedByRefresher: false,
   },
@@ -182,6 +206,56 @@ export const QuotaSnapshot = z
   .strict()
   .describe("All independently reported quota windows for one vendor-owned subject.");
 export type QuotaSnapshot = z.infer<typeof QuotaSnapshot>;
+
+/** Stable vendor-window identity, independent of its measured value, reset,
+ * label and observation time. Unknown applicability is not representable as
+ * a global constraint: producers retain it as diagnostic evidence instead. */
+export function quotaConstraintIdentity(constraint: QuotaConstraint): string {
+  return JSON.stringify([
+    constraint.id,
+    constraint.window_seconds,
+    constraint.applies_to_models == null ? null : [...new Set(constraint.applies_to_models)].sort(),
+    constraint.applies_to_unspecified_model === true,
+  ]);
+}
+
+/** One schema-owned storage identity for registry, budget and projections.
+ * Existing full sources retain their inventory slot. Incremental sources
+ * require one independently observed window in each stored snapshot. */
+export function quotaSnapshotIdentity(
+  snapshot: Pick<QuotaSnapshot, "subject" | "source" | "constraints">,
+): string {
+  const subject = snapshot.subject;
+  const base = [
+    subject.harness,
+    subject.credential_route,
+    subject.subject_id ?? "",
+    snapshot.source,
+  ].join("\0");
+  if (quotaSourceTraits(snapshot.source).snapshotMode === "full") return base;
+  if (snapshot.constraints.length !== 1) {
+    throw new Error("incremental quota snapshots must contain exactly one window");
+  }
+  return `${base}\0${quotaConstraintIdentity(snapshot.constraints[0]!)}`;
+}
+
+/** New journal type carrying a partial observation. Older readers ignore
+ * this type rather than replaying it as a fake complete/cooldown snapshot. */
+export const QuotaWindowObservation = z
+  .object({ version: z.literal(1), snapshot: QuotaSnapshot })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      quotaSourceTraits(value.snapshot.source).snapshotMode !== "window" ||
+      value.snapshot.constraints.length !== 1
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "expected one incremental quota window",
+      });
+    }
+  });
+export type QuotaWindowObservation = z.infer<typeof QuotaWindowObservation>;
 
 export const QuotaAbsenceReason = z
   .enum([
@@ -298,6 +372,13 @@ export const QuotaAvailability = z
 export type QuotaAvailability = z.infer<typeof QuotaAvailability>;
 
 export const ControlQuotaSnapshot = QuotaSnapshot.extend({
+  snapshot_id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Server-derived stable snapshot identity for consumers; absent from raw journal evidence and optional for legacy responses.",
+    ),
   availability: QuotaAvailability.optional().describe(
     "Typed server-owned availability projection derived at the /v2/quota and atomic Accounts response boundaries; absent from raw journal/projection storage.",
   ),
@@ -474,6 +555,7 @@ export function withQuotaAvailability(
     ...response,
     snapshots: response.snapshots.map((snapshot) => ({
       ...snapshot,
+      snapshot_id: quotaSnapshotIdentity(snapshot),
       availability: quotaSnapshotAvailability(snapshot, opts),
     })),
   };
