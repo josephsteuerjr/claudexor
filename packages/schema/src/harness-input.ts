@@ -20,14 +20,25 @@ export const HarnessInputLimit = InputMeasure.extend({
 );
 export type HarnessInputLimit = z.infer<typeof HarnessInputLimit>;
 
-export const HarnessRequestRefusal = InputMeasure.extend({
-  kind: z.literal("input_too_large"),
-  limit: z.number().int().positive().safe().nullable(),
-  actual: z.number().int().nonnegative().safe().nullable(),
-  native_code: z.string().min(1),
-}).describe(
-  "Vendor-typed physical input refusal; the same input cannot be repaired by changing this harness's account or model.",
-);
+export const HarnessRequestRefusal = z
+  .discriminatedUnion("kind", [
+    InputMeasure.extend({
+      kind: z.literal("input_too_large"),
+      limit: z.number().int().positive().safe().nullable(),
+      actual: z.number().int().nonnegative().safe().nullable(),
+      native_code: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("vendor_cli_too_old"),
+      native_code: z.literal("claude_code_version_too_old"),
+      source: z.literal("claude_stdout"),
+      binary_path: z.string().min(1).nullable(),
+      installed_version: z.string().min(1).nullable(),
+    }),
+  ])
+  .describe(
+    "Vendor-attested request refusal that another account cannot repair; input and executable causes carry their own evidence.",
+  );
 export type HarnessRequestRefusal = z.infer<typeof HarnessRequestRefusal>;
 
 export const CatalogInputLimit = HarnessInputLimit.extend({

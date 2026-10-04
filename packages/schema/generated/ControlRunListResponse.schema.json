@@ -128,66 +128,117 @@
                     "type": "object",
                     "properties": {
                       "requestRefusal": {
-                        "type": "object",
-                        "properties": {
-                          "scope": {
-                            "type": "string",
-                            "const": "turn_text",
-                            "description": "All text input items in one native turn; separate instructions are excluded."
-                          },
-                          "unit": {
-                            "type": "string",
-                            "const": "unicode_scalars"
-                          },
-                          "limit": {
-                            "anyOf": [
-                              {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "scope": {
+                                "type": "string",
+                                "const": "turn_text",
+                                "description": "All text input items in one native turn; separate instructions are excluded."
                               },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "source": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "kind": {
-                            "type": "string",
-                            "const": "input_too_large"
-                          },
-                          "actual": {
-                            "anyOf": [
-                              {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
+                              "unit": {
+                                "type": "string",
+                                "const": "unicode_scalars"
                               },
-                              {
-                                "type": "null"
+                              "limit": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "source": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "kind": {
+                                "type": "string",
+                                "const": "input_too_large"
+                              },
+                              "actual": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "native_code": {
+                                "type": "string",
+                                "minLength": 1
                               }
-                            ]
+                            },
+                            "required": [
+                              "scope",
+                              "unit",
+                              "limit",
+                              "source",
+                              "kind",
+                              "actual",
+                              "native_code"
+                            ],
+                            "additionalProperties": false
                           },
-                          "native_code": {
-                            "type": "string",
-                            "minLength": 1
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "vendor_cli_too_old"
+                              },
+                              "native_code": {
+                                "type": "string",
+                                "const": "claude_code_version_too_old"
+                              },
+                              "source": {
+                                "type": "string",
+                                "const": "claude_stdout"
+                              },
+                              "binary_path": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "installed_version": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "native_code",
+                              "source",
+                              "binary_path",
+                              "installed_version"
+                            ],
+                            "additionalProperties": false
                           }
-                        },
-                        "required": [
-                          "scope",
-                          "unit",
-                          "limit",
-                          "source",
-                          "kind",
-                          "actual",
-                          "native_code"
                         ],
-                        "additionalProperties": false,
-                        "description": "Vendor-typed physical input refusal; the same input cannot be repaired by changing this harness's account or model."
+                        "description": "Vendor-attested request refusal that another account cannot repair; input and executable causes carry their own evidence."
                       },
                       "phase": {
                         "type": "string",
@@ -227,6 +278,7 @@
                               "subscription_window_exhausted",
                               "credential_pool_exhausted",
                               "input_too_large",
+                              "vendor_cli_too_old",
                               "delegated_home_unavailable",
                               "delegated_confinement_unavailable",
                               "delegated_evidence_incomplete",

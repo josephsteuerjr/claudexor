@@ -58,7 +58,7 @@ import {
   embeddedNpmCli,
   pickAllowlistedEnv,
   WINDOWS_RUNTIME_ENV_KEYS,
-  windowsNativeImageSegments,
+  isWindowsNativeArch,
 } from "@claudexor/core";
 import { flagBool, flagStr, type ParsedArgs } from "./args.js";
 import { CliError, renderCliFailure } from "./cli-error.js";
@@ -111,7 +111,7 @@ export interface HarnessInstallRunResult {
   /** Evidence for the exact unpinned vendor-script bytes that ran. */
   installerSha256?: string;
   installerByteLength?: number;
-  /** Present on every SUCCESS: the absolute launcher the proof executed. */
+  /** Present on every SUCCESS: the vendor entrypoint verified through its launch command. */
   installedBinary?: string;
   /** Present on every SUCCESS: the exact npm pin, or the script vendor's own
    * trimmed `--version` line. */
@@ -132,10 +132,9 @@ function verificationFailure(
 }
 
 /** A local Windows install is supported exactly where the pinned npm package
- * yields a verified package-native image for this architecture (core's
- * `windowsNativeImageSegments`); every other vendor refuses typed BEFORE any
- * side effect rather than installing a shim nothing can spawn without a shell
- * (issue #191). The remote target is unaffected. */
+ * has declared Windows support for this architecture. Post-install proof uses
+ * its standard npm entrypoint, whether native or Node. Other recipes keep
+ * their existing platform boundary; the remote target is unaffected. */
 function localPlatformRefusal(
   harness: InstallableHarness,
   platform: NodeJS.Platform,
@@ -143,11 +142,11 @@ function localPlatformRefusal(
 ): HarnessInstallRunResult | null {
   if (platform !== "win32") return null;
   const pin = NPM_PINS[harness];
-  if (pin && windowsNativeImageSegments(pin.npmPackage, arch) !== null) return null;
+  if (pin?.windows && isWindowsNativeArch(arch)) return null;
   const refusal = pin
-    ? windowsNativeImageSegments(pin.npmPackage, "x64") !== null
-      ? `${harness} has no native Windows image for the ${arch} architecture in its pinned npm package; nothing was executed`
-      : `${harness} local Windows installation is not supported by this release: its pinned npm package has no Claudexor-verified native Windows image, and an npm .cmd shim is never spawned without a shell (issue #191); nothing was executed`
+    ? pin.windows === true
+      ? `${harness} has no supported Windows npm package for the ${arch} architecture; nothing was executed`
+      : `${harness} local Windows installation is not supported by this release: its pinned npm entrypoint has not been verified for Windows; nothing was executed`
     : `--target local is not supported on Windows for ${harness} by this release; nothing was executed`;
   return { exitCode: 1, code: "unsupported_platform", refusal };
 }

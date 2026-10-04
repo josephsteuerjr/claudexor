@@ -257,140 +257,45 @@ struct RemotePreviewSheet: View {
 struct RemoteDeviceLoginSheet: View {
     @Environment(AppModel.self) private var model
     let request: RemoteDeviceLoginRequest
-    @State private var snapshot: SetupJobSnapshot?
-    @State private var status: String?
-    @State private var nativeSessionVerified = false
-    @State private var harnessRoutable = false
-
-    private var client: GatewayClient? {
-        model.gateway(for: .remote(request.connectionID))
-    }
+    @State private var session: RemoteLoginSession?
+    @State private var connectionMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-            HStack {
-                Label("Codex device login", systemImage: "person.badge.key")
-                    .font(.title2.weight(.semibold))
-                Spacer()
-                Button("Close") { model.dismissRemoteDeviceLogin(request) }
-            }
-            if let disclosure = snapshot?.deviceCode {
-                Text("Open this page in an isolated browser session, then enter the one-time code.")
-                    .foregroundStyle(.secondary)
-                HStack {
-                    Text(disclosure.verificationUrl)
-                        .font(.body.monospaced())
-                        .textSelection(.enabled)
-                    Button("Open") {
-                        if let url = URL(string: disclosure.verificationUrl) {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                }
-                if disclosure.hasUserCode {
-                    HStack {
-                        Text(disclosure.userCode)
-                            .font(.system(size: 26, weight: .semibold, design: .monospaced))
-                            .textSelection(.enabled)
-                        Button("Copy") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(
-                                disclosure.userCode, forType: .string)
-                        }
-                    }
-                }
-            } else if snapshot?.job.isTerminal != true {
-                ProgressView("Waiting for Codex to issue a device code…")
-            }
-            if let job = snapshot?.job {
-                let terminalPresentation = RemoteDeviceLoginTerminalPresentation(
-                    jobState: job.state,
-                    selectionReason: job.authCapability?.receipt?.selectionReason,
-                    effectiveRoute: job.authCapability?.receipt?.effective,
-                    effectiveSource: job.authCapability?.receipt?.effectiveSource,
-                    nativeSessionVerified: nativeSessionVerified,
-                    harnessRoutable: harnessRoutable)
-                if terminalPresentation == .readyWithWarning {
-                    Text("Codex is signed in and ready.")
-                        .font(.callout)
-                        .foregroundStyle(Theme.status(.positive))
-                    Text(
-                        "Harness Doctor confirmed the native session. "
-                            + "An extra compatibility check returned an outdated protocol result.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text(job.message)
-                        .font(.callout)
-                        .foregroundStyle(job.isTerminal && job.state != .succeeded
-                            ? SwiftUI.Color.orange : SwiftUI.Color.secondary)
-                }
-                if job.isTerminal {
-                    Label(
-                        terminalPresentation.label,
-                        systemImage: terminalPresentation.systemImage)
-                        .foregroundStyle(terminalPresentation.color)
-                }
-            }
-            if let status {
-                Text(status).font(.caption).foregroundStyle(.orange)
-            }
-            Spacer()
-            HStack {
-                Spacer()
-                if snapshot?.job.canCancel == true {
-                    Button("Cancel", role: .destructive) {
-                        Task {
-                            guard let client,
-                                  model.remoteActionIsCurrent(request.lease, client: client)
-                            else { return }
-                            _ = try? await client.cancelSetupJob(jobId: request.jobID)
-                        }
-                    }
-                }
-                Button(snapshot?.job.isTerminal == true ? "Done" : "Keep open") {
-                    model.dismissRemoteDeviceLogin(request)
-                }
-                .buttonStyle(.borderedProminent)
+        Group {
+            if let session {
+                RemoteLoginContent(session: session) { model.dismissRemoteDeviceLogin(request) }
+            } else {
+                VStack {
+                    Text(connectionMessage ?? "Connecting to the remote sign-in…")
+                    Button("Close") { model.dismissRemoteDeviceLogin(request) }
+                }.padding()
             }
         }
-        .padding(Theme.Spacing.xl)
-        .frame(width: 560, height: 410)
-        .task(id: request.jobID) {
-            guard let client else {
-                status = "The remote connection is offline."
+        .frame(width: 600, height: 610)
+        .task(id: request.id) {
+            guard let client = model.gateway(for: .remote(request.connectionID)),
+                  model.remoteActionIsCurrent(request.lease, client: client) else {
+                connectionMessage = "The remote connection is offline or changed. Reconnect before continuing."
                 return
             }
-            guard model.remoteActionIsCurrent(request.lease, client: client) else { return }
-            while !Task.isCancelled {
-                do {
-                    let current = try await client.setupJobSnapshot(jobId: request.jobID)
-                    guard model.remoteActionIsCurrent(request.lease, client: client) else { return }
-                    snapshot = current
-                    status = nil
-                    if current.job.isTerminal {
-                        if let readiness = await model.refreshRemoteNativeLoginReadiness(
-                            connectionID: request.connectionID,
-                            harnessID: SetupHarness.codex.rawValue,
-                            profileID: current.job.profileId,
-                            actionLease: request.lease)
-                        {
-                            guard model.remoteActionIsCurrent(request.lease, client: client)
-                            else { return }
-                            nativeSessionVerified = readiness.nativeSessionVerified
-                            harnessRoutable = readiness.harnessRoutable
-                        }
-                        return
-                    }
-                } catch {
-                    guard model.remoteActionIsCurrent(request.lease, client: client) else { return }
-                    snapshot = remoteDeviceLoginSnapshotAfterPollFailure(snapshot)
-                    status = model.userMessage(for: error)
-                }
-                try? await Task.sleep(for: .seconds(1))
-            }
+            let observer = RemoteLoginSession(
+                gateway: client, jobId: request.jobID, initialJob: request.initialJob,
+                isCurrent: { model.remoteActionIsCurrent(request.lease, client: client) },
+                refreshReadiness: { job in
+                    await model.refreshRemoteNativeLoginReadiness(
+                        connectionID: request.connectionID, harnessID: job.harness.rawValue,
+                        profileID: job.profileId, actionLease: request.lease)
+                })
+            session = observer
+            await observer.observe()
         }
-        .onDisappear { model.dismissRemoteDeviceLogin(request) }
+        .onChange(of: model.remoteActionIsCurrent(request.lease)) { _, current in
+            if !current { Task { await session?.detach() } }
+        }
+        .onDisappear {
+            Task { await session?.detach() }
+            model.dismissRemoteDeviceLogin(request)
+        }
     }
 }
 

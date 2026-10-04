@@ -352,7 +352,14 @@ function store(key: string, entry: CacheEntry, nowMs: number): void {
 
 function cacheKey(scope: ClaudeModelProbeScope, identity: HarnessBinaryIdentity): string {
   // A JSON array, never a joined string: two halves are paths.
-  return JSON.stringify([scope.key, identity.path, identity.ino, identity.size, identity.mtimeMs]);
+  return JSON.stringify([
+    scope.key,
+    identity.path,
+    identity.ino,
+    identity.size,
+    identity.mtimeMs,
+    identity.interpreter,
+  ]);
 }
 
 /**
@@ -372,7 +379,7 @@ async function captureOnce(
   ensureDir(root);
   const scratch = mkdtempSync(join(root, "probe-"));
   try {
-    const result = await capture(identity.path, [...CLAUDE_MODEL_PROBE_ARGS], {
+    const result = await capture(identity.launcher ?? identity.path, [...CLAUDE_MODEL_PROBE_ARGS], {
       env: claudeModelProbeEnv(scope, base, scratch, secret),
       cwd: scratch,
       input: claudeInitializeFrame(),

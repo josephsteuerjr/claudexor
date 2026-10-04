@@ -322,8 +322,10 @@ brokers callbacks or reads the one-time code into anything durable. An
 effective per-harness capability tells clients whether the current host can run
 setup in-app or needs the existing external-terminal attach; it is derived
 from the same bounded terminal resolver used at launch, not from a global
-"login exists" switch. An
-interactive login survives an ordinary daemon restart; an explicit cancel or
+"login exists" switch. CLI and local or remote app views follow the same server-owned login: a link,
+an outbound device code or a pasted completion value are distinct declared
+flows. Closing a view detaches observation; it does not cancel the login.
+An interactive login survives an ordinary daemon restart; an explicit cancel or
 the login's own deadline are what end a pending login (the engine's normal
 15-minute window is extendable; a shorter vendor-owned window is not).
 
@@ -336,6 +338,14 @@ control-plane results, not copies of the remote vendor stores. A remote target
 therefore has its own explicit trust decision and execution location, while the
 signed runtime and tunnel preserve the same engine-owned contract as a local
 run.
+
+An installed harness has one logical entrypoint. Native executables and standard
+npm Node entrypoints share the same launch description, preserving the vendor
+launcher instead of duplicating its private platform layout. A usable fallback
+remains usable, with the broken preferred entry and actual selection disclosed.
+A machine-attested executable-version refusal stops account failover; an older
+CLI that supplies only a message keeps that message as evidence without turning
+its prose into a credential or routing verdict.
 
 ## Workspace Semantics
 

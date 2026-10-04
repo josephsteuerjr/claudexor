@@ -139,10 +139,11 @@ Exact npm pins install under `~/.claudexor/node`; Cursor remains unpinned, so
 the JSON receipt records the downloaded installer's SHA-256 and byte length.
 Every successful executed receipt also records the absolute installed launcher
 and its verified version; a zero-exit installer without that postcondition is a
-typed failure. On Windows that launcher is the vendor's own `codex.exe` inside
-the pinned npm platform package (never npm's `.cmd` shim), and the same
-managed-root path is what doctor, login and runs resolve; Codex is the one
-vendor with that verified image in this release, the others refuse typed.
+typed failure. On Windows, Codex and Claude use the npm package's declared
+native or Node entrypoint. Doctor, login and runs share that selection, including
+ordinary user npm prefixes on PATH. The receipt identifies the vendor entrypoint;
+launch it through Claudexor so Node entrypoints retain their interpreter and
+arguments. Custom batch programs are not treated as standard npm wrappers.
 Omitting `--target` preserves the disclosed remote-host flow, its prefix and
 its exit-code contract; the install lease and the post-install proof are part
 of the unattended local contract and do not apply there.
@@ -231,8 +232,9 @@ client verifiers themselves stay fail-closed for the waived versions too).
   npm entrypoint — `<node-root>/lib/node_modules/npm/bin/npm-cli.js` beside
   `bin/node` on POSIX, `node_modules\npm\bin\npm-cli.js` beside `node.exe`
   on Windows; Claudexor never falls back to a `npm` found on ambient `PATH`.
-  On Windows only Codex installs locally (its package-native image); the
-  other vendors are a typed `unsupported_platform` refusal.
+  Local Windows installation supports Codex and Claude through their declared
+  native or Node npm entrypoints; other installer recipes retain their typed
+  platform restrictions.
 - **npm** — CLI/daemon installs update the ordinary way:
   `npm install -g claudexor@latest`. `claudexor release check` reports whether a
   newer engine runtime is published, verifying the same signed manifest

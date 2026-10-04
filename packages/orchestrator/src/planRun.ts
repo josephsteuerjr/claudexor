@@ -20,6 +20,7 @@ import { unanimousDeclaredFailure } from "./candidateEvidence.js";
 import { type BudgetDenial, budgetFailureRecord, classifyBudgetFailure } from "./budgetFailure.js";
 import { extractPlanQuestions } from "./planQuestions.js";
 import { emitPlanTerminal, resolvePlanTerminalFacts } from "./planTerminal.js";
+import { attemptVendorFailure } from "./harnessFailure.js";
 import { dominantHarnessFailureCategory, harnessFailureNextActions } from "./harnessFailure.js";
 import {
   buildCouncilProjection,
@@ -38,8 +39,7 @@ import {
 type PlanAttemptSummary = ReturnType<typeof plannerAttemptSummary>;
 /** Council orchestration and shared solo/Council finalize/failure tails. */
 export interface PlanRunDeps {
-  /** One planner spawn (native plan mode, read-only) — the SAME machinery the
-   * solo plan loop drives; council reuses it per member + for the merge. */
+  /** One native read-only planner spawn, shared by solo, Council draft and merge. */
   runPlannerAttempt(args: PlannerAttemptArgs): Promise<PlannerAttemptOutcome>;
   /** Persist the run telemetry artifact (auth-preference resolution lives on
    * the orchestrator, so this stays a bound method). */
@@ -551,6 +551,9 @@ export function writePlanHarnessFailure(
       category: blocked ? "policy" : (declared?.category ?? "harness_error"),
       code: declared?.code,
       requestRefusal: declared?.requestRefusal,
+      vendorFailure: ctx.aggregateFailure
+        ? null
+        : attemptVendorFailure(ctx.attemptTelemetries, planAttempts.at(-1)?.attemptId),
       safeMessage: message,
       eventRefs: planAttempts.map((p) => `attempts/${p.attemptId}/events.jsonl`),
       runDir: paths.root,

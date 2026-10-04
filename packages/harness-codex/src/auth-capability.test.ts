@@ -118,6 +118,10 @@ it("verifies default-store Codex auth after the native adapter's effort preparat
           });
           options.abortSignal?.addEventListener("abort", stop, { once: true });
           try {
+            yield {
+              type: "launch_advisory",
+              detail: "Using the working fallback; preferred entry is broken",
+            };
             while (!stopped) {
               if (replies.length) yield { type: "stdout", line: replies.shift()! };
               else await new Promise<void>((resolve) => (wake = resolve));
@@ -185,6 +189,11 @@ it("verifies default-store Codex auth after the native adapter's effort preparat
       credential_route: "vendor_native",
       credential_source: "native_session",
       payload: { native_session_id: "native-codex-smoke", native_turn_id: "turn-smoke" },
+    });
+    expect(events[2]).toMatchObject({
+      type: "status",
+      text: "Using the working fallback; preferred entry is broken",
+      payload: { launch_advisory: true },
     });
     expect(events.some((event) => event.type === "message" && event.final === true)).toBe(true);
     expect(events.at(-1)?.type).toBe("completed");
