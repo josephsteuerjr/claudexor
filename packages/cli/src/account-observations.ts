@@ -138,13 +138,9 @@ export async function displayAccountObservation(
     ...observed.value,
     status: {
       ...observed.value.status,
-      availability: "unknown",
-      verification: "not_run",
-      // No stale admission basis: this is display history, not the adapter's
-      // bounded positive-after-timeout exception used by an actual run.
-      stale: false,
-      stale_basis: undefined,
-      stale_age_ms: undefined,
+      // Retain what the probe observed. Display age does not revoke that fact
+      // or decide whether the binding may make its first catalog read. Actual
+      // run admission performs its own probe outside this display cache.
       detail:
         `Last checked ${new Date(observed.at).toISOString()}; refresh to verify current readiness. ${observed.value.status.detail ?? ""}`.trim(),
     },

@@ -3,7 +3,7 @@ import { updateGlobalConfig } from "@claudexor/config";
 import type { HarnessAdapter } from "@claudexor/core";
 import type { QuotaRegistry } from "@claudexor/daemon";
 import { createFakeHarness } from "@claudexor/harness-fake";
-import { probeCredentialProfileStatus } from "@claudexor/orchestrator";
+import { probeCredentialProfileStatus, profileStatusAdmits } from "@claudexor/orchestrator";
 import {
   CredentialProfile,
   GlobalConfig,
@@ -132,10 +132,26 @@ describe("Accounts display acquisition", () => {
     expect(f.probe).toHaveBeenCalledTimes(1);
     expect(f.models).toHaveBeenCalledTimes(1);
     expect(later.profiles[0]?.status).toMatchObject({
-      availability: "unknown",
-      verification: "not_run",
+      availability: "available",
+      verification: "passed",
+      last_verified_at: f.passed.last_verified_at,
     });
     expect(later.profiles[0]?.status.detail).toContain("Last checked");
+  });
+
+  it("reads the first native catalog after display TTL without repeating the successful profile probe", async () => {
+    const f = fixture();
+    await f.service.credentialProfiles();
+    vi.setSystemTime(Date.now() + STATUS_PROJECTION_TTL_MS + 1);
+    const first = await f.catalog();
+    expect(first.accounts[0]?.catalog).toMatchObject({
+      source: "api",
+      models: [{ id: "observed-model" }],
+    });
+    vi.setSystemTime(Date.now() + STATUS_PROJECTION_TTL_MS * 3);
+    expect((await f.catalog()).accounts[0]?.catalog?.models[0]?.id).toBe("observed-model");
+    expect(f.probe).toHaveBeenCalledTimes(1);
+    expect(f.models).toHaveBeenCalledTimes(1);
   });
 
   it("remembers a failed cold probe and failed catalog acquisition until explicit invalidation", async () => {
@@ -217,13 +233,39 @@ describe("Accounts display acquisition", () => {
   it("display reuse never replaces the runtime's independent readiness check", async () => {
     const f = fixture();
     await displayAccountObservation(f.profile, f.adapter);
+    vi.setSystemTime(Date.now() + STATUS_PROJECTION_TTL_MS + 1);
+    const displayed = await displayAccountObservation(f.profile, f.adapter);
+    expect(displayed.status.verification).toBe("passed");
+    expect(displayed.status.last_verified_at).toBe(f.passed.last_verified_at);
+    expect(displayed.status.detail).toContain("Last checked");
     f.probe.mockResolvedValue({ ...f.passed, availability: "unavailable", verification: "failed" });
     const admitted = await probeCredentialProfileStatus(
       f.profile,
       f.adapter.probeCredentialProfile?.bind(f.adapter),
     );
     expect(admitted).toMatchObject({ availability: "unavailable", verification: "failed" });
+    expect(profileStatusAdmits(f.profile, admitted)).toBe(false);
     expect(f.probe).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves adapter stale evidence when display age increases", async () => {
+    const f = fixture();
+    f.probe.mockResolvedValue({
+      ...f.passed,
+      availability: "unknown",
+      verification: "not_run",
+      stale: true,
+      stale_basis: "last_positive_after_timeout",
+      stale_age_ms: 1000,
+    });
+    const first = await displayAccountObservation(f.profile, f.adapter);
+    vi.setSystemTime(Date.now() + STATUS_PROJECTION_TTL_MS + 1);
+    const later = await displayAccountObservation(f.profile, f.adapter);
+    const { detail: _firstDetail, ...firstFact } = first.status;
+    const { detail: _laterDetail, ...laterFact } = later.status;
+    expect(laterFact).toEqual(firstFact);
+    expect(later.status.detail).toContain("Last checked");
+    expect(f.probe).toHaveBeenCalledTimes(1);
   });
 
   it("reprojects current credential rejection and recovery without latching either display verdict", async () => {

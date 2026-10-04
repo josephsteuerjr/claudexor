@@ -9,7 +9,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./daemon-run.js", () => ({ ensureDaemon: mocks.ensureDaemon }));
 vi.mock("./live.js", () => ({ controlApiFetch: mocks.controlApiFetch }));
-vi.mock("./cli-io.js", () => ({ print: mocks.print, printJson: mocks.printJson }));
+vi.mock("./cli-io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cli-io.js")>()),
+  print: mocks.print,
+  printJson: mocks.printJson,
+}));
 
 import { parseArgs } from "./args.js";
 import { quotaCommand } from "./quota-command.js";
@@ -106,6 +110,36 @@ describe("quotaCommand", () => {
       expect.objectContaining({
         absences: [expect.objectContaining({ reason: "no_source" })],
       }),
+    );
+  });
+
+  it("identifies a paused account and route while retaining legacy vendor-only disclosure", async () => {
+    const until = "2026-10-04T15:00:00Z";
+    mocks.controlApiFetch.mockResolvedValue(
+      Response.json({
+        snapshots: [],
+        refreshed_at: null,
+        refresh_skipped: [
+          {
+            vendor: "claude",
+            not_before: until,
+            subject: {
+              harness: "claude",
+              subject_id: "work",
+              credential_route: "vendor_native",
+              plan_label: null,
+            },
+          },
+          { vendor: "codex", not_before: until },
+        ],
+      }),
+    );
+    expect(await quotaCommand(parseArgs([]), false)).toBe(0);
+    expect(mocks.print).toHaveBeenCalledWith(
+      `claude/work (vendor_native): refresh skipped (rate-limit cooldown until ${until})`,
+    );
+    expect(mocks.print).toHaveBeenCalledWith(
+      `codex: refresh skipped (rate-limit cooldown until ${until})`,
     );
   });
 });

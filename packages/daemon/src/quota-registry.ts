@@ -239,6 +239,7 @@ export class QuotaRegistry {
       this.now().getTime(),
       () => this.refreshCoordinator.isCurrent(credentialGeneration),
       this.subjects?.(),
+      this.activeSnapshots(this.now().getTime()),
     );
     const settled = await Promise.allSettled(running.map(async ({ refresh }) => refresh()));
     const batches: Array<{ snapshots: QuotaSnapshot[]; absences: QuotaAbsence[] } | null> = [];

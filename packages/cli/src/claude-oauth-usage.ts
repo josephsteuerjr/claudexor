@@ -452,6 +452,10 @@ export async function refreshClaudeOauthUsageQuota(
       );
       continue;
     }
+    // Retain the existing snapshot and its observation time when another
+    // account's retry caused this background lane cycle. All current aliases
+    // were bound above, and poll floors have already been honored.
+    if (cycle?.shouldRefresh?.(subject) === false) continue;
     let beforeRequest = now();
     if (needsVendorRefresh(credential, beforeRequest)) {
       const originalCredentialStillValid =

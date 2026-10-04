@@ -491,8 +491,9 @@ The implemented tools include `claudexor_ask` (with `deepScan`), `claudexor_run`
 the mutability matrix, run-control keys), and the read-only recovery tools
 `claudexor_accounts` (the server-authored credential-profile/readiness/quota
 view, including freshness and `next_up` state — the default read is the
-cached listing; `fresh: true` opts into the expensive atomic snapshot, which
-honors per-vendor rate-limit cooldowns),
+retained readiness observation, with its check time, composed with current
+quota and registry facts; `fresh: true` opts into the expensive atomic snapshot,
+which honors account/route rate-limit cooldowns and retained legacy vendor floors),
 `claudexor_runs`, `claudexor_inspect`, `claudexor_run_status`,
 `claudexor_run_result`, `claudexor_run_cancel`,
 `claudexor_run_interactions`, `claudexor_answer_interaction`,

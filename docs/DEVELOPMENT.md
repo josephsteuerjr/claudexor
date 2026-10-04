@@ -453,7 +453,11 @@ requested, submitted and observed service separately, including mixed sessions.
 Capabilities, exact-account inventories and their observation provenance belong
 to existing adapter/discovery owners. Clients negotiate new account views through
 the operation catalog and preserve strict legacy requests when unsupported.
-Do not add a parallel catalog cache, pricing ledger or preference resolver.
+Account display acquisition is shared by profile and catalog consumers through
+one observation owner. It retains the first attempt, including failure, with
+its original age until explicit refresh, credential changes or necessary work
+updates it; actual execution still performs its own checks. Do not add a
+second display cache, pricing ledger or preference resolver.
 
 ## Boundaries
 

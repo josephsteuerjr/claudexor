@@ -26,6 +26,9 @@ export interface QuotaRefreshResult {
  * ignores the argument keeps the pre-existing contract. */
 export interface QuotaRefreshCycle {
   readonly foreground: boolean;
+  /** Background cycles fetch only due primary evidence. Explicit refreshes
+   * still ask every eligible subject; floor and alias checks remain separate. */
+  readonly shouldRefresh?: (subject: QuotaSubject) => boolean;
   /** Host-only callbacks; token identity is an ephemeral hash, never wire data. */
   readonly pacing?: {
     bindCredentials(
@@ -218,6 +221,7 @@ export function selectCycleEntries(
   nowMs: number,
   isCurrent: () => boolean = () => true,
   subjects: readonly QuotaSubject[] = [],
+  snapshots: readonly QuotaSnapshot[] = [],
 ): LaneCycleSelection {
   const skipped =
     scope === null
@@ -260,6 +264,15 @@ export function selectCycleEntries(
       refresh: () =>
         entry.refresh({
           foreground: scope === null,
+          shouldRefresh: (subject) =>
+            scope === null ||
+            remainingQuotaRefreshDemand(
+              snapshots.filter(
+                (snapshot) => snapshot.subject.credential_route === subject.credential_route,
+              ),
+              [subject],
+              nowMs + QUOTA_POLL_INTERVAL_MS,
+            ).size > 0,
           pacing: {
             bindCredentials: (bindings) => {
               if (isCurrent()) entry.lane.pacer.bindCredentials(bindings);

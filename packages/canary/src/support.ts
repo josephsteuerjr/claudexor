@@ -61,23 +61,14 @@ export function makeSandbox(): Sandbox {
     "-qm",
     "init",
   ]);
-  // HERMETIC vendor stub: codex-truth canaries (settings-write-strict) need
-  // the adapter's discover() to answer `--version`, but CI runners ship no
-  // codex CLI — the suite must not silently depend on a dev machine's
-  // install. The stub only answers liveness probes; the manifest
-  // known_models stay the truth source, and no canary run ever executes it
-  // (fake harnesses / typed refusals).
+  // Hermetic vendor discovery: version-only stubs keep settings/model-truth
+  // canaries independent of installed CLIs. Codex, Claude and AGY return their
+  // advisory hints; OpenCode has no inventory and keeps strict refusal. No
+  // story needs a real vendor process, credential or model-list protocol.
   const codexStub = versionOnlyStub(base, "codex-stub", "codex-cli 0.0.0-stub");
-  // Same discipline for claude and agy: the claude adapter now has a live
-  // `models()` probe (the prompt-free initialize handshake), so an unstubbed
-  // sandbox would spawn a DEVELOPER's real `claude` from a story. Against a
-  // `--version`-only stub that probe fails and answers the frozen hint rows —
-  // the intended hermetic path, identical on a dev box and a CI runner. agy's
-  // manifest hint list is the AUTHORITATIVE truth source the
-  // settings-write-strict canary needs (codex and claude declare absence
-  // advisory, so they can no longer refuse an unlisted model).
   const claudeStub = versionOnlyStub(base, "claude-stub", "0.0.0-stub (Claude Code)");
   const agyStub = versionOnlyStub(base, "agy-stub", "agy 0.0.0-stub");
+  const opencodeStub = versionOnlyStub(base, "opencode-stub", "opencode 0.0.0-stub");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: home,
@@ -86,6 +77,7 @@ export function makeSandbox(): Sandbox {
     CLAUDEXOR_CODEX_BIN: codexStub,
     CLAUDEXOR_CLAUDE_BIN: claudeStub,
     CLAUDEXOR_AGY_BIN: agyStub,
+    CLAUDEXOR_OPENCODE_BIN: opencodeStub,
     // Keep daemon state inside the sandbox too (config dir owns it).
   };
   return {

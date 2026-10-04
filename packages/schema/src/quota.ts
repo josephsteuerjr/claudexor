@@ -205,15 +205,14 @@ export const QuotaAbsenceReason = z
      * throttled poll is not an exhausted window). The row carries
      * `retry_after_ms` when the vendor sent a parseable Retry-After. */
     "rate_limited",
-    /** A SIBLING candidate's probe hit the vendor rate limit in this same
-     * cycle, so this candidate was not probed at all (short-circuit: keeping
-     * on probing would hammer the endpoint that just said stop). Distinct
-     * from `rate_limited` — this subject's own state is honestly unknown,
-     * never fabricated from a sibling's 429. */
+    /** This subject or a known token-identical alias is inside a poll floor,
+     * so no request was made. Distinct from `rate_limited`, which records
+     * the actual refusal. Retained legacy vendor floors may also suppress
+     * subjects until their recorded deadline. */
     "probe_skipped_rate_limited",
-    /** The subject was not re-probed because its vendor's poll rate-limit
+    /** The subject was not re-probed because its applicable poll rate-limit
      * cooldown is active: the POLL is paused, not the plan window. A derived
-     * gap row so a suppressed vendor's subjects never fall silent — surfaces
+     * gap row so suppressed subjects never fall silent — surfaces
      * can say "data is stale, polling paused until T", and exhaustion
      * readers stay fail-open instead of promoting a stale spent window into
      * "window exhausted". */
@@ -335,7 +334,7 @@ export const QuotaRefreshSkipped = z
   })
   .strict()
   .describe(
-    "One vendor lane a refresh cycle did not re-fetch because its poll rate-limit cooldown is active; its snapshots/absences in the same response are last-known registry data.",
+    "One subject a refresh cycle did not re-fetch because its poll rate-limit cooldown is active, or a retained legacy vendor floor when subject is absent; its snapshots/absences in the same response are last-known registry data.",
   );
 export type QuotaRefreshSkipped = z.infer<typeof QuotaRefreshSkipped>;
 

@@ -3,6 +3,15 @@
  * exactly one JSON object on stdout; usage errors go to stderr (text mode)
  * or a typed {ok:false,exitCode,error} object (json mode).
  */
+import type { QuotaRefreshSkipped } from "@claudexor/schema";
+
+export function quotaRefreshLabel(skip: QuotaRefreshSkipped): string {
+  const subject = skip.subject;
+  return subject
+    ? `${subject.harness}/${subject.subject_id ?? "default"} (${subject.credential_route})`
+    : skip.vendor;
+}
+
 export function print(s: string): void {
   process.stdout.write(s + "\n");
 }

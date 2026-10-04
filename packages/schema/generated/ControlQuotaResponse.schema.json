@@ -344,7 +344,7 @@
               "not_before"
             ],
             "additionalProperties": false,
-            "description": "One vendor lane a refresh cycle did not re-fetch because its poll rate-limit cooldown is active; its snapshots/absences in the same response are last-known registry data."
+            "description": "One subject a refresh cycle did not re-fetch because its poll rate-limit cooldown is active, or a retained legacy vendor floor when subject is absent; its snapshots/absences in the same response are last-known registry data."
           }
         }
       },

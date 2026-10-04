@@ -1,7 +1,7 @@
 import { ControlProblem, ControlQuotaResponse } from "@claudexor/schema";
 import type { ParsedArgs } from "./args.js";
 import { flagBool } from "./args.js";
-import { print, printJson } from "./cli-io.js";
+import { print, printJson, quotaRefreshLabel } from "./cli-io.js";
 import { renderCliFailure } from "./cli-error.js";
 import { ensureDaemon } from "./daemon-run.js";
 import { controlApiFetch } from "./live.js";
@@ -41,10 +41,11 @@ export async function quotaCommand(args: ParsedArgs, json: boolean): Promise<num
 }
 
 function printQuota(value: ReturnType<typeof ControlQuotaResponse.parse>): void {
-  // Additive refresh disclosure: a vendor inside its poll rate-limit cooldown
-  // was served from last-known registry data instead of a fresh fan-out.
+  // Paused subjects (or a legacy vendor floor) retain last-known registry data.
   for (const skip of value.refresh_skipped ?? []) {
-    print(`${skip.vendor}: refresh skipped (rate-limit cooldown until ${skip.not_before})`);
+    print(
+      `${quotaRefreshLabel(skip)}: refresh skipped (rate-limit cooldown until ${skip.not_before})`,
+    );
   }
   if (value.snapshots.length === 0 && value.absences.length === 0) {
     print("quota: unknown (no vendor-owned snapshot available)");

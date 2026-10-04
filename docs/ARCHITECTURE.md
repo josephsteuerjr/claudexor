@@ -1079,8 +1079,8 @@ Accounts separates display acquisition, live quota composition and explicit refr
 Ordinary profile and account-catalog reads share one process-local observation owner
 (`cli/account-observations.ts`): one coalesced cold attempt per binding, including a
 failed attempt. TTL expiry and repeated views never repeat it. The profile's current
-registry fields and quota evidence are composed at each read; old verification is
-shown as unknown with its check time, never renewed by viewing it. Credential-state
+registry fields and quota evidence are composed at each read; the last observed
+verification remains visible with its check time, never renewed by viewing it. Credential-state
 invalidation and an explicit atomic Refresh request new evidence. Catalog payloads
 retain original timestamps, including null when the adapter supplies none. This
 cache is display-only: real run and model admission retain their fresh route checks.
