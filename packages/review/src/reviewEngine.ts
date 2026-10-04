@@ -1,4 +1,7 @@
 import {
+  observeCredentialExecution,
+  bindCredentialExecutionObserverFactory,
+  type CredentialExecutionObserverFactory,
   prepareHarnessProcessing,
   admitPreparedProcessing,
   stampCredentialProfileSelection,
@@ -107,9 +110,7 @@ export interface ReviewCandidateInput {
     candidateTree: string;
     packetManifestSha256: string;
   };
-  /** Subtractive delta for the fixed Cursor/Sol slot in sealed-packet mode
-   * (INV-125). Other lanes retain full context; the base SHA and diff must
-   * match the sealed packet, as checked by assertSealedDeltaScope. */
+  /** Sealed-packet delta; assertSealedDeltaScope checks base SHA and diff. */
   deltaScope?: { baseSha: string };
   cwd: string;
   reviewers: ReviewerSpec[];
@@ -121,8 +122,8 @@ export interface ReviewCandidateInput {
   onReviewerEvent?: (event: ReviewerProgressEvent) => void;
   /** Cumulative panel cash plus amounts of unknown meaning on potentially paid routes. */
   onUsageCost?: (panelPaidOrUnknownUsd: number) => boolean;
-  /** Exact prepared slot, before each physical send; caller owns the panel lease. */
   onBeforeDispatch?: (reviewerIndex: number, spec: HarnessRunSpec) => void | Promise<void>;
+  credentialObserverFactory?: CredentialExecutionObserverFactory;
 }
 
 const DEFAULT_REVIEWER_TIMEOUT_MS = 10 * 60_000;
@@ -439,9 +440,7 @@ export async function reviewCandidate(input: ReviewCandidateInput): Promise<Revi
     if (input.signal?.aborted) return;
     const artifact = createReviewerArtifactContext(artifactsBaseDir, index, reviewer);
     artifacts[index] = artifact;
-    // Each parallel reviewer gets a disposable scratch/state namespace. The
-    // profile's credential store remains adapter-owned; this HOME only prevents
-    // native mutable session/config state from colliding between slots.
+    // Scratch state is per reviewer; the credential store stays adapter-owned.
     const reviewerScratch = new WorkspaceManager(input.cwd).readOnlyHomeEnv();
     const reviewerEnv = { ...(input.env ?? {}), ...reviewerScratch.env };
     let reviewerWorkspace: ReviewerWorkspace | null = null;
@@ -457,9 +456,7 @@ export async function reviewCandidate(input: ReviewCandidateInput): Promise<Revi
         candidateCopyPaths: candidateInventory.copyPaths,
         preserveEvidenceBytes: input.evidenceReadOnly === true,
       });
-      // The delta subject is PINNED to the contract's sol slot; every other
-      // lane reviews the full context (INV-125 second amendment, integrity
-      // shape from the wave-6 finding — the harness is not a parameter).
+      // Only the fixed delta slot uses the delta; other lanes read the full context.
       const deltaBase =
         verifiedDeltaScope && reviewer.adapter.id === SOL_DELTA_HARNESS_ID
           ? input.deltaScope!.baseSha
@@ -525,11 +522,10 @@ export async function reviewCandidate(input: ReviewCandidateInput): Promise<Revi
         env: reviewerEnv,
       });
       stampCredentialProfileSelection(spec, { pinned: reviewer.profilePinned !== false });
+      bindCredentialExecutionObserverFactory(spec, input.credentialObserverFactory);
       if (input.onBeforeDispatch)
         spec.extra["processingAdmission"] = async (actual: HarnessRunSpec) => {
-          // The adapter resolves the concrete profile/route while preparing
-          // this attempt. Keep billing tied to that current SSOT rather than
-          // the reviewer-level preflight (which may be stale after rotation).
+          // Billing follows the prepared route, including profile rotation.
           actual.extra["routeBillingKnowledge"] = (resolved: HarnessRunSpec) => {
             const profileKind = resolved.credential_profile?.credential_kind;
             return profileKind === "api_key"
@@ -886,7 +882,11 @@ async function collectReviewerOutput(
     if (isCancelled()) throw new Error("Reviewer cancelled before dispatch");
     currentAuthMode = null;
     costKnowledge.startAttempt(runSpec);
-    const iter = (reviewer.adapter.review ?? reviewer.adapter.run).call(reviewer.adapter, runSpec);
+    const iter = observeCredentialExecution(
+      reviewer.adapter.id,
+      runSpec,
+      (reviewer.adapter.review ?? reviewer.adapter.run).call(reviewer.adapter, runSpec),
+    );
     currentIter = iter;
     let text = "";
     let sawTransient = false;

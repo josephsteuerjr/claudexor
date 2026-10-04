@@ -12,7 +12,11 @@ import {
   quotaSourceTraits,
 } from "@claudexor/schema";
 import { redactSecrets } from "@claudexor/util";
-import { liveUnusableFor } from "./credential-cooldown.js";
+import type { CredentialHonoredObservation } from "@claudexor/core";
+import {
+  applicableCredentialUnusable,
+  composeCredentialProfileEvidence,
+} from "./account-evidence.js";
 export {
   effectiveLimitAction,
   limitSubjectRoute,
@@ -75,19 +79,26 @@ export async function selectedProfileAvailability(input: {
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
-  const dead = liveUnusableFor(
-    input.unusable ?? [],
-    input.harnessId,
-    profile.profile_id,
-    input.model,
+  const evidence = {
+    quota: input.quota,
+    unusable: input.unusable,
+    model: input.model,
+    route:
+      profile.credential_kind === "api_key"
+        ? ("managed_api_key" as const)
+        : ("vendor_native" as const),
+  };
+  const dead = applicableCredentialUnusable(
+    { harness_id: input.harnessId, profile_id: profile.profile_id },
+    evidence,
   );
   if (dead) {
     return `credential profile "${profile.profile_id}" credential is unusable (${dead.code})`;
   }
   if (!input.probe) return `harness "${input.harnessId}" has no profile probe`;
-  const result = vendorVerifiedProfileStatus(
+  const result = composeCredentialProfileEvidence(
     await probeCredentialProfileStatus(profile, input.probe),
-    input.quota,
+    evidence,
   );
   return profileStatusAdmits(profile, result, {
     allowStale: input.allowStale === true,
@@ -114,9 +125,9 @@ export type VendorCredentialObservation =
  * quota on a mini-run, so building one would cost exactly what it measures.
  */
 export function vendorCredentialObservation(
-  quota: { snapshots: readonly QuotaSnapshot[]; absences: readonly QuotaAbsence[] },
+  quota: VendorQuotaObservations,
   harnessId: string,
-  profileId: string,
+  profileId: string | null,
 ): VendorCredentialObservation | null {
   const owns = (subject: QuotaSnapshot["subject"]): boolean =>
     subject.harness === harnessId && (subject.subject_id ?? null) === profileId;
@@ -128,7 +139,17 @@ export function vendorCredentialObservation(
   const revoked = quota.absences.find(
     (item) => owns(item.subject) && item.reason === "auth_revoked",
   );
-  if (revoked) {
+  const honored = quota.honored
+    ?.filter(
+      (item) =>
+        item.harness_id === harnessId &&
+        item.profile_id === profileId &&
+        item.model === null &&
+        (!revoked || item.credential_route === revoked.subject.credential_route) &&
+        (!revoked || Date.parse(item.observed_at) > Date.parse(revoked.observed_at)),
+    )
+    .sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at))[0];
+  if (revoked && !honored) {
     return {
       outcome: "revoked",
       observed_at: revoked.observed_at,
@@ -136,9 +157,16 @@ export function vendorCredentialObservation(
     };
   }
   const snapshot = quota.snapshots.find(
-    (item) => owns(item.subject) && quotaSourceTraits(item.source).vendorAuthenticated,
+    (item) =>
+      owns(item.subject) &&
+      item.freshness === "fresh" &&
+      quotaSourceTraits(item.source).vendorAuthenticated,
   );
-  return snapshot ? { outcome: "honored", observed_at: snapshot.observed_at } : null;
+  return honored
+    ? { outcome: "honored", observed_at: honored.observed_at }
+    : snapshot
+      ? { outcome: "honored", observed_at: snapshot.observed_at }
+      : null;
 }
 
 /**
@@ -180,6 +208,7 @@ export function withVendorCredentialObservation(
 export interface VendorQuotaObservations {
   snapshots: readonly QuotaSnapshot[];
   absences: readonly QuotaAbsence[];
+  honored?: readonly CredentialHonoredObservation[];
 }
 
 /**

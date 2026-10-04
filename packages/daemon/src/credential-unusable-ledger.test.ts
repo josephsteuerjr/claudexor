@@ -34,6 +34,24 @@ function usage(over: Partial<HarnessEvent> = {}): HarnessEvent {
   } as HarnessEvent;
 }
 
+function honorUsage(
+  ledger: CredentialUnusableLedger,
+  harnessId: string,
+  event: HarnessEvent,
+): void {
+  const binding = ledger.bind({
+    harnessId,
+    profileId: event.credential_profile_id ?? null,
+    route: event.credential_route ?? null,
+    requestedModel: event.observed_model ?? null,
+  });
+  if (
+    event.type === "usage" &&
+    ((event.usage?.input_tokens ?? 0) > 0 || (event.usage?.output_tokens ?? 0) > 0)
+  )
+    ledger.honorBound(binding, event.observed_model ?? null);
+}
+
 describe("CredentialUnusableLedger (A7 bounded typed evidence)", () => {
   it("records a typed observation and serves it while live", () => {
     const { ledger } = ledgerAt();
@@ -67,31 +85,31 @@ describe("CredentialUnusableLedger (A7 bounded typed evidence)", () => {
     const { ledger } = ledgerAt();
     ledger.record(obs({}));
     ledger.record(obs({ profile_id: "other" }));
-    ledger.observeEvent("claude", usage());
+    honorUsage(ledger, "claude", usage());
     expect(ledger.live().map((o) => o.profile_id)).toEqual(["other"]);
   });
 
   it("a ZERO-token usage event proves nothing and clears nothing", () => {
     const { ledger } = ledgerAt();
     ledger.record(obs({}));
-    ledger.observeEvent("claude", usage({ usage: { input_tokens: 0, output_tokens: 0 } }));
+    honorUsage(ledger, "claude", usage({ usage: { input_tokens: 0, output_tokens: 0 } }));
     expect(ledger.live()).toHaveLength(1);
   });
 
   it("a MODEL-SCOPED row clears only on an exactly-matching observed model", () => {
     const { ledger } = ledgerAt();
     ledger.record(obs({ code: "capability_refused", model: "opus" }));
-    ledger.observeEvent("claude", usage({ observed_model: "sonnet" }));
+    honorUsage(ledger, "claude", usage({ observed_model: "sonnet" }));
     expect(ledger.live()).toHaveLength(1);
-    ledger.observeEvent("claude", usage({ observed_model: "opus" }));
+    honorUsage(ledger, "claude", usage({ observed_model: "opus" }));
     expect(ledger.live()).toHaveLength(0);
   });
 
   it("success on ANOTHER subject never clears this one", () => {
     const { ledger } = ledgerAt();
     ledger.record(obs({}));
-    ledger.observeEvent("claude", usage({ credential_profile_id: "other" }));
-    ledger.observeEvent("codex", usage());
+    honorUsage(ledger, "claude", usage({ credential_profile_id: "other" }));
+    honorUsage(ledger, "codex", usage());
     expect(ledger.live()).toHaveLength(1);
   });
 

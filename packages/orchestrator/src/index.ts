@@ -12,8 +12,11 @@ export {
   vendorVerifiedProfileStatus,
   vendorCredentialObservation,
   resolveCredentialProfile,
+  type VendorQuotaObservations,
 } from "./credential-profiles.js";
 export { selectFromAccountPool } from "./account-pool.js";
 export { resolveAccountForRun } from "./account-resolution.js";
 export { differentialSubjectVerdict } from "./credential-differential.js";
+export * from "./credential-execution.js";
+export * from "./account-evidence.js";
 export { liveUnusableFor, profileQuotaBlock } from "./credential-cooldown.js";

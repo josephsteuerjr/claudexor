@@ -1,4 +1,8 @@
-import type { CredentialUnusableObservation, QuotaSnapshot } from "@claudexor/schema";
+import type {
+  CredentialRoute,
+  CredentialUnusableObservation,
+  QuotaSnapshot,
+} from "@claudexor/schema";
 import { ControlProblem, quotaSnapshotAvailability } from "@claudexor/schema";
 
 /**
@@ -16,10 +20,13 @@ export function liveUnusableFor(
   profileId: string | null,
   model?: string | null,
   now: Date = new Date(),
+  route?: CredentialRoute | null,
 ): CredentialUnusableObservation | null {
   for (const obs of observations) {
     if (obs.harness_id !== harnessId) continue;
     if (obs.profile_id !== profileId) continue;
+    if (obs.credential_route !== undefined && route !== undefined && obs.credential_route !== route)
+      continue;
     if (obs.model !== null && obs.model !== (model ?? null)) continue;
     const expires = Date.parse(obs.expires_at);
     if (!Number.isFinite(expires) || expires <= now.getTime()) continue;

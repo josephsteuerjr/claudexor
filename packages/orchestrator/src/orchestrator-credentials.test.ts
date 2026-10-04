@@ -10,6 +10,9 @@ import {
   type PreProgressRefusalMemory,
 } from "./pre-progress-refusal.js";
 import type { TransientFailureObservation } from "./transientClassify.js";
+import { CredentialUnusableLedger } from "../../daemon/src/credential-unusable-ledger.js";
+import { createCredentialExecutionObserver } from "./credential-execution.js";
+import type { CredentialExecutionSubject } from "@claudexor/core";
 
 // #363: the A7 differential verdict about a try's CURRENT subject is recorded
 // only while the credential that try bound is still the account's current one.
@@ -72,6 +75,93 @@ function fixture() {
 }
 
 describe("OrchestratorCredentials differential verdict fence (#363)", () => {
+  it("does not record an asynchronous local probe after native or API credential change", async () => {
+    for (const api of [false, true]) {
+      const ledger = new CredentialUnusableLedger();
+      const spec = {
+        model_hint: "m",
+        auth_preference: api ? "api_key" : "subscription",
+        credential_profile: {
+          profile_id: "a",
+          harness_id: "claude",
+          credential_kind: api ? "api_key" : "config_dir_login",
+        },
+        extra: {},
+      } as unknown as HarnessRunSpec;
+      let complete!: (value: unknown) => void;
+      const result = new Promise((resolve) => {
+        complete = resolve;
+      });
+      const host = {
+        quotaSnapshots: () => [],
+        quotaAbsences: () => [],
+        credentialUnusable: () => ledger.live(),
+        credentialEvidence: () => ledger,
+        credentialObserverFactory: () => (subject: CredentialExecutionSubject) =>
+          createCredentialExecutionObserver(ledger, ledger.bind(subject)),
+        recordCredentialUnusable: () => {
+          throw new Error("unbound recording");
+        },
+      } as unknown as CredentialResolutionHost;
+      const adapter = {
+        id: "claude",
+        probeCredentialProfile: () => result,
+      } as unknown as HarnessAdapter;
+      const probe = new OrchestratorCredentials(host)
+        .rotationObservations(adapter, spec, [], null)
+        .probeCurrentSubject();
+      ledger.clearSubject("claude", "a");
+      complete({
+        harness_id: "claude",
+        profile_id: "a",
+        availability: "available",
+        verification: "failed",
+        verification_source: "local_store",
+        last_verified_at: null,
+      });
+      expect(await probe).toMatchObject({ code: "verification_failed" });
+      expect(ledger.live()).toEqual([]);
+    }
+  });
+  it("fences the legacy default subject and preserves its actual quota route", async () => {
+    const ledger = new CredentialUnusableLedger();
+    const host = {
+      quotaSnapshots: () => [],
+      quotaAbsences: () => [
+        {
+          subject: {
+            harness: "claude",
+            subject_id: null,
+            credential_route: "vendor_native",
+            plan_label: null,
+          },
+          reason: "auth_revoked",
+          detail: "vendor rejection",
+          observed_at: new Date().toISOString(),
+        },
+      ],
+      credentialUnusable: () => ledger.live(),
+      credentialEvidence: () => ledger,
+      credentialObserverFactory: () => (subject: CredentialExecutionSubject) =>
+        createCredentialExecutionObserver(ledger, ledger.bind(subject)),
+    } as unknown as CredentialResolutionHost;
+    const credentials = new OrchestratorCredentials(host);
+    const spec = {
+      model_hint: "m",
+      credential_profile: null,
+      auth_preference: "subscription",
+      extra: {},
+    } as unknown as HarnessRunSpec;
+    const adapter = { id: "claude" } as HarnessAdapter;
+    const late = credentials.rotationObservations(adapter, spec, [], null).probeCurrentSubject();
+    ledger.clearDefaultSubjects();
+    expect(await late).toMatchObject({ profile_id: null, code: "auth_revoked" });
+    expect(ledger.live()).toEqual([]);
+    const api = { ...spec, auth_preference: "api_key" } as HarnessRunSpec;
+    expect(
+      await credentials.rotationObservations(adapter, api, [], null).probeCurrentSubject(),
+    ).toBeNull();
+  });
   it("records the verdict while the bound credential is current", async () => {
     const f = fixture();
     const probe = await f.verdict(3);

@@ -40,6 +40,7 @@ import {
   hasModelInventoryForRoute,
   prepareHarnessProcessing,
   admitPreparedProcessing,
+  observeCredentialExecution,
 } from "@claudexor/core";
 import {
   knownModelIdsForRoute,
@@ -286,5 +287,5 @@ export async function* runModelGovernedRoute(
       resolveEffortEvidence(spec.effort_hint, [], [], "adapter", null),
     );
   }
-  yield* routed.adapter.run(spec);
+  yield* observeCredentialExecution(routed.adapter.id, spec, routed.adapter.run(spec));
 }
