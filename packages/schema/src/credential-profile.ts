@@ -1,7 +1,7 @@
 import { z } from "zod/v3";
 import { namespacedSecretRefBase } from "@claudexor/util";
 import { Id, IsoTimestamp } from "./primitives.js";
-import { AuthAvailability, AuthVerification } from "./auth.js";
+import { AuthAvailability, AuthVerification, CredentialRoute } from "./auth.js";
 
 /** Exact profile-policy problem vocabulary shared by mutation and admission
  * surfaces. ControlProblem remains open for unrelated domain errors. */
@@ -186,6 +186,9 @@ export type CredentialUnusableCode = z.infer<typeof CredentialUnusableCode>;
 export const CredentialUnusableObservation = z
   .object({
     harness_id: Id.describe("Harness family the observed subject belongs to."),
+    credential_route: CredentialRoute.optional().describe(
+      "Actual credential transport observed; omission preserves historical unqualified evidence.",
+    ),
     profile_id: Id.nullable().describe(
       "Observed credential profile, or null for the harness's default subject.",
     ),

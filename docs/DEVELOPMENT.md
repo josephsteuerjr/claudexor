@@ -191,10 +191,11 @@ manifest or verifier. The focused builder test must cover an internal link's
 expected materialized bytes and an escaping-link refusal. A Windows claim also
 requires a native extract/exact-Node probe/isolated handshake/graceful-stop
 smoke; feature support must not be inferred from portable extraction alone,
-and local Windows harness installation is bounded to vendors with a
-verified package-native image (Codex). The Windows CI lane must PROVE the real
-pinned install before this candidate can be released; until then it is not a
-Windows success claim. Other vendors stay typed-unsupported there.
+and local Windows harness installation uses the declared native or Node npm
+entrypoint for Codex and Claude. The Windows CI lane must prove managed and
+ordinary npm-prefix launch and the exact pinned version before a release claims
+that platform path. Other installer recipes retain their typed platform bounds;
+custom batch programs are not implicitly interpreted as npm launchers.
 
 The `publish` mode also carries `remote_runtime_manifest_b64`:
 the OWNER-SIGNED four-target SSH runtime manifest, transported the same way.

@@ -332,7 +332,7 @@ export function controlServices(
             ...input,
             cwd: NO_PROJECT_ROOT,
             config: loadConfig(NO_PROJECT_ROOT).global,
-            quota: quotaRegistry().read(),
+            quota: { ...quotaRegistry().read(), honored: credentialUnusableLedger.honored() },
             unusable: credentialUnusableLedger.live(),
           })
         : harnessModels(input.harnessId, NO_PROJECT_ROOT, true, input.route),

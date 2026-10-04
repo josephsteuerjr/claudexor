@@ -11,7 +11,7 @@ import { CLAUDE_VENDOR_CLI_VERSION } from "@claudexor/harness-claude";
 import { CODEX_VENDOR_CLI_VERSION } from "@claudexor/harness-codex";
 import { OPENCODE_VENDOR_CLI_VERSION } from "@claudexor/harness-opencode";
 import { copilot } from "@claudexor/harness-acp";
-import { managedNodeRoot, windowsNativeImageSegments } from "@claudexor/core";
+import { managedNodeRoot } from "@claudexor/core";
 import type { PinnedVendorCliVersion } from "@claudexor/util";
 import { INSTALLABLE_HARNESSES } from "./harness-command-specs.js";
 
@@ -64,6 +64,7 @@ export const NPM_PINS: Partial<
     InstallableHarness,
     {
       npmPackage: string;
+      windows?: boolean;
       /** Launcher names the post-install proof executes, in preference order. */
       binaryNames: readonly string[];
       version: PinnedVendorCliVersion;
@@ -79,12 +80,14 @@ export const NPM_PINS: Partial<
   },
   claude: {
     npmPackage: "@anthropic-ai/claude-code",
+    windows: true,
     binaryNames: ["claude"],
     version: CLAUDE_VENDOR_CLI_VERSION,
     verification: "release_verified",
   },
   codex: {
     npmPackage: "@openai/codex",
+    windows: true,
     binaryNames: ["codex"],
     version: CODEX_VENDOR_CLI_VERSION,
     verification: "release_verified",
@@ -175,22 +178,15 @@ export function harnessInstallerDisclosure(
   harness: InstallableHarness,
   target: HarnessInstallTarget = "remote",
   platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
+  _arch: string = process.arch,
 ): HarnessInstallerDisclosure {
   const layout = TARGET_LAYOUTS[target];
   const pin = NPM_PINS[harness];
   const windows = platform === "win32";
   if (pin) {
-    // A local Windows prefix holds no `bin` dir: npm leaves shims in the prefix
-    // root and the launcher is the package-native image (or there is none, and
-    // the installer refuses); the remote target is always a POSIX SSH host.
-    const nativeImage =
-      windows && target === "local" ? windowsNativeImageSegments(pin.npmPackage, arch) : null;
     const installLocation =
       windows && target === "local"
-        ? nativeImage
-          ? `${layout.displayRoot}/node_modules/${nativeImage.join("/")}`
-          : `${layout.displayRoot}/node_modules/${pin.npmPackage} (no Claudexor-runnable Windows image in this release)`
+        ? `${layout.displayRoot}/node_modules/${pin.npmPackage} (npm executable entrypoint)`
         : `${layout.displayRoot}/bin`;
     return {
       harness,

@@ -603,6 +603,12 @@ frequency and volume are. The contracts:
     api_key_route`); an unpinned composer chip stays
     "Automatic" because next-up may rotate. Auth remains the key management surface.
 
+    A current credential-wide refusal uses that same compact readiness status and
+    its detail, retaining the account name, email and last-known quota. A refusal
+    scoped to one model does not mark the whole row failed; the engine applies it
+    when computing `next_up` for the configured model. No second auth indicator
+    or additional client-side readiness calculation is introduced.
+
     Do not globally rename generic `Automatic`: the unpinned route may use the
     policy API-key fallback, which is not an account row.
 
@@ -980,10 +986,14 @@ views in the shared design-system files; screens compose them.
   sweep) primary output appears in
   Outcome as markdown. Technical artifacts (`context/task.yaml`, `events.jsonl`)
   stay in Diagnostics/artifact lists and must not be transformed into Plan rows.
-  When the engine's terminal presentation state is `diagnostic`, even a
-  standard answer/report primary renders in the diagnostic lane rather than as
-  a successful answer. A successful `final/summary.md` is evidence that output
-  settled, never an answer fallback.
+  A retained `report` primary with terminal presentation state `diagnostic`
+  renders as readable Markdown directly below the actual failure/cancel banner
+  and cause, in chat and Outcome. It is labelled "Unverified retained output";
+  its artifact action, captured-file actions and preview-limit notice stay outside
+  the Markdown body. Full files use the existing preview sheet and Reveal in Finder;
+  preview bounds never limit the downloaded retained document.
+  Other diagnostic primaries remain in Diagnostics. A successful summary is
+  evidence that output settled, never an answer fallback.
 - **Setup job lifecycle.** Auth/setup sheets show compatible coarse state plus
   the login-only typed phase (`preparing`, `launching`, `awaiting_user`,
   `verifying`, `cancelling`, `completed`), native source
@@ -1190,6 +1200,13 @@ views in the shared design-system files; screens compose them.
   explicit "Get a new link" re-arms it. A window the VENDOR owns cannot be extended, so the job carries
   that fact and the Extend control does not render — the app never offers what
   the daemon will refuse.
+- **Remote login.** The remote sheet uses the same flow-driven link/code
+  presentation and setup lifecycle controller for its exact remote job. Titles
+  and readiness name that job's harness and profile. Pasted input is sent once
+  through the selected connection; a reply from an obsolete connection or
+  detached observation cannot reopen it. Close keeps the server login active,
+  while Cancel requests cancellation. Only implemented actions are offered;
+  a localhost browser callback on the remote host is not a local-browser action.
 - **Thread workspace (trailing `.inspector`).** ONE panel whose identity is the
   CURRENT THREAD's workspace (D42), with three always-present tabs
   (`WorkspaceTab`: `changes`, `artifacts`, `evidence`, via the shared

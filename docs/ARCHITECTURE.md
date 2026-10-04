@@ -849,6 +849,9 @@ Codex's direct `model/list` and quota app-server probes use that same producer,
 so a GUI-launched daemon can discover models and quota from the CLI it found
 during login. Host toolchain PATH is composed before a scoped HOME patch;
 credential homes and provider-variable scrubbing remain specific to each probe.
+The same runtime environment producer supplies an absent OS login name from
+`os.userInfo()`, preserving supplied identity and later environment
+patches. It never derives the name from a profile or scratch HOME.
 The shared `spawnProcess`/`runCaptureRaw` helpers also request `windowsHide`:
 every child they start is a fully piped background process. On Windows this
 requests a hidden console for the direct child at spawn; it does not control
@@ -1170,34 +1173,78 @@ subject's OBSERVED live block with no eligible alternative refuses with the
 same typed terminal before spawn; a bare headroom breach with no alternative
 still proceeds (proximity is not proof the window is spent).
 
-Rotation also tells "quota spent" apart from "credential DEAD" (the A7
-differential probe): whenever a rotation-eligible failure triggers the
-candidate-readiness probe, a SIBLING probe examines the CURRENT/triggering
-subject — re-reading the quota poller's authenticated vendor observations,
-the attempt's own typed non-retryable auth/entitlement refusals, and the
-adapter's local doctor probe. It never spawns a harness or spends quota (a
-config-dir login has no cheaper liveness test than spending quota on a
-mini-run). A dead-credential verdict becomes a typed
-`route.profile.credential_unusable` run event and a typed current-decision `CredentialUnusableObservation`. Only independent stream
-and local-probe failures enter the in-memory `CredentialUnusableLedger`. Poller
-rejections remain in the quota owner and are derived for diagnostics, including
-rotation's sibling rows; storing a second copy would block recovery after the
-canonical poller had accepted the credential. Readiness is not journaled. The
-clearing contract is threefold: bounded self-expiry (24h hard cap;
-entitlement/probe verdicts expire within the hour), a served model response
-for the same subject (wired where usage events already feed the quota
-registry), and any credential-generation change (login/logout/profile
-mutation). Nothing is recorded while a login of that harness holds its
-credential-mutation window, and a subscription row's verdict is recorded only
-while the credential its try bound is still current (#363). Consumption is one
-composition point: `readyProfilesForRotation`
-refuses a candidate a live observation condemns (model-scoped observations
-refuse only their own model), exhaustion rows name it typed
-(`rejected: credential_unusable`, never hidden behind `not_ready`), and the
-pool-exhausted terminal carries the subject's dead-credential provenance in
-place of a quota-reset promise that would never help. The Accounts-surface
-projection of these observations is deliberately deferred (owner scope 4=A:
-run + rotation evidence now, UI as a separate issue).
+Account observations are collected independently of rotation policy. A bound
+observer sees normalized native events before the caller consumes them and
+finishes even when a caller exits early. Candidate, read-only, planner, reducer,
+reviewer and continuity-summary dispatches use that same boundary; raw model
+catalog and inference calls bind the same authority before provider work.
+An unresolved typed terminal auth or capability refusal enters the daemon's
+bounded, in-memory `CredentialUnusableLedger`. A pin records evidence without
+rotating. A transport failure or cancellation alone is not an auth verdict;
+served usage can recover an intermediate refusal. The existing differential
+probe still reads typed stream and local/poller evidence when rotation needs it,
+retains the `route.profile.credential_unusable` event and terminal provenance, and
+leaves stream recording to the bound observer. It adds no probe to every completion
+and spawns no miniature generation.
+
+Only independent stream and local-probe failures enter this ledger. Poller
+rejections remain in the quota owner and are derived for current diagnostics,
+including rotation's sibling rows. A second stored copy must not outlive
+recovery at the canonical poller. Derived diagnostics use the same current
+route and successful-contact evidence as account admission.
+
+`CredentialGeneration`, extracted from the existing pre-progress ledger, is the
+shared managed-lifecycle authority. Dispatch captures subject, effective route,
+requested model, generation and ordering. Both recording and success clearing
+respect that binding: old-generation results cannot affect a newer login, and
+a success from an older dispatch cannot erase a newer dispatch's refusal. A
+negative observation made after the last successful contact remains meaningful
+even when it comes from a session that started earlier. The ledger retains
+negative observation boundaries within its existing memory and expiry bounds,
+including after a success hides the current refusal. A later-arriving concurrent
+refusal therefore cannot restore only an incomplete part of that evidence.
+Readiness suppresses the merged refusal only when one real successful contact
+covers both its dispatch order and actual observation time. Successful contacts
+that cover different boundaries remain separate until one actual contact covers
+them both; combining their maxima would fabricate a recovery that never happened.
+The bounded collection counts retained contacts, not only account keys.
+An actual observed model is required to heal a model-scoped refusal; the request
+is not proof of which model was served. Credential mutation windows still make
+observations ineligible while the vendor may be changing the store. External
+native changes not observed by that lifecycle remain a limitation until a
+covering vendor observation or expiry; this is not a token-change detector.
+
+The pure `composeCredentialProfileEvidence` owner combines local readiness,
+applicable hard refusals and authenticated quota evidence for admission, catalog,
+Accounts and `next_up`. Accounts retains its compact status and detailed reason,
+identity and last-known quota. Only credential-wide failures affect an unqualified
+account row; `next_up` considers the configured model. Only expensive probes are
+cached, so a new refusal, recovery or expiry is composed on the next read without
+re-probing every account. Local verification failure stays local. A covering
+successful full-reader vendor observation may supersede an older auth refusal
+without losing that recovery when its numeric quota ages. Its original
+contact time remains visible; it cannot heal unrelated model restrictions or a
+locally failed probe. Bound served-model proof also respects dispatch ordering.
+Passive window notifications alone are numeric evidence, not an independent
+authentication recovery receipt.
+
+Hard credential evidence, soft pool ordering, quota windows and poll pacing stay
+separate. The bound native observer is the single quota intake owner; projected
+run events never write a second profile-less observation. Numeric measurements and
+explicit cooldowns from an already-running session remain observable through an
+unrelated managed login or a mutation window. The generation fence governs auth
+refusal and recovery, not whether an ongoing session may report its quota. Run
+refusals never become poller `auth_revoked` absences and never retire last-known
+numeric quota. A native session already running when the same profile is signed
+into another identity can still report the old identity's numbers under its bound
+profile; full-reader reconciliation remains authoritative for that changed store.
+This preserved session limitation can temporarily affect quota ranking, but those
+passive numbers do not certify authentication. Raw model operations retain their
+separate dispatch-generation check for their single terminal cooldown observation.
+A profile-level refusal does not suppress quota discovery:
+the Claude poller retains its existing present-token rejection memo, so external
+replacement remains discoverable. The hard ledger is non-durable, expires within
+its existing bounded TTLs, and clears through managed credential changes.
 
 Preflight headroom refusal applies to PINS only under the unified model
 (rotation never moves a pin); reactive `vendor_limit_rejected`/structural
@@ -2728,6 +2775,15 @@ by its request; cursor and sequence then fence ordering within that job.
 Every machine fallback and UI continuation takes its credential `profileId`
 from the server-owned setup job, never from the sheet or caller that happens to
 be observing it.
+CLI login follows the declared disclosure flow for each accepted daemon job.
+URL-only flows wait without requesting a code; URL-plus-input sends the pasted
+value to that exact job. A corrected URL replaces its earlier disclosure.
+`--json` returns one disclosure or terminal object: a disclosed active login is
+not a completed login. Repeating the same login command while its target remains
+active reuses that job; after termination it starts a new login, so machine
+observers poll the returned job ID instead. The remote Mac view observes that
+same exact-job lifecycle through its selected GatewayClient, preserving its
+connection/action lease and keeping Close distinct from Cancel.
 
 The daemon writes a private runner manifest; the device-code runner is launched
 DETACHED (no Terminal, not macOS-gated), the Terminal fallback via
@@ -2794,10 +2850,11 @@ cooperative TERM, so both escalation steps are one `taskkill /PID <leader> /T
 /F` of the recorded leader's tree, issued only while that identity still owns
 the PID, and emptiness is the LEADER's identity being gone afterwards — a
 leader-death proof, weaker than the POSIX group-ESRCH proof and recorded as
-such. The vendor binary is still executed without a shell: on win32 only an
-executable image (`.exe`/`.com`) resolves, so an npm `.cmd`/shell shim is
-refused with the install advisory rather than launched through `cmd.exe`.
-Terminal-stdin setup wraps that exact image with the adjacent ConPTY helper
+such. Native executables and standard npm Node entrypoints use one launch
+description; Node entrypoints preserve the vendor script and its interpreter
+arguments instead of passing prompt text through a command shell. An unknown
+custom batch file is not silently reinterpreted as a standard npm launcher.
+Terminal-stdin setup wraps that resolved invocation with the adjacent ConPTY helper
 only after its real `--probe` succeeds; doctor/quota print probes instead use
 a detached, console-free runner with piped stdin closed immediately. A null
 device is insufficient because the vendor treats character devices as interactive
@@ -3325,10 +3382,10 @@ so a saturated Fable-only window cannot cool an explicit Opus run. Codex rollout
 constraint with usage, duration, reset, provenance, and freshness. The global
 journal is authority; an elapsed reset marks a snapshot stale and requests a
 refresh, never locally invents zero usage. Unknown usage remains `null`.
-One exhaustive schema-owned trait registry classifies every source along three
+One exhaustive schema-owned trait registry classifies every source along four
 independent axes: vendor-authenticated credential evidence, the primary harness
-whose missing observation creates refresh demand, and whether a top-level
-refresher produces it. Refresh demand is computed per enabled credential
+whose missing observation creates refresh demand, whether a top-level
+refresher produces it, and full-inventory versus incremental-window replacement. Refresh demand is computed per enabled credential
 subject. Display and routing evaluate freshness at the actual current time:
 absent an earlier reset boundary, a snapshot is still fresh exactly five
 minutes after observation and becomes stale only after that boundary.
@@ -3366,8 +3423,10 @@ floors remain in force until their recorded deadlines. A credential change clear
 soft demand backoff, not an existing rate-limit floor. Poll pacing is not inference
 quota and is never journaled as an exhausted window. Failed or suppressed refreshes remain explained alongside stale data:
 refresh-gap absences (`refresh_failed`, `rate_limited`,
-`probe_skipped_rate_limited`, `poll_paced`) are silenced only by a FRESH snapshot.
-A paused subject lacking fresh cover and a stored absence is stated as a
+`probe_skipped_rate_limited`, `poll_paced`) are silenced only by a FRESH
+full-source snapshot under the existing coverage rule; a new incremental
+window cannot hide a failed full refresh. A paused subject lacking fresh
+cover and a stored absence is stated as a
 derived `poll_paced` row (a live projection, never journaled), so an
 exhaustion reader that skips stale snapshots stays fail-open instead of
 promoting a stale spent window into "window exhausted". A registry-owned
@@ -3401,6 +3460,29 @@ can yield to a successful response without measured windows (usage stays unknown
 while independently identified/scoped windows need matching measured replacement.
 This permits purchased or vendor-granted early resets without waiting for an obsolete
 timer. Malformed Codex responses never become successful empty observations.
+
+Native Claude `rate_limit_event` measurements and Codex's existing execution
+app-server `account/rateLimits/updated` notifications use incremental sources
+`claude_rate_limit_event` and `codex_app_server_event`. They produce ordinary
+singleton-window snapshots with independent observation time and freshness.
+`quotaSnapshotIdentity` in schema includes subject, route, source and, for these
+sources, the stable vendor window identity, duration and applicability. Percent,
+reset instant and observation time do not change identity. Registry, budget cache
+and journal fold/replay share that key; control projections derive `snapshot_id`
+for Swift instead of making the UI duplicate source policy. Full-reader sources
+continue replacing their complete inventory. Incremental observations neither
+refresh siblings nor satisfy full-inventory demand; fresh applicable values keep
+the existing ranking/headroom meaning, and missing windows stay unknown.
+
+Incremental snapshots use `quota.window.observed` in the same global journal,
+with window slots grouped by subject for removal and compaction. Older readers
+ignore that record rather than consuming a fabricated primary/cooldown snapshot.
+The existing full-source rollback representation remains unchanged.
+Unknown native applicability is retained as numerical diagnostic evidence rather
+than turned into an account-wide restriction. An overage name does not identify
+an additional model family. Numeric source units are translated by each adapter:
+Claude stream utilization is a ratio; Codex `usedPercent` is a percentage.
+
 Runtime-update rollback remains backward-readable: a scoped snapshot — or one
 whose source postdates v3.2.0's strict enum (`cursor_rate_limit`) — is first
 prepared under a typed record that an older engine ignores, then committed by
@@ -3456,9 +3538,12 @@ auth-route evidence: verified included ordinary service proves
 `paid_fallback: never` and ranks with a real economy tuple instead of reading as
 unknown/paid. Surfaces project the rationale verbatim (run detail) and never
 reconstruct the order from prose. A named account's ordinary billing evidence
-requires its fresh vendor-backed verification: an authenticated adapter response,
-or the existing exact-profile vendor observation over a passing local probe.
-Local store presence and stale readiness do not prove subscription entitlement.
+requires vendor-backed verification: an authenticated adapter response, or the
+existing exact-profile full-reader vendor observation over a passing local probe.
+Numeric quota expiry does not erase the fact or time of that authenticated contact;
+a newer applicable refusal still overrides it.
+Local store presence alone and stale local readiness do not prove subscription
+entitlement. Passive window notifications alone do not establish that proof.
 Default-store doctor evidence applies only to a profile-less route. The admission
 probe is reused for ranking and the initial reservation. Each physical dispatch
 reads its actual account's current verification again, including when the account
@@ -3571,6 +3656,44 @@ typed conformance failure rather than being guessed. The receipt records the
 number of restored adapter-created nulls as `normalized_optional_nulls`, while
 the raw answer and invalid diagnostic stay unchanged.
 
+Retained output is separate from completion authority. Sanitized assistant events
+reach the per-run `events.jsonl` before live-preview suppression; candidate log
+writes are not optional observer callbacks. Cursor buffered snapshots are tagged
+as evidence and do not enter accepted-answer or retry predicates. The event-log
+package projects this ordered stream into `final/retained-output.md`, separating
+attempts and physical `session_id` values while retaining explicit delta bytes.
+It excludes reasoning, tool output and status prose, and collapses only exact
+adjacent delta/flush/final repetitions. Missing WorkReport still means unverified
+contract failure; no additional generation is performed to repair the format.
+A final-only successful answer without captured files needs no duplicate retained
+document. Captured media references are added from the existing attempt capture, using distinct
+attempt-scoped handles; the original text remains intact. The full retained
+Markdown fetch is redacted like other text, but is not restricted by the log
+preview fetch ceiling. Inline/native rendering keeps its own preview limits.
+The direct observer delta cap does not truncate public event replay, whose
+existing backpressure and client display bounds remain in force.
+
+The announced-run guard materializes and announces retained output before the
+existing terminal preparation fence, including deferred terminals. RunFacts
+selects its report primary for diagnostic presentation; normal accepted output
+remains primary on success. The retained filename never participates in accepted
+plan/deliverable discovery. If storage fails, the original terminal cause stays
+in force and a best-effort status names the preservation failure. Control detail
+can reconstruct only the addressed interrupted run lacking a committed terminal
+from surviving events, without changing its lifecycle, journal or RunFacts. Lists
+and startup do not scan old logs; intentional retention remains authoritative.
+
+Cancelled Git candidates retain their patch and actual execution-tree effects
+through WorkProduct. Direct effects record the current pre/post snapshots and
+existing revert anchor when available; isolated drafts are not adopted. A
+convergence attempt captures its postimage before an early cancellation exit,
+so it cannot advertise the previous attempt's anchor. Revert uses the recorded
+execution root rather than a thread's later location or the stable project root.
+Multiple unselected candidates retain separate patch links, without a winner.
+Non-success Git evidence cannot be applied and follows ordinary age/reference
+retention rather than an unfinishable pending-apply hold. A live run's Revert remains
+available while that evidence is retained; a non-purged thread reference preserves it.
+
 WorkReport envelope (D-16): on a `work_report_transport: constrained` route the
 engine COMPILES a transport ENVELOPE `{ work_report, output }` that wraps any
 caller `output_schema` and rides `HarnessRunSpec.output_schema`; the caller's
@@ -3596,13 +3719,24 @@ report on a constrained OR validated route is a typed `work_report_contract`
 failure (never a prose success); a valid `needs_input`/`incomplete` report
 becomes a `work_state` veto.
 
+Claude API-error results retain the originating attempt's vendor message and
+nullable machine code as opaque failure evidence. A native stdout error result
+carrying `api_error_code: claude_code_version_too_old` additionally produces the
+`vendor_cli_too_old` request refusal: it names the selected entrypoint and observed
+CLI version when known, recommends updating that installation and stops account
+rotation. A generic HTTP 400 or a model answer quoting the error cannot produce
+that refusal. Older CLI streams can omit the machine code; their original message
+survives, while ordinary structural account failover remains available. No model
+minimum-version table or prose classifier substitutes for missing evidence.
+
 Context signals (D-16c) are a sibling of the transient-retry taxonomy and NEVER
 enter the retry loop. The claude adapter maps FIXTURE-PROVEN 2.1.165 frames onto
 the typed `context` field of `HarnessEvent`: result `terminal_reason` (`prompt_too_long` and
 the rapid-refill breaker `rapid_refill_breaker` → `capacity_exhausted` with a
 typed cause), the `compact_boundary` system frame → a compaction event, and the
 top-level typed `rate_limit_event` → the existing `rate_limit` signal (a routine
-`allowed` heartbeat surfaces nothing and never arms rotation). Codex exec's
+`allowed` or `allowed_warning` heartbeat may carry independent measured quota
+windows but never arms rotation). Codex exec's
 recorded oversized-input refusal remains separate: the app-server preserves
 RPC data and emits `request_refusal`, which reaches final failure as
 `input_too_large` with Unicode-scalar measurements and no quota reset. It stops
@@ -3723,6 +3857,8 @@ final/work_product.yaml?
 final/summary.md
 final/failure.yaml?
 final/answer.md?
+final/retained-output.md?          # received text and captured-media handles, not acceptance
+final/retained-changes.md?         # separate unselected candidate patches
 final/explore.md?            (legacy deep-scan output; current runs write final/report.md)
 final/explore-findings.yaml?
 final/omissions.md?
@@ -4059,24 +4195,21 @@ pathname because a new owner could have replaced it between observation and
 mutation. An unexpected filesystem or child-process exception is normalized by
 the canonical CLI projector as `harness_install_failed`; JSON mode still emits
 one object containing the full pre-execution disclosure.
-On Windows an npm global prefix holds only `.cmd`/sh/ps1 shims and no
-executable image, and Claudexor never spawns a harness through a shell (issue
-#191), so the local target is supported exactly where the pinned package
-yields a verified package-native image: `@openai/codex` resolves its optional
-`@openai/codex-win32-<arch>` platform package and executes
-`vendor/<triple>/bin/codex.exe` from it. Core's `runtime-env.ts` is the one
-owner of that layout (`npmGlobalPackagesDir`, `embeddedNpmCli`,
-`windowsNativeImageDir`): the installer runs the embedded
-`node_modules/npm/bin/npm-cli.js` beside `node.exe`, proves the image inside
-the prefix, and the normalized harness PATH carries that image dir on win32
-(`managedWindowsNativeImageDirs`) so doctor, login, runs and quota resolve the
-same `codex.exe` by bare name. The prefix is anchored on the same `HOME` the
-PATH producer reads (the user profile when unset). Every other vendor — an npm
-pin without a verified image (claude, opencode), an unsupported architecture,
-or a script vendor — is a typed `unsupported_platform` refusal before
-filesystem or child-process side effects, and the Windows CI lane installs the
-real pinned package with no ambient node/npm as the proof
-(`scripts/windows-local-install-smoke.mjs`). The omitted target remains `remote`,
+On Windows the installer and harness resolver use the package's declared entrypoint:
+a native program runs directly and a standard npm Node entrypoint runs through
+its selected interpreter. Managed Codex and Claude installs and user npm prefixes
+on the effective PATH share this owner. The logical vendor entrypoint remains
+the identity shown by doctor and used by version/help/model probes; a Node
+runtime alone is not a vendor identity. Script bytes remain part of login
+executable evidence, with the selected invocation carried through the existing
+manifest and permit. Ordinary missing PATH candidates are silent; a present
+broken preferred entry remains diagnostic even when a usable fallback is found.
+Explicit executable overrides never select a different installation implicitly.
+Installer success still requires the declared version to execute, so a placeholder
+file left by an incomplete package install cannot certify success. The Windows
+smoke is `scripts/windows-local-install-smoke.mjs`; native Windows login and Agent
+execution are separate acceptance claims, not consequences of package resolution.
+The omitted target remains `remote`,
 so the SSH installer's
 visible disclosure, confirmation, command, destination, and precedence
 contract are unchanged. After any successful local install, the embedding host
@@ -4420,6 +4553,13 @@ code touching one of these areas must honor it or change it explicitly here.
   allowlisted windows in the external v3 root and composes/restores any
   existing display command. Per-run budget observations remain run evidence,
   not quota authority.
+- Quota operation diagnostics reuse the daemon log (`quota.observation`): source,
+  profile, operation id, time, cause, known currentness and native binary/child
+  facts are non-secret metadata. A physical Claude usage HTTP attempt, a skipped
+  token, and a Codex native RPC are different observations; an RPC does not imply
+  one HTTP request. Native refresh receipts describe observed expiry and child
+  outcome, not an inferred writer or reconstructed historical credential loss.
+  Retry-After and existing foreground/background polling rules are unchanged.
 - The `verify` intent is reserved: the shipped FinalVerifier is
   deterministic-only (fresh-tree apply + gates, no model), so no engine path
   requests verify-intent routing; the value stays for a future model-backed
@@ -4520,9 +4660,8 @@ code touching one of these areas must honor it or change it explicitly here.
   nor retain observations; fresh probes still answer and may admit work.
   Refusal marks and subscription-row unusable callbacks are generation-bound.
   The aggregate doctor/status projections are invalidated at the transitions;
-  they can show an intermediate observation until close. Pre-existing late
-  model-substitution callbacks and default/API-key unusable callbacks do not
-  gain a new cross-generation guarantee. Descendants outliving a valid runner
+  they can show an intermediate observation until close. Model-operation substitution callbacks and default/API-key unusable callbacks
+  also use the dispatch-bound managed generation. Descendants outliving a valid runner
   receipt remain outside the command-completion proof. An unreadable bound
   journal reads open; restart alone proves no closure. The hold is per harness,
   not a blanket admission ban. A genuinely unconfirmed group still needs the

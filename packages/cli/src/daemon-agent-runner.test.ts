@@ -40,7 +40,7 @@ vi.mock("./run-orchestrator.js", () => ({
 
 const { createDaemonAgentRunner } = await import("./daemon-agent-runner.js");
 
-function runnerFixture() {
+function runnerFixture(ingest = vi.fn(), publish = vi.fn()) {
   const threads = {
     assertKnownIds: () => ({ threadId: undefined, turnId: undefined }),
     recordRunEvent: () => {},
@@ -54,12 +54,12 @@ function runnerFixture() {
   } as unknown as ProjectPartitions;
   return createDaemonAgentRunner({
     delegationBudgetAuthority: {} as unknown as DelegationBudgetAuthority,
-    quotaStore: () => ({ ingest: () => {} }) as unknown as QuotaRegistry,
+    quotaStore: () => ({ ingest }) as unknown as QuotaRegistry,
     threads,
     interactions: { register: () => {} } as unknown as InteractionRegistry,
     liveInputs: { register: () => ({ release: () => {} }) } as never,
     resources: () => ({ resolve: () => [] }) as unknown as ResourceStore,
-    bus: { publish: () => {} } as unknown as RunEventBus,
+    bus: { publish } as unknown as RunEventBus,
   });
 }
 
@@ -72,7 +72,9 @@ describe("createDaemonAgentRunner", () => {
     const configDir = mkdtempSync(join(tmpdir(), "claudexor-runner-notrust-"));
     process.env.CLAUDEXOR_CONFIG_DIR = configDir;
     try {
-      const res = (await runnerFixture()(
+      const ingest = vi.fn();
+      const publish = vi.fn();
+      const res = (await runnerFixture(ingest, publish)(
         {
           prompt: "x",
           mode: "agent",
@@ -92,6 +94,36 @@ describe("createDaemonAgentRunner", () => {
       expect(readFileSync(join(res.runDir, "context", "task.yaml"), "utf8")).toContain(
         "effective_profile: full",
       );
+      // Presentation events are still published, but cannot write a second
+      // quota observation after the bound native intake has already run.
+      const event = {
+        type: "harness.event",
+        payload: {
+          harness_id: "claude",
+          type: "status",
+          ts: new Date().toISOString(),
+          session_id: "test",
+          credential_route: "vendor_native",
+          quota: {
+            source: "claude_rate_limit_event",
+            plan_label: null,
+            subject_id: null,
+            constraints: [
+              {
+                id: "five_hour",
+                label: "5h",
+                used_ratio: 0.2,
+                window_seconds: 18000,
+                resets_at: null,
+                cooldown_until: null,
+              },
+            ],
+          },
+        },
+      };
+      (captured.input?.onEvent as (event: unknown) => void)(event);
+      expect(publish).toHaveBeenLastCalledWith(event);
+      expect(ingest).not.toHaveBeenCalled();
     } finally {
       delete process.env.CLAUDEXOR_CONFIG_DIR;
     }

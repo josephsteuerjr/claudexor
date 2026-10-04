@@ -1,5 +1,7 @@
 # @claudexor/util
 
+## 3.20.1
+
 ## 3.20.0
 
 ### Minor Changes

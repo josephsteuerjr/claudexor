@@ -76,12 +76,14 @@ must provide the toolchain's own npm entrypoint next to the Node it runs the
 CLI on: `<node-root>/bin/node` plus `<node-root>/lib/node_modules/npm/bin/npm-cli.js`
 on POSIX, `<node-dir>\node.exe` plus `<node-dir>\node_modules\npm\bin\npm-cli.js`
 (the official zip layout) on Windows; no system/PATH npm is used. On Windows
-the local target is supported for Codex only: npm's `.cmd` shim is never the
-launcher, the receipt's `installedBinary` is the package-native
-`codex.exe` under `~/.claudexor/node/node_modules/@openai/codex/node_modules/@openai/codex-win32-<arch>/vendor/<triple>/bin`,
-and the host's `HOME` (or the user profile when unset) anchors that root exactly
-as the engine's own harness PATH does. Every other vendor is a typed
-`unsupported_platform` refusal before any side effect. The existing signed runtime manifest remains the
+the local target resolves the npm package's declared native or Node entrypoint
+for Codex and Claude. The receipt identifies the vendor entrypoint rather than
+merely `node.exe`; launch, doctor and login share the resolved invocation.
+User npm prefixes on the effective PATH use the same lookup. Custom batch
+programs are not treated as standard npm wrappers, and an explicit binary
+path remains exact. The host's HOME (or user profile when unset) anchors the
+managed toolchain; profile and scratch homes do not choose another installation.
+The existing signed runtime manifest remains the
 publication authority, so an embedder does not create a second artifact or
 trust root.
 
@@ -167,7 +169,8 @@ gate's explicit exemptions):
   synthesis judge).
 - `--max-seconds <n>`: hard wall-clock deadline for the whole run; on expiry
   the run ends `cancelled` with reason `wall_clock_exceeded` and partial
-  artifacts (diagnostic `final/summary.md`) are kept. Consumers must use both
+  artifacts, including received assistant text in `final/retained-output.md`,
+  are kept as diagnostics. Consumers must use both
   facts: the process lifecycle is cancelled, while user-facing presentation is
   "Time limit reached" and ACP reports a refusal; an explicit Stop remains
   `user_cancelled` / cancelled. A control may additionally carry the typed
@@ -255,6 +258,16 @@ constraints themselves. `POST /v2/quota` accepts an optional `{"model": …}`
 body to compute `state` against the model the caller intends to spend
 (case-insensitive alias containment in either direction). The CLI projection
 is `claudexor quota [--refresh] --json`.
+Control quota snapshots also carry a server-derived `snapshot_id` for stable
+presentation identity. Native incremental sources (`claude_rate_limit_event`,
+`codex_app_server_event`) report single windows with their own timestamps; they
+are not complete inventory and do not satisfy full-refresh demand, hide a failed
+refresh or independently certify current authentication. Running-session quota
+remains available through managed login changes; credential refusal and recovery
+use the separate bound observation authority. Existing clients may keep their legacy identity fallback when
+that additive field is absent. Source replacement and journal semantics live in
+[ARCHITECTURE](ARCHITECTURE.md#7-control-api).
+
 Codex refreshes through the vendor app-server (including the live-verified
 `rateLimitResetCredits` balance, surfaced only when positive). Claude's
 PRIMARY subscription source is the `api.anthropic.com/api/oauth/usage`
@@ -996,7 +1009,11 @@ failures. Deltas: only MAIN-conversation `content_block_delta`/`text_delta`
 frames surface (flagged `delta`); subagent frames (`parent_tool_use_id`) and
 block/lifecycle frames never do — the complete message always follows.
 Plumbing: other `system` subtypes and `control_response`/`control_cancel_request`
-frames are recognized and consumed, never timeline events.
+frames are recognized and consumed, never timeline events. `rate_limit_event`
+additionally preserves measured `unifiedWindows` and the reported current window
+as status events with quota, independently of its rejecting signal. Allowed and
+warning frames do not create cooldowns. Unknown applicability remains diagnostic
+payload, never a guessed global restriction.
 
 **Codex** — wire: one `codex app-server --stdio` JSON-RPC child per Claudexor
 run. Fresh lanes use `thread/start`; later lane turns use `thread/resume`; input,
@@ -1005,6 +1022,11 @@ provides the exact active turn id. `item/*` maps `reasoning` → `thinking`,
 `commandExecution`/`mcpToolCall`/`webSearch` → `tool_call`+`tool_result`,
 `fileChange` → `file_change`, `agentMessage` → `message`; `turn/plan/updated`
 maps plan progress and `thread/tokenUsage/updated` maps usage.
+`account/rateLimits/updated` maps measured known-scope windows to independent
+status+quota events from that same running process, without token usage or a
+cooldown. The full quota reader shares the native window codec; supplied RPC
+refusal codes and safe detail survive as refresh diagnostics without interpreting
+a generic RPC error or HTTP-like number as credential revocation.
 An `error` notification with `willRetry: true` maps to nonterminal `status`
 (`api_retry`), preserving the native message as text and native fields in the
 payload. The vendor owns that in-turn retry: no retry count, delay, category,
@@ -1037,9 +1059,9 @@ PATH, else Cursor's primary `agent` only when its realpath is the installer's
 `…/cursor-agent/versions/<v>/cursor-agent`; that `agent` is spawned by absolute
 path, resolved per call by discovery, doctor, status, models, the API-key
 smoke, runs and login, and never executed to identify it. This fallback covers
-Cursor's POSIX installer layout. On native Windows the shared resolver accepts
-executable images (`.exe`/`.com`) only; `.cmd`/`.ps1` launcher installations
-remain unavailable. This alias fallback does not add Windows `agent.exe`
+Cursor's POSIX installer layout. On native Windows the shared resolver supports native images and standard npm
+Node entrypoints; Cursor's non-npm `.cmd`/`.ps1` launcher installations are not
+thereby a supported route. This alias fallback does not add Windows `agent.exe`
 discovery or change explicit overrides and the existing `cursor-agent` route.
 Wire: `cursor-agent -p --output-format stream-json <sandbox
 args> [--stream-partial-output]` with the composed prompt on piped stdin (no

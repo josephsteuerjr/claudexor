@@ -53,10 +53,10 @@ public enum QuotaPresentation {
 
     /// Provenance line for the detail popover (one per contributing snapshot).
     public struct Source: Identifiable, Equatable, Sendable {
+        public let id: String
         public let source: String
         public let observedAt: String
         public let freshness: String
-        public var id: String { "\(source):\(observedAt)" }
     }
 
     /// All quota truth for one `(harness, credential_route, profile)` subject.
@@ -143,9 +143,9 @@ public enum QuotaPresentation {
                     // window; an older duplicate of an already-kept window id is
                     // superseded — the ONLY two things this projection hides.
                     if constraint.id == "cooldown" { continue }
-                    if !seen.insert(constraint.id).inserted { continue }
+                    if !seen.insert(constraint.presentationID).inserted { continue }
                     windows.append(Window(
-                        id: constraint.id,
+                        id: constraint.presentationID,
                         label: constraint.label,
                         usedRatio: constraint.usedRatio,
                         resetsAt: constraint.resetsAt,
@@ -171,7 +171,7 @@ public enum QuotaPresentation {
                 scopedExhaustions: scopedByID.values.sorted { $0.id < $1.id },
                 cooldownUntil: cooldownRaw,
                 sources: ordered.map {
-                    Source(source: $0.source, observedAt: $0.observedAt, freshness: $0.freshness)
+                    Source(id: $0.id, source: $0.source, observedAt: $0.observedAt, freshness: $0.freshness)
                 }
             )
         }

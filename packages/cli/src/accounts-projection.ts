@@ -13,21 +13,24 @@ import type {
   ControlHarnessAccountPool,
   CredentialProfile,
   CredentialProfileStatus,
+  CredentialUnusableObservation,
   QuotaSnapshot,
 } from "@claudexor/schema";
 import { estimateEffectiveAuthRoute } from "@claudexor/schema";
 import { loadConfig } from "@claudexor/config";
 import {
   effectiveAuthPreference,
+  composeCredentialProfileEvidence,
   probeCredentialProfileStatus,
   profileStatusAdmits,
   selectFromAccountPool,
+  type VendorQuotaObservations,
 } from "@claudexor/orchestrator";
 import type { HarnessStatus } from "@claudexor/gateway";
 import { credentialProfilePolicyState } from "@claudexor/core";
 import { displayAccountObservation, profileAccountIdentity } from "./account-observations.js";
 import { buildGateway, buildRegistry } from "./registry.js";
-import { preProgressRefusalLedger } from "./run-orchestrator.js";
+import { credentialUnusableLedger, preProgressRefusalLedger } from "./run-orchestrator.js";
 
 /**
  * Doctor readiness projection for one credential profile (INV-135) — the ONE
@@ -118,6 +121,8 @@ export async function accountPoolsProjection(
   snapshot?: {
     statuses?: readonly HarnessStatus[];
     profiles?: readonly { profile: CredentialProfile; status: CredentialProfileStatus }[];
+    quota?: VendorQuotaObservations;
+    unusable?: readonly CredentialUnusableObservation[];
   },
 ): Promise<ControlHarnessAccountPool[]> {
   const cfg = loadConfig(repoRoot).global;
@@ -134,8 +139,22 @@ export async function accountPoolsProjection(
     }
   }
   const statusById = new Map(statuses.map((status) => [status.id, status]));
+  const unusable = snapshot?.unusable ?? credentialUnusableLedger.live();
+  const profiles = (snapshot?.profiles ?? []).map((entry) => ({
+    ...entry,
+    status: composeCredentialProfileEvidence(entry.status, {
+      quota: snapshot?.quota ?? {
+        snapshots: quotaSnapshots,
+        absences: [],
+        honored: credentialUnusableLedger.honored(),
+      },
+      unusable,
+      model: cfg.harnesses[entry.profile.harness_id]?.default_model ?? null,
+      route: entry.profile.credential_kind === "api_key" ? "managed_api_key" : "vendor_native",
+    }),
+  }));
   const readyProfiles = new Map<string, Set<string>>();
-  for (const entry of snapshot?.profiles ?? []) {
+  for (const entry of profiles) {
     // next_up is an unpinned pool verdict: the same admission as pool routing.
     if (
       !entry.profile.enabled ||
@@ -211,7 +230,7 @@ export async function accountPoolsProjection(
     }
     // Enabled rows that are registered but not ready are named with what their
     // probe observed: an unanswered probe is unknown, never "not signed in".
-    const unready = (snapshot?.profiles ?? []).filter(
+    const unready = profiles.filter(
       (entry) =>
         entry.profile.harness_id === harnessId &&
         entry.profile.enabled &&

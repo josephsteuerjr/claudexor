@@ -135,6 +135,19 @@ never imply that every subscription is spent; unrelated account polling continue
 Observing Accounts reuses the first acquisition until an explicit or credential-driven
 refresh, without a client view continuously spawning vendor checks.
 
+A saved login and a vendor accepting that credential are different facts.
+Observations from ordinary work should improve the same account view and selection
+that admitted the work, even when the account was pinned. Their authority is bound
+to the identity and credential generation that produced them, so a late result
+cannot rewrite a newer login. This does not require a new login manager or extra
+probe work on every completion.
+
+Likewise, one measured window is useful without pretending to be a complete
+subscription inventory. Passive native measurements keep independent ages and
+scope, while full refreshes retain their separate coverage and failure evidence.
+This reuses information already obtained during work without claiming that an
+idle account has been checked or that vendor throttling disappeared.
+
 A routing goal answers to the same line. Quality routing compares declared,
 comparable options — a named harness, model, and effort for the intent at
 hand — so with none declared there is nothing to rank and the run cannot
@@ -240,6 +253,13 @@ or "Incomplete", and a non-zero shell exit — without pretending the process
 failed. A blocked read-only run that produced no answer can no longer read as
 "done"; the deliverable is re-checked, so an empty run exits non-zero.
 
+Preservation and acceptance are separate promises. Work already observed remains
+useful after a failure or cancellation, even when it is not a completed answer.
+A readable projection of that evidence keeps its attempts distinct and presents
+the original cause before the text. It does not infer completion, regenerate the
+answer, or turn Stop into rollback. Recorded file effects can offer the existing
+explicit Revert only when their exact execution-tree evidence supports it.
+
 Every terminal run seals these axes into one immutable RunFacts receipt. The
 orchestrator builds it once from canonical artifacts, validates its
 cross-axis invariants, embeds the exact object in the terminal journal event,
@@ -320,8 +340,10 @@ brokers callbacks or reads the one-time code into anything durable. An
 effective per-harness capability tells clients whether the current host can run
 setup in-app or needs the existing external-terminal attach; it is derived
 from the same bounded terminal resolver used at launch, not from a global
-"login exists" switch. An
-interactive login survives an ordinary daemon restart; an explicit cancel or
+"login exists" switch. CLI and local or remote app views follow the same server-owned login: a link,
+an outbound device code or a pasted completion value are distinct declared
+flows. Closing a view detaches observation; it does not cancel the login.
+An interactive login survives an ordinary daemon restart; an explicit cancel or
 the login's own deadline are what end a pending login (the engine's normal
 15-minute window is extendable; a shorter vendor-owned window is not).
 
@@ -334,6 +356,14 @@ control-plane results, not copies of the remote vendor stores. A remote target
 therefore has its own explicit trust decision and execution location, while the
 signed runtime and tunnel preserve the same engine-owned contract as a local
 run.
+
+An installed harness has one logical entrypoint. Native executables and standard
+npm Node entrypoints share the same launch description, preserving the vendor
+launcher instead of duplicating its private platform layout. A usable fallback
+remains usable, with the broken preferred entry and actual selection disclosed.
+A machine-attested executable-version refusal stops account failover; an older
+CLI that supplies only a message keeps that message as evidence without turning
+its prose into a credential or routing verdict.
 
 ## Workspace Semantics
 

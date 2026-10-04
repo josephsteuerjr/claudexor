@@ -173,12 +173,8 @@ export function createDaemonAgentRunner(deps: {
           threads.recordRunEvent(p, event);
         },
         onEvent: (event) => {
-          if (event.type === "harness.event") {
-            const payload = event.payload as Record<string, unknown>;
-            const harnessId =
-              typeof payload["harness_id"] === "string" ? payload["harness_id"] : "";
-            if (harnessId) quotaStore().ingest(harnessId, payload);
-          }
+          // Native quota intake belongs to the dispatch-bound observer. A
+          // presentation event is not a second, profile-less observation.
           // Live listeners observe only after journal + RunFacts commit;
           // durable replay stays authoritative if publish throws.
           try {

@@ -33,7 +33,10 @@ export function parseRetryAfterHeaderMs(
   return Math.min(Math.max(0, Math.round(deltaMs)), MAX_RETRY_AFTER_HEADER_MS);
 }
 
-export async function fetchClaudeOauthUsage(accessToken: string): Promise<unknown> {
+export async function fetchClaudeOauthUsage(
+  accessToken: string,
+  status?: (code: number) => void,
+): Promise<unknown> {
   const res = await fetch(USAGE_URL, {
     method: "GET",
     headers: {
@@ -43,6 +46,7 @@ export async function fetchClaudeOauthUsage(accessToken: string): Promise<unknow
     },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
+  status?.(res.status);
   // A 401 is tagged as the vendor rejecting the presented access token.
   // The caller owns the credential-expiry context: a token known to have
   // expired while refreshable is awaiting Claude Code's vendor-owned refresh,

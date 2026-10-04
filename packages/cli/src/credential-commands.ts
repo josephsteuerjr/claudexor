@@ -1,3 +1,4 @@
+import { interpretedCommand } from "@claudexor/core";
 /**
  * Credential surfaces: the managed secret store and INV-135 credential
  * profiles. Thin clients — the daemon owns storage and doctor probes; the
@@ -17,7 +18,8 @@ import {
   ControlSecretSetRequest,
   ControlSetupJob,
 } from "@claudexor/schema";
-import { streamDurableCodexLogin, terminalLoginFallback } from "./setup-login-inline.js";
+import { streamDurableLogin } from "./setup-login-inline.js";
+import { terminalLoginFallback } from "./setup-login-fallback.js";
 import { MANAGED_SECRET_NAMES, isManagedSecretName } from "@claudexor/secrets";
 import {
   CONFIG_DIR_LOGIN_HARNESSES,
@@ -230,9 +232,10 @@ export async function profilesCommandWithDeps(
       // `nextAction` in `--json`) — the same one-action fork as the default store.
       if (accepted) {
         if (!json) print(`codex/${profileId} login is managed by claudexord as ${job.jobId}.`);
-        return streamDurableCodexLogin(addr, job.jobId, {
+        return streamDurableLogin(addr, job.jobId, {
           label: `codex/${profileId}`,
           json,
+          resumeCommand: `claudexor profiles login codex ${profileId}`,
           fallback: { harness: "codex" },
         });
       }
@@ -284,10 +287,17 @@ export async function profilesCommandWithDeps(
         // miss; path and identity failures remain unsafe above.
       }
     }
+    if (spec.launchAdvisory) print(spec.launchAdvisory);
     print(`running ${spec.displayCommand} into ${configDir}`);
-    const child = spawnVendor(spec.binary, spec.args, {
+    const invocation = interpretedCommand(
+      spec.binary,
+      spec.args,
+      nativeLoginEnv(harness, process.env, configDir),
+      spec.interpreter,
+    );
+    const child = spawnVendor(invocation.binary, invocation.args, {
       stdio: "inherit",
-      env: nativeLoginEnv(harness, process.env, configDir),
+      env: invocation.env,
     });
     if (child.status !== 0) {
       print(`login command exited with ${child.status ?? child.signal ?? "unknown"}`);

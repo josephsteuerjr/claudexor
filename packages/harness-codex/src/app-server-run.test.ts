@@ -55,7 +55,7 @@ describe("Codex app-server transport", () => {
     },
   );
 
-  it("initializes, starts a thread and turn, and exposes the native thread id", async () => {
+  it("initializes, starts a thread and turn, and delivers queued quota from the same native process", async () => {
     const writes: Array<Record<string, unknown>> = [];
     const replies: string[] = [];
     let wake: (() => void) | undefined;
@@ -80,6 +80,19 @@ describe("Codex app-server transport", () => {
             push({ id: request.id, result: {} });
           } else if (request.method === "thread/start") {
             push({ id: request.id, result: { thread: { id: "thread-1" } } });
+            push({
+              method: "account/rateLimits/updated",
+              params: {
+                rateLimits: {
+                  limitId: "codex",
+                  primary: {
+                    usedPercent: 17,
+                    windowDurationMins: 300,
+                    resetsAt: 1791151200,
+                  },
+                },
+              },
+            });
             push({
               method: "mcpServer/startupStatus/updated",
               params: { threadId: "thread-1", name: "required_one", status: "starting" },
@@ -128,6 +141,7 @@ describe("Codex app-server transport", () => {
       ],
     });
     let first: HarnessEvent | undefined;
+    let quota: HarnessEvent | undefined;
     for await (const event of runCodexAppServer({
       bin: "codex",
       args: [],
@@ -135,8 +149,11 @@ describe("Codex app-server transport", () => {
       env: {},
       spawn,
     })) {
-      first = event;
-      break;
+      first ??= event;
+      if (event.quota) {
+        quota = event;
+        break;
+      }
     }
 
     expect(writes.map((request) => request.id).filter(Boolean)).toEqual([1, 2, 3]);
@@ -162,6 +179,14 @@ describe("Codex app-server transport", () => {
         mcp_servers: [{ name: "required_one", status: "connected" }],
       },
     });
+    expect(quota).toMatchObject({
+      type: "status",
+      quota: {
+        source: "codex_app_server_event",
+        constraints: [expect.objectContaining({ id: "codex:primary", used_ratio: 0.17 })],
+      },
+    });
+    expect(quota?.usage).toBeUndefined();
   });
 
   it("types a required MCP startup failure notification before starting the turn", async () => {

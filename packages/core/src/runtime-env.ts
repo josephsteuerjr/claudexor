@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
+import { commandForFile, interpretedCommand, type HarnessCommand } from "./npm-launch.js";
 import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { isLaunchableExecutable } from "./executable-inspection.js";
 
@@ -95,16 +96,9 @@ export function embeddedNpmCli(execPath: string, platform: NodeJS.Platform): str
     : resolve(runtimeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js");
 }
 
-/**
- * Windows npm installs ship `.cmd`/sh/ps1 shims and never an executable image
- * (issue #191), and Claudexor never spawns a harness through a shell. The
- * launcher a Windows install yields is therefore the vendor's OWN image inside
- * its npm platform package — ONE row per exact pin whose platform-package
- * layout was read from the real published package, keyed by the npm package
- * the installer pins. A vendor absent here has no Claudexor-runnable Windows
- * image and the local installer refuses it typed instead of installing a shim.
- * The path is relative to the prefix's global packages dir.
- */
+/** Compatibility PATH entries for previously installed managed Codex images.
+ * Standard npm installs now resolve their own declared bin through npm-launch;
+ * keep this existing image location as a fallback for earlier managed installs. */
 const WINDOWS_TARGET_TRIPLES = {
   x64: "x86_64-pc-windows-msvc",
   arm64: "aarch64-pc-windows-msvc",
@@ -193,6 +187,7 @@ export function normalizedHarnessPath(
       ? [join(home, ".claudexor", "remote", "vendor", "bin")]
       : []),
     join(managedNodeRoot(home), "bin"),
+    ...(platform === "win32" ? [managedNodeRoot(home)] : []),
     // Windows: the managed prefix holds no image in any bin dir, only the
     // vendor's own image inside its platform package (see
     // WINDOWS_NATIVE_IMAGE_PACKAGES); that dir is the local install's launcher.
@@ -210,7 +205,13 @@ export function normalizedHarnessPath(
     "/usr/sbin",
     "/sbin",
   ];
-  const inherited = (source.PATH ?? "").split(delimiter).filter(Boolean);
+  const inheritedPath =
+    source.PATH ??
+    (platform === "win32"
+      ? Object.entries(source).find(([key]) => key.toUpperCase() === "PATH")?.[1]
+      : undefined) ??
+    "";
+  const inherited = inheritedPath.split(delimiter).filter(Boolean);
   const seen = new Set<string>();
   return [...preferred, ...inherited]
     .filter((entry) => {
@@ -226,7 +227,20 @@ export function harnessRuntimeEnv(
   execPath: string = process.execPath,
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
-  return { ...source, PATH: normalizedHarnessPath(source, execPath, platform) };
+  const env: NodeJS.ProcessEnv = {
+    ...source,
+    PATH: normalizedHarnessPath(source, execPath, platform),
+  };
+  if (!env.USER?.trim() || !env.LOGNAME?.trim()) {
+    try {
+      const username = userInfo().username;
+      if (!env.USER?.trim()) env.USER = username;
+      if (!env.LOGNAME?.trim()) env.LOGNAME = username;
+    } catch {
+      /* Missing OS identity is not an authentication verdict. */
+    }
+  }
+  return env;
 }
 
 /**
@@ -249,34 +263,89 @@ export function resolveHarnessBinary(
   execPath: string = process.execPath,
   platform: NodeJS.Platform = process.platform,
 ): string | null {
-  const names = binaryNameCandidates(bin, platform);
-  if (isAbsolute(bin)) {
-    for (const name of names) if (isLaunchableExecutable(name, platform)) return name;
-    return null;
-  }
-  return resolveOnPath(names, normalizedHarnessPath(source, execPath, platform), platform);
+  return (
+    resolveHarnessCommandOnPath(bin, normalizedHarnessPath(source, execPath, platform), platform)
+      .command?.entrypoint ?? null
+  );
 }
 
-/** First launchable candidate on an EXACT PATH string, no normalization. */
-function resolveOnPath(
-  names: string[],
+export interface HarnessCommandResolution {
+  command: HarnessCommand | null;
+  skipped: Array<{ path: string; reason: string }>;
+  advisory: string | null;
+}
+
+/** Exact final PATH; never normalize a scoped HOME or replace a caller's patch. */
+export function resolveHarnessCommandOnPath(
+  bin: string,
   pathValue: string,
-  platform: NodeJS.Platform,
-): string | null {
-  for (const dir of pathValue.split(delimiter)) {
-    if (!dir) continue;
-    for (const name of names) {
-      const candidate = join(dir, name);
-      if (isLaunchableExecutable(candidate, platform)) return candidate;
-    }
+  platform: NodeJS.Platform = process.platform,
+  source: NodeJS.ProcessEnv = process.env,
+): HarnessCommandResolution {
+  const names = binaryNameCandidates(bin, platform);
+  // Absolute and explicitly relative paths are exact choices, not PATH searches.
+  const explicit = isAbsolute(bin) || /[\\/]/.test(bin);
+  const candidates = explicit
+    ? [...new Set([bin, ...names])]
+    : pathValue
+        .split(delimiter)
+        .filter(Boolean)
+        .flatMap((dir) => names.map((name) => join(dir, name)));
+  const skipped: HarnessCommandResolution["skipped"] = [];
+  let command: HarnessCommand | null = null;
+  for (const candidate of candidates) {
+    command = commandForFile(candidate, pathValue, platform, delimiter, source);
+    if (command) break;
+    const kind = lstatKind(candidate);
+    if (!kind) continue;
+    skipped.push({
+      path: candidate,
+      reason:
+        kind === "symlink" && !existsSync(candidate)
+          ? "symlink target is missing"
+          : kind === "dir"
+            ? "is a directory"
+            : platform === "win32" && /\.(?:cmd|bat)$/i.test(candidate)
+              ? "is not a supported standard npm launcher"
+              : "is not launchable",
+    });
   }
-  return null;
+  const advisory = skipped.length
+    ? `${command ? `Using ${command.entrypoint}; skipped` : "Cannot launch"} ${skipped.map((item) => `${item.path} (${item.reason})`).join("; ")}`
+    : null;
+  return { command, skipped, advisory };
+}
+
+/** Prepare the actual OS invocation without changing the environment's authority. */
+export function prepareHarnessCommand(
+  bin: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): ReturnType<typeof interpretedCommand> & { resolution: HarnessCommandResolution } {
+  const pathValue =
+    env.PATH ??
+    (platform === "win32"
+      ? Object.entries(env).find(([key]) => key.toUpperCase() === "PATH")?.[1]
+      : undefined) ??
+    "";
+  const resolution = resolveHarnessCommandOnPath(bin, pathValue, platform, env);
+  const command = resolution.command;
+  if (!command && platform === "win32" && /\.(?:cmd|bat|ps1)$/i.test(bin)) {
+    throw Object.assign(new Error(resolution.advisory ?? `Unsupported Windows launcher: ${bin}`), {
+      code: "ENOEXEC",
+    });
+  }
+  return {
+    ...interpretedCommand(command?.entrypoint ?? bin, args, env, command?.interpreter),
+    resolution,
+  };
 }
 
 /**
  * Which exact bytes a harness child will execute, as a stat-only identity:
- * the realpath of the binary `resolveHarnessBinary` picks, plus its inode,
- * size and mtime. No spawn, no read — one `realpath` and one `stat`.
+ * the realpath of the entrypoint `resolveHarnessBinary` picks, plus its inode,
+ * size and mtime. Npm resolution also reads its shim and bounded script header.
  *
  * Every probe memo keyed by this identity re-reads the binary the moment it
  * changes on disk WITHOUT a daemon restart, which is what the release-free
@@ -294,13 +363,15 @@ export interface HarnessBinaryIdentity {
   ino: number;
   size: number;
   mtimeMs: number;
+  launcher?: string;
+  interpreter?: { path: string; ino: number; size: number; mtimeMs: number };
 }
 
 export function harnessBinaryIdentity(
   bin: string,
   source: NodeJS.ProcessEnv = process.env,
 ): HarnessBinaryIdentity | null {
-  return identityOfResolved(resolveHarnessBinary(bin, source));
+  return identityOfCommand(resolveHarnessCommandOnPath(bin, normalizedHarnessPath(source)).command);
 }
 
 /**
@@ -315,13 +386,19 @@ export function harnessBinaryIdentityOnPath(
   pathValue: string,
   platform: NodeJS.Platform = process.platform,
 ): HarnessBinaryIdentity | null {
-  const names = binaryNameCandidates(bin, platform);
-  if (isAbsolute(bin)) {
-    for (const name of names)
-      if (isLaunchableExecutable(name, platform)) return identityOfResolved(name);
-    return null;
-  }
-  return identityOfResolved(resolveOnPath(names, pathValue, platform));
+  return identityOfCommand(resolveHarnessCommandOnPath(bin, pathValue, platform).command);
+}
+
+function identityOfCommand(command: HarnessCommand | null): HarnessBinaryIdentity | null {
+  if (!command) return null;
+  const identity = identityOfResolved(command.entrypoint);
+  if (!identity) return null;
+  const interpreter = command.interpreter && identityOfResolved(command.interpreter.binary);
+  return {
+    ...identity,
+    ...(command.launcher ? { launcher: command.launcher } : {}),
+    ...(interpreter ? { interpreter } : {}),
+  };
 }
 
 function identityOfResolved(resolved: string | null): HarnessBinaryIdentity | null {
@@ -335,15 +412,9 @@ function identityOfResolved(resolved: string | null): HarnessBinaryIdentity | nu
   }
 }
 
-/**
- * Windows executable IMAGES only — the same call Claudexor already makes for
- * `git.exe` (v3.3.9): Node refuses to launch `.cmd`/`.bat` without a shell,
- * and Claudexor never spawns a harness through one, so offering those
- * spellings would only resolve a path that cannot be run. A bare extensionless
- * name is not offered either: on Windows it is an npm/sh shim, not an image.
- * An explicit name that already carries an extension is honored as written.
- */
-const WINDOWS_IMAGE_EXTENSIONS = [".exe", ".com"] as const;
+/** Native images first, then a fully recognized npm shim. Script spellings are
+ * resolved to their declared entrypoint and interpreter, never passed to CMD. */
+const WINDOWS_IMAGE_EXTENSIONS = [".exe", ".com", ".cmd"] as const;
 
 function binaryNameCandidates(bin: string, platform: NodeJS.Platform): string[] {
   if (platform !== "win32") return [bin];
@@ -376,7 +447,8 @@ export function brokenInstallAdvisory(
   source: NodeJS.ProcessEnv = process.env,
   brewPrefixes: readonly string[] = HOMEBREW_PREFIXES,
 ): string | null {
-  if (resolveHarnessBinary(bin, source) !== null) return null;
+  const resolution = resolveHarnessCommandOnPath(bin, normalizedHarnessPath(source));
+  if (resolution.command) return resolution.advisory;
   const name = basename(bin);
   const names = binaryNameCandidates(bin, process.platform);
   // A Windows npm install ships shims (`codex`, `codex.cmd`) and no image, so

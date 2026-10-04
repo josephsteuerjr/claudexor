@@ -7,11 +7,14 @@ import { noProjectRepoRoot } from "@claudexor/util";
 import type {
   CredentialProfile,
   CredentialProfileStatus,
-  QuotaAbsence,
-  QuotaSnapshot,
+  CredentialUnusableObservation,
 } from "@claudexor/schema";
 import { withQuotaAvailability } from "@claudexor/schema";
-import { vendorVerifiedProfileStatus } from "@claudexor/orchestrator";
+import {
+  composeCredentialProfileEvidence,
+  type VendorQuotaObservations,
+} from "@claudexor/orchestrator";
+import { credentialUnusableLedger } from "./run-orchestrator.js";
 import { accountPoolsProjection, profileAccountProjection } from "./accounts-projection.js";
 import { buildGateway, buildRegistry, checkHarnessModel } from "./registry.js";
 import { delegationCapabilityFor } from "./delegation-capability.js";
@@ -97,7 +100,9 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
   const buildPollResponse = async () => {
     const [probed, statuses] = await Promise.all([projectProfiles(), readHarnesses()]);
     const quota = quotaRegistry().read();
-    const out = withVendorVerification(probed, quota);
+    const unusable = credentialUnusableLedger.live();
+    const evidence = { ...quota, honored: credentialUnusableLedger.honored() };
+    const out = withAccountEvidence(probed, evidence, unusable);
     return {
       profiles: out,
       // Unified account model: the legacy carrier stays PRESENT and empty for
@@ -106,6 +111,8 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
       accountPools: await accountPoolsProjection(NO_PROJECT_ROOT, quota.snapshots, {
         profiles: out,
         statuses,
+        quota: evidence,
+        unusable,
       }),
     };
   };
@@ -119,7 +126,9 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
         quotaRegistry().refreshWithCursor(),
       ]);
       const rawQuota = fencedQuota.response;
-      const out = withVendorVerification(probed, rawQuota);
+      const unusable = credentialUnusableLedger.live();
+      const evidence = { ...rawQuota, honored: credentialUnusableLedger.honored() };
+      const out = withAccountEvidence(probed, evidence, unusable);
       // Explicit acquisition refreshes the display observation, not just TTL.
       return {
         profiles: out,
@@ -127,6 +136,8 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
         accountPools: await accountPoolsProjection(NO_PROJECT_ROOT, rawQuota.snapshots, {
           profiles: out,
           statuses,
+          quota: evidence,
+          unusable,
         }),
         harnesses: await projectHarnessStatuses(statuses),
         git,
@@ -148,14 +159,20 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
  * so the routing identity (`next_up`) and the listed status can never disagree:
  * a revoked profile must not be advertised as who the next run routes to.
  */
-function withVendorVerification<
+function withAccountEvidence<
   T extends { profile: CredentialProfile; status: CredentialProfileStatus },
 >(
   entries: T[],
-  quota: { snapshots: readonly QuotaSnapshot[]; absences: readonly QuotaAbsence[] },
+  quota: VendorQuotaObservations,
+  unusable: readonly CredentialUnusableObservation[],
 ): T[] {
   return entries.map((entry) => ({
     ...entry,
-    status: vendorVerifiedProfileStatus(entry.status, quota),
+    status: composeCredentialProfileEvidence(entry.status, {
+      quota,
+      unusable,
+      model: null,
+      route: entry.profile.credential_kind === "api_key" ? "managed_api_key" : "vendor_native",
+    }),
   }));
 }

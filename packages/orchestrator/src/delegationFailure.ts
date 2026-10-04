@@ -2,8 +2,9 @@ import { join } from "node:path";
 import { ArtifactStore, type RunPaths } from "@claudexor/artifact-store";
 import { EventLog } from "@claudexor/event-log";
 import { makeOutcomeFacts, type ModeKind } from "@claudexor/schema";
-import { containsSecretLikeToken, newId, sha256 } from "@claudexor/util";
-import { createRevertAnchorOrNull, snapshotTree } from "@claudexor/workspace";
+import { newId } from "@claudexor/util";
+import { snapshotTree } from "@claudexor/workspace";
+import { publishUnverifiedGitCandidate } from "./candidateWorkProduct.js";
 import type { AttemptTelemetry } from "./attemptTelemetry.js";
 import type { CandidateRun } from "./candidateEvidence.js";
 import { delegationBeltToolFailure, delegationBeltUnavailable } from "./delegationToolEvidence.js";
@@ -168,9 +169,6 @@ export async function persistFailedInPlaceWorkProduct(input: {
     });
     return;
   }
-  if (containsSecretLikeToken(input.run.diff)) {
-    throw new Error("failed in-place patch diff contains secret-like token; refusing artifact");
-  }
   let postTurnSha = input.postTurnSha;
   if (postTurnSha === undefined) {
     try {
@@ -179,36 +177,9 @@ export async function persistFailedInPlaceWorkProduct(input: {
       postTurnSha = null;
     }
   }
-  const revertAnchorId = await createRevertAnchorOrNull(
-    input.execRoot,
-    input.preTurnSha,
+  await publishUnverifiedGitCandidate({
+    ...input,
     postTurnSha,
-  );
-  const facts = makeOutcomeFacts("failed", { reason: "harness_failed", noChanges: false });
-  input.store.writeText(join(input.paths.finalDir, "patch.diff"), input.run.diff);
-  input.store.writeYaml(join(input.paths.finalDir, "work_product.yaml"), {
-    id: newId("wp"),
-    kind: input.kind,
-    source_task_id: input.taskId,
-    producer_attempt_id: input.run.attemptId,
-    meta: {
-      harness_id: input.run.harnessId,
-      result_kind: "patch",
-      mode: input.mode,
-      ...(input.attempts !== undefined ? { attempts: input.attempts } : {}),
-      lifecycle: facts.lifecycle,
-      outcome_facts: facts,
-      review_verified: false,
-      patch_sha256: sha256(input.run.diff),
-      adopted: true,
-      apply_state: "applied_review_blocked",
-      pre_turn_sha: input.preTurnSha,
-      post_turn_sha: postTurnSha,
-      revert_anchor_id: revertAnchorId,
-    },
-  });
-  input.log.emit("work_product.emitted", {
-    winner: input.run.attemptId,
-    apply_state: "applied_review_blocked",
+    facts: makeOutcomeFacts("failed", { reason: "harness_failed", noChanges: false }),
   });
 }

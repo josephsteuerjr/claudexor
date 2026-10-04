@@ -1,16 +1,16 @@
 /**
- * D-17: inline CLI presentation of a durable codex device-code login job.
+ * Inline CLI presentation of a durable managed login job.
  *
- * Both `claudexor auth login codex` and `claudexor profiles login codex <id>`
- * ride the SAME daemon-owned setup job; this helper polls the job snapshot,
+ * Bootstrap logins and Codex profile logins use the daemon-owned setup job.
+ * This helper polls the job snapshot,
  * shows the one-time code + verification URL as soon as the runner discloses
  * them (transient, from the snapshot overlay — never journaled), and follows
  * the job to its typed terminal outcome. Ctrl-C detaches the CLI; the daemon
  * runner keeps the login alive.
  */
-import { createInterface } from "node:readline/promises";
 import {
   ControlSetupJob,
+  ControlSetupJobInputRequest,
   ControlSetupJobSnapshot,
   isTerminalControlSetupJobState,
   type ControlSetupJobState,
@@ -18,152 +18,19 @@ import {
 import { print, printJson } from "./cli-io.js";
 import { controlApiFetch, type ControlApiAddress } from "./live.js";
 
+import {
+  createTerminalFallbackJob,
+  defaultPromptYesNo,
+  terminalLoginFallback,
+  terminalLoginReport,
+  type FetchLike,
+  type TerminalLoginFallbackCapability,
+} from "./setup-login-fallback.js";
+import { promptLoginInput } from "./setup-login-input-prompt.js";
+
 const POLL_MS = 1_000;
 
-const NEGATIVE_TERMINAL_STATES = ["failed", "cancelled", "timed_out", "not_supported"];
-
-/** Capability to offer the legacy Terminal (browser_redirect) continuation.
- * Its target is deliberately absent: only the server-owned job may select the
- * credential store that an existing setup flow continues. */
-export interface TerminalLoginFallbackCapability {
-  harness: "codex";
-}
-
-/**
- * D-17 audit point 8: the typed, machine-actionable next step for a codex
- * device-code login that terminalized as `not_supported` because the installed
- * app-server (or an old codex CLI) lacks the typed auth methods. It is the SAME
- * consistent code — `device_auth_unsupported` — that the runner result, the
- * journaled receipt, the control DTO, and the Swift AuthSheet all key off; here
- * it drives the `--json` `nextAction` so a script pivots to the Terminal flow
- * instead of parsing prose.
- */
-export interface TerminalLoginNextAction {
-  kind: "terminal_login_fallback";
-  reason: "device_auth_unsupported";
-  loginFlow: "browser_redirect";
-  /** Exact server-owned credential target; null = the default store. */
-  profileId: string | null;
-}
-
-function hasTerminalLoginFallback(
-  job: Pick<ControlSetupJob, "harness" | "state" | "nativeCommand">,
-): boolean {
-  return (
-    job.harness === "codex" &&
-    job.state === "not_supported" &&
-    job.nativeCommand?.errorCode === "device_auth_unsupported"
-  );
-}
-
-/** The typed next action for a terminal job, or null for an ordinary outcome.
- * The target comes from the server-owned job so every machine producer agrees. */
-export function terminalLoginFallback(
-  job: Pick<ControlSetupJob, "harness" | "state" | "nativeCommand" | "profileId">,
-): TerminalLoginNextAction | null {
-  if (hasTerminalLoginFallback(job)) {
-    return {
-      kind: "terminal_login_fallback",
-      reason: "device_auth_unsupported",
-      loginFlow: "browser_redirect",
-      profileId: job.profileId,
-    };
-  }
-  return null;
-}
-
-/**
- * D-17 audit point 8: the terminal report for a durable codex login. The
- * `not_supported` state is actionable, not a dead-end message: when the daemon
- * carries the consistent typed code `device_auth_unsupported` on the
- * native-command receipt (the SAME code the runner result, journal, control
- * DTO, and Swift surface use), the CLI names the code AND the exact next step
- * (the legacy Terminal sign-in), and exits non-zero. Used for the non-TTY /
- * declined path; a TTY OFFERS the transition directly (see below).
- */
-export function terminalLoginReport(
-  job: Pick<ControlSetupJob, "harness" | "state" | "message" | "nativeCommand" | "profileId">,
-  label: string,
-): { lines: string[]; exitCode: number } {
-  const nextAction = terminalLoginFallback(job);
-  if (nextAction) {
-    const fallbackLabel = nextAction.profileId ? `codex/${nextAction.profileId}` : "codex";
-    return {
-      lines: [
-        `${fallbackLabel} login not_supported (device_auth_unsupported): this codex build has no in-app device-code sign-in.`,
-        nextAction.profileId
-          ? "Next: retry this profile with the legacy Terminal sign-in (the browser-redirect flow)."
-          : "Next: run `claudexor auth login codex --browser-redirect` for the Terminal sign-in.",
-      ],
-      exitCode: 1,
-    };
-  }
-  return {
-    lines: [`${label} login ${job.state}: ${job.message}`],
-    exitCode: job.state === "succeeded" ? 0 : 1,
-  };
-}
-
-/** Minimal structural view of the control-plane transport so tests can drive
- * the stream without a live daemon. Defaults to the real `controlApiFetch`. */
-type FetchLike = (
-  path: string,
-  init?: RequestInit,
-) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
-
-/** Default TTY yes/no prompt. Declines (false) when stdin is not a TTY so a
- * non-interactive pipe never blocks waiting for an answer. */
-async function defaultPromptYesNo(question: string): Promise<boolean> {
-  if (!process.stdin.isTTY) return false;
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = (await rl.question(question)).trim().toLowerCase();
-    return answer === "y" || answer === "yes";
-  } finally {
-    rl.close();
-  }
-}
-
-/**
- * Create the legacy Terminal (browser_redirect) login for the same target. This
- * rides the daemon's existing duplicate-create / 409 semantics: the prior
- * device-code job is already terminal (not_supported), so no conflict blocks
- * it, and a real conflict surfaces the daemon's reason rather than silently
- * starting a duplicate.
- */
-async function createTerminalFallbackJob(
-  fetchImpl: FetchLike,
-  nextAction: TerminalLoginNextAction,
-  label: string,
-): Promise<number> {
-  const response = await fetchImpl("/setup/jobs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      harness: "codex",
-      action: "login",
-      authRequest: "subscription",
-      loginFlow: nextAction.loginFlow,
-      ...(nextAction.profileId ? { profileId: nextAction.profileId } : {}),
-    }),
-  });
-  if (!response.ok) {
-    print(
-      `could not start the Terminal ${label} sign-in (${response.status}): ${await response.text()}`,
-    );
-    return 1;
-  }
-  const job = ControlSetupJob.parse(await response.json());
-  const accepted = !NEGATIVE_TERMINAL_STATES.includes(job.state);
-  print(
-    accepted
-      ? `Opening the Terminal ${label} sign-in (managed by claudexord as ${job.jobId}). Complete it in the Terminal window that opens.`
-      : `Terminal ${label} sign-in was not started: ${job.message}`,
-  );
-  return accepted ? 0 : 1;
-}
-
-export interface StreamDurableCodexLoginOptions {
+export interface StreamDurableLoginOptions {
   label: string;
   /** `--json`: emit exactly one JSON object (the disclosure, the terminal
    * outcome, or a detached/ error envelope) instead of the human stream. */
@@ -177,10 +44,14 @@ export interface StreamDurableCodexLoginOptions {
   sleep?: (ms: number) => Promise<void>;
   promptYesNo?: (question: string) => Promise<boolean>;
   fetchImpl?: FetchLike;
+  isTTY?: boolean;
+  /** The exact invoking command, for returning to its still-active job. */
+  resumeCommand?: string;
+  promptInput?: (question: string, signal: AbortSignal) => Promise<string | null>;
 }
 
 /**
- * Poll a device-code login job. In TTY mode it prints the one-time code once
+ * Follow a managed login job. In TTY mode it displays the current disclosure
  * and follows the job to its terminal outcome; on a device_auth_unsupported
  * miss it OFFERS the legacy Terminal sign-in (a y/N prompt that, on yes, starts
  * the browser_redirect job in one action). In `--json` mode it emits one JSON
@@ -188,10 +59,10 @@ export interface StreamDurableCodexLoginOptions {
  * terminal outcome (with a typed `nextAction` on the fallback), or a
  * detached/error envelope. Returns the process exit code (0 on success).
  */
-export async function streamDurableCodexLogin(
+export async function streamDurableLogin(
   addr: ControlApiAddress,
   jobId: string,
-  opts: StreamDurableCodexLoginOptions = { label: "codex" },
+  opts: StreamDurableLoginOptions = { label: "codex" },
 ): Promise<number> {
   const { label } = opts;
   const json = opts.json ?? false;
@@ -200,10 +71,14 @@ export async function streamDurableCodexLogin(
   const fetchImpl: FetchLike =
     opts.fetchImpl ?? ((path, init) => controlApiFetch(addr, path, init));
   const promptYesNo = opts.promptYesNo ?? defaultPromptYesNo;
-  let disclosed = false;
+  let disclosed = "";
+  const inputAbort = new AbortController();
+  let inputStarted = false;
+  let inputResult: { value: string | null } | { error: unknown } | undefined;
   let detached = false;
   const onSigint = () => {
     detached = true;
+    inputAbort.abort();
   };
   process.once("SIGINT", onSigint);
   try {
@@ -216,7 +91,9 @@ export async function streamDurableCodexLogin(
         }
         print(
           `Detached. ${label} login keeps running as ${jobId}; ` +
-            `re-attach with \`claudexor auth status\` or finish it in the browser.`,
+            (opts.resumeCommand
+              ? `repeat \`${opts.resumeCommand}\` while it is still active to continue.`
+              : "Finish it in the browser, or return through the client that started it."),
         );
         return detachExitCode;
       }
@@ -233,6 +110,8 @@ export async function streamDurableCodexLogin(
       }
       const snapshot = ControlSetupJobSnapshot.parse(await response.json());
       const job = snapshot.job;
+      if (job.jobId !== jobId) throw new Error("setup snapshot does not match the requested login");
+      const jobLabel = job.profileId ? `${job.harness}/${job.profileId}` : job.harness;
       const terminal = isTerminalControlSetupJobState(job.state as ControlSetupJobState);
 
       if (json) {
@@ -250,6 +129,16 @@ export async function streamDurableCodexLogin(
               verificationUrl: snapshot.deviceCode.verificationUrl,
               userCode: snapshot.deviceCode.userCode,
             },
+            ...(snapshot.deviceCode.flow === "oauth_url_input"
+              ? {
+                  nextAction: {
+                    kind: "submit_sign_in_input",
+                    method: "POST",
+                    path: `/v2/setup/jobs/${encodeURIComponent(jobId)}/input`,
+                    jobId,
+                  },
+                }
+              : {}),
           });
           return 0;
         }
@@ -263,12 +152,13 @@ export async function streamDurableCodexLogin(
       }
 
       // TTY mode.
-      if (snapshot.deviceCode && !disclosed) {
-        disclosed = true;
+      const disclosureKey = JSON.stringify(snapshot.deviceCode ?? null);
+      if (snapshot.deviceCode && disclosureKey !== disclosed) {
+        disclosed = disclosureKey;
         print("");
         print(`Open:    ${snapshot.deviceCode.verificationUrl}`);
         if (snapshot.deviceCode.userCode) print(`Code:    ${snapshot.deviceCode.userCode}`);
-        print(`Waiting for OpenAI… (Ctrl-C detaches; the login keeps running)`);
+        print(`Waiting for ${job.harness}… (Ctrl-C detaches; the login keeps running)`);
         print("");
       }
       if (terminal) {
@@ -293,13 +183,66 @@ export async function streamDurableCodexLogin(
           );
           return 1;
         }
-        const report = terminalLoginReport(job, label);
+        const report = terminalLoginReport(job, jobLabel);
         for (const line of report.lines) print(line);
         return report.exitCode;
+      }
+      if (snapshot.deviceCode?.flow === "oauth_url_input" && !inputStarted) {
+        if (!(opts.isTTY ?? process.stdin.isTTY)) {
+          print(
+            `This sign-in needs a code. Continue in an interactive terminal${opts.resumeCommand ? ` with \`${opts.resumeCommand}\`` : ""}, or POST the code to /v2/setup/jobs/${encodeURIComponent(jobId)}/input. The same login is still running.`,
+          );
+          return 1;
+        }
+        inputStarted = true;
+        void (opts.promptInput ?? promptLoginInput)(
+          "Paste the sign-in code: ",
+          inputAbort.signal,
+        ).then(
+          (value) => {
+            inputResult = { value };
+          },
+          (error) => {
+            inputResult = { error };
+          },
+        );
+      }
+      if (inputStarted && job.phase !== "awaiting_user") inputAbort.abort();
+      if (inputResult && !detached && snapshot.deviceCode?.flow === "oauth_url_input") {
+        const result = inputResult;
+        inputResult = undefined;
+        if ("error" in result) throw result.error;
+        if (result.value === null) {
+          print(`No code was submitted. ${jobLabel} login keeps running as ${jobId}.`);
+          return 1;
+        }
+        const body = ControlSetupJobInputRequest.parse({ value: result.value.trim() });
+        const submitted = await fetchImpl(`/setup/jobs/${encodeURIComponent(jobId)}/input`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!submitted.ok) {
+          const problem = (await submitted.json()) as { code?: string };
+          if (submitted.status === 409 && problem.code === "setup_input_already_submitted") {
+            print("A code was already submitted for this login. Waiting for its result…");
+            await sleep(pollMs);
+            continue;
+          }
+          print(
+            `Sign-in input was not confirmed (${submitted.status}). Read the status of ${jobId} before submitting again.`,
+          );
+          return 1;
+        }
+        const updated = ControlSetupJob.parse(await submitted.json());
+        if (updated.jobId !== jobId)
+          throw new Error("setup input response does not match the requested login");
+        print(`Code delivered. Waiting for ${job.harness} to finish the sign-in…`);
       }
       await sleep(pollMs);
     }
   } finally {
+    inputAbort.abort();
     process.removeListener("SIGINT", onSigint);
   }
 }

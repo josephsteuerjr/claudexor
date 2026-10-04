@@ -114,6 +114,22 @@ describe("claude D-16 signal fixtures", () => {
     // status:"allowed" is a routine heartbeat — recognized (dropped==0 above)
     // but it must NOT emit a rate_limit signal that would arm rotation.
     expect(events.some((e) => e.rate_limit !== undefined)).toBe(false);
+    const windows = events.flatMap((event) => event.quota?.constraints ?? []);
+    expect(windows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "five_hour", used_ratio: 0.07 }),
+        expect.objectContaining({ id: "seven_day", used_ratio: 0.01 }),
+      ]),
+    );
+    expect(windows.some((window) => window.id === "seven_day_overage_included")).toBe(false);
+    expect(
+      events.some(
+        (event) =>
+          (event.payload?.["native_quota"] as Record<string, unknown> | undefined)?.[
+            "window_id"
+          ] === "seven_day_overage_included",
+      ),
+    ).toBe(true);
     // Native system metadata is likewise recognized plumbing.
     expect(events.some((e) => e.type === "context")).toBe(false);
     expect(events.some((e) => e.type === "message" && e.final === true)).toBe(true);
@@ -121,7 +137,11 @@ describe("claude D-16 signal fixtures", () => {
 
   it("treats the current native allowed_warning heartbeat as advisory, not a cooldown", () => {
     const events = parseFixture("allowed-warning-rate-limit-event.jsonl");
-    expect(events).toEqual([]);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.quota?.constraints).toEqual([
+      expect.objectContaining({ id: "seven_day", used_ratio: 0.9 }),
+    ]);
+    expect(events[0]?.rate_limit).toBeUndefined();
   });
 
   it("maps a limiting rate_limit_event to a typed rate_limit signal with resets_at", () => {
@@ -138,10 +158,12 @@ describe("claude D-16 signal fixtures", () => {
       },
       "sig",
     );
-    expect(out).toHaveLength(1);
-    expect(out?.[0]?.type).toBe("status");
-    expect(out?.[0]?.rate_limit?.resets_at).toBe(new Date(1784774400 * 1000).toISOString());
-    expect(out?.[0]?.rate_limit).toMatchObject({
+    expect(out).toHaveLength(2);
+    const rejection = out?.find((event) => event.rate_limit);
+    expect(out?.find((event) => event.quota)?.quota?.constraints[0]?.used_ratio).toBeNull();
+    expect(rejection?.type).toBe("status");
+    expect(rejection?.rate_limit?.resets_at).toBe(new Date(1784774400 * 1000).toISOString());
+    expect(rejection?.rate_limit).toMatchObject({
       constraint_id: "seven_day_opus",
       applies_to_models: [
         "opus",

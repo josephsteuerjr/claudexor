@@ -3,6 +3,10 @@ import {
   harnessRuntimeEnv,
   pickAllowlistedEnv,
   resolveHarnessBinary,
+  brokenInstallAdvisory,
+  resolveHarnessCommandOnPath,
+  normalizedHarnessPath,
+  type HarnessInterpreter,
 } from "@claudexor/core";
 import { CLAUDE_MANAGED_LOGIN, defaultNativeClaudeConfigDir } from "@claudexor/harness-claude";
 import {
@@ -25,6 +29,8 @@ export interface NativeLoginSpec {
   binary: string;
   args: string[];
   displayCommand: string;
+  interpreter?: HarnessInterpreter;
+  launchAdvisory?: string;
   /** D-17: "device_code" = the codex app-server flow (no Terminal).
    * "url_disclosure" = daemon-hosted vendor login whose sign-in URL is
    * captured into the disclosure sidecar (cursor). "url_disclosure_with_input"
@@ -135,7 +141,16 @@ export function nativeLoginSpec(
   if (!definition) return null;
   const managedLogin = NATIVE_LOGIN_INPUTS[harness];
   if (!managedLogin) return null;
-  const resolved = resolver(definition.binaryName(resolver));
+  const name = definition.binaryName(resolver);
+  const resolution =
+    resolver === resolveHarnessBinary
+      ? resolveHarnessCommandOnPath(name, normalizedHarnessPath())
+      : null;
+  const resolved = resolution ? resolution.command?.entrypoint : resolver(name);
+  const launch = {
+    ...(resolution?.command?.interpreter ? { interpreter: resolution.command.interpreter } : {}),
+    ...(resolution?.advisory ? { launchAdvisory: resolution.advisory } : {}),
+  };
   if (!resolved || !isAbsolute(resolved)) return null;
   if (harness === "codex") {
     // D-17: the legacy Terminal localhost-callback flow is the explicit opt-in
@@ -143,6 +158,7 @@ export function nativeLoginSpec(
     if (loginFlow === "browser_redirect") {
       return {
         binary: resolved,
+        ...launch,
         args: [...CODEX_FILE_AUTH_ARGS, "login"],
         displayCommand: "codex login (browser redirect, isolated Claudexor profile)",
         loginMode: "terminal",
@@ -152,6 +168,7 @@ export function nativeLoginSpec(
     const appServerFlow = loginFlow === "browser_callback" ? "chatgpt" : "chatgptDeviceCode";
     return {
       binary: resolved,
+      ...launch,
       // The runner hosts the app-server; the same file-auth args + app-server
       // transport the codex quota source uses (codex-quota-source.ts).
       args: [...CODEX_FILE_AUTH_ARGS, "app-server", "--stdio"],
@@ -176,6 +193,7 @@ export function nativeLoginSpec(
   const withInput = managedLogin.stdin !== "none";
   return {
     binary: resolved,
+    ...launch,
     args: [...definition.args],
     displayCommand: definition.displayCommandFor?.(resolved) ?? definition.displayCommand,
     loginMode: withInput ? "url_disclosure_with_input" : "url_disclosure",
@@ -303,4 +321,10 @@ export function nativeLoginEnv(
     Object.assign(env, cursorProfilePathEnv(home));
   }
   return env;
+}
+
+/** Same resolver evidence when login cannot produce a runnable command. */
+export function nativeLoginUnavailableDetail(harness: string): string | null {
+  const definition = NATIVE_LOGIN_DEFINITIONS[harness];
+  return definition ? brokenInstallAdvisory(definition.binaryName(resolveHarnessBinary)) : null;
 }

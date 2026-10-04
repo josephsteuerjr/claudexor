@@ -44,6 +44,14 @@ export function writeFailure(
   },
 ): void {
   const vendor = failure.vendorFailure ?? null;
+  const outdated =
+    failure.requestRefusal?.kind === "vendor_cli_too_old" ? failure.requestRefusal : null;
+  const installation = [
+    outdated?.binary_path,
+    outdated?.installed_version && `(reported version ${outdated.installed_version})`,
+  ]
+    .filter(Boolean)
+    .join(" ");
   store.writeYaml(join(paths.finalDir, "failure.yaml"), {
     phase: failure.phase,
     category: failure.category,
@@ -69,7 +77,13 @@ export function writeFailure(
             "Fit the input to the reported transport limit or supply source references",
             "Choose another compatible harness if the complete input must remain inline",
           ]
-        : (failure.nextActions ?? []),
+        : failure.code === "vendor_cli_too_old"
+          ? [
+              `Update the Claude Code CLI${installation ? ` at ${installation}` : ""}`,
+              "Use the update method for that installation, then retry the requested model",
+              "Open diagnostics",
+            ]
+          : (failure.nextActions ?? []),
   });
 }
 
@@ -82,7 +96,12 @@ export interface DeclaredFailure {
 }
 
 export function requestRefusalFailure(requestRefusal: HarnessRequestRefusal): DeclaredFailure {
-  return { category: "validation", code: requestRefusal.kind, resetsAt: null, requestRefusal };
+  return {
+    category: requestRefusal.kind === "vendor_cli_too_old" ? "harness_unavailable" : "validation",
+    code: requestRefusal.kind,
+    resetsAt: null,
+    requestRefusal,
+  };
 }
 
 /**

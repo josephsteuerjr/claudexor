@@ -138,6 +138,34 @@ async function replay(
   return { events, receipt: await receipt!, liveMessageId, args, expectations: expectations! };
 }
 
+function expectRecordedQuotaWindows(events: HarnessEvent[]): void {
+  const measured = events.filter((event) => event.quota !== undefined);
+  expect(measured).toHaveLength(2);
+  expect(measured.map((event) => event.quota?.constraints[0]?.id).sort()).toEqual([
+    "five_hour",
+    "seven_day",
+  ]);
+  for (const event of measured) {
+    expect(event).toMatchObject({
+      type: "status",
+      credential_route: "vendor_native",
+      credential_source: "native_session",
+      quota: {
+        source: "claude_rate_limit_event",
+        constraints: [
+          expect.objectContaining({
+            used_ratio: 0.5,
+            resets_at: new Date(1700000000 * 1000).toISOString(),
+          }),
+        ],
+      },
+    });
+    expect(event.quota?.constraints).toHaveLength(1);
+    expect(event.usage).toBeUndefined();
+    expect(event.rate_limit).toBeUndefined();
+  }
+}
+
 describe("claude live-input recordings (2.1.283), replayed through the real adapter", () => {
   it("fold: a message written while a tool runs is queued (accepted) and consumed inside the same turn (one delivered receipt, one result)", async () => {
     const name = "stream-json/recorded-live-fold-2.1.283.jsonl";
@@ -147,7 +175,8 @@ describe("claude live-input recordings (2.1.283), replayed through the real adap
     // Exactly ONE consumption receipt, for OUR uuid: the initial prompt's own
     // replay echo (a foreign uuid) and the later started/completed frames and
     // the result's uuid list re-announce nothing.
-    expect(events.filter((e) => e.type === "status")).toEqual([
+    expectRecordedQuotaWindows(events);
+    expect(events.filter((e) => e.type === "status" && !e.quota)).toEqual([
       expect.objectContaining({
         effort_resolution: {
           requested: null,
@@ -203,7 +232,8 @@ describe("claude live-input recordings (2.1.283), replayed through the real adap
     });
     expect(preparation.text).toBeUndefined();
     expect(preparation.payload).toBeUndefined();
-    const statuses = events.filter((e) => e.type === "status").map((e) => e.payload);
+    expectRecordedQuotaWindows(events);
+    const statuses = events.filter((e) => e.type === "status" && !e.quota).map((e) => e.payload);
     expect(statuses).toEqual([
       undefined,
       { code: LIVE_INPUT_DELIVERED, message_id: liveMessageId },

@@ -185,6 +185,7 @@ extension AppModel {
                !task.activity.contains(where: { $0.title == "Final summary" }) {
                 task.activity.append(ActivityEvent(.message, "Final summary", detail: final))
             }
+            task.adoptPrimaryOutput(detail)
             task.answerText = await answerText(
                 for: detail, client: requestClient, runId: id)
             // The fallback artifact fetch above is the final suspension point

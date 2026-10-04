@@ -151,6 +151,8 @@ import {
 import { globalConfigDir, loadConfig } from "@claudexor/config";
 import type {
   AdapterRegistry,
+  CredentialExecutionObserverFactory,
+  CredentialEvidenceAuthority,
   HarnessAdapter,
   InteractionChannel,
   PreparedHarnessProcessing,
@@ -370,6 +372,8 @@ export interface OrchestratorDeps {
   credentialUnusable?: () => readonly CredentialUnusableObservation[];
   /** Evidence sink for a fresh differential-probe verdict (A7). */
   recordCredentialUnusable?: (obs: CredentialUnusableObservation) => void;
+  credentialObserverFactory?: CredentialExecutionObserverFactory;
+  credentialEvidence?: CredentialEvidenceAuthority;
   /** #363 cross-run pre-progress refusal memory; it only orders the pool. */
   preProgressRefusals?: PreProgressRefusalMemory;
   /** Typed per-harness run refusal while that harness's unified-accounts
@@ -1097,6 +1101,8 @@ export class Orchestrator {
     quotaAbsences: () => this.deps.quotaAbsences?.() ?? [],
     credentialUnusable: () => this.deps.credentialUnusable?.() ?? [],
     recordCredentialUnusable: (obs) => this.deps.recordCredentialUnusable?.(obs),
+    credentialObserverFactory: () => this.deps.credentialObserverFactory,
+    credentialEvidence: () => this.deps.credentialEvidence,
     preProgressRefusals: () => this.deps.preProgressRefusals,
     authPreferenceForHarness: (repoRoot, harnessId, runPreference) =>
       this.authPreferenceForHarness(repoRoot, harnessId, runPreference),
@@ -2195,6 +2201,7 @@ export class Orchestrator {
         processing,
         processingAdmission,
         physicalDispatchStarted,
+        credentialObserverFactory: this.deps.credentialObserverFactory,
         billingVerificationForProfile: (profile) =>
           this.credentials.selectedProfileBillingVerification(profile),
         paidFallback: this.config(runInput.repoRoot).global.routing.paid_fallback,
@@ -2526,23 +2533,22 @@ export class Orchestrator {
             suspensionVersion: () => interaction?.suspensionVersion?.() ?? 0,
           });
           for await (const ev of watched) {
-            if (signal?.aborted) break;
             rawPatch = captureRawPatchEnvelope(rawContextPacket !== null, rawPatch, ev);
             if (ev.type === "patch_produced") continue;
             const safeEv = redactHarnessEvent(ev);
             if (directory) observeDirectoryPaths(observedPaths, safeEv, envelope.worktree_path);
-            if (
-              dropDeltaPastBudget(
-                safeEv,
-                deltaFlood,
-                Orchestrator.MAX_DELTAS_PER_ATTEMPT,
-                (t, p) => log?.emit(t, p),
-                adapter.id,
-                attemptId,
-              )
-            )
-              continue;
-            safeInvoke(onHarnessEvent, safeEv);
+            const capped = dropDeltaPastBudget(
+              safeEv,
+              deltaFlood,
+              Orchestrator.MAX_DELTAS_PER_ATTEMPT,
+              (t, p) => log?.emit(t, p),
+              adapter.id,
+              attemptId,
+            );
+            const display = !capped && safeEv.payload?.["buffered"] !== true;
+            log?.emit("harness.event", harnessEventPayload(adapter.id, attemptId, safeEv), display);
+            if (signal?.aborted) break;
+            if (display) safeInvoke(onHarnessEvent, safeEv);
             // In-place turns run in the live tree under the native environment, so
             // the session they emit IS reachable for the next turn: record it. An
             // ISOLATED envelope-born session lives in the scoped home that dispose()
@@ -2889,6 +2895,12 @@ export class Orchestrator {
         ),
       },
     );
+    for (const path of producedFiles)
+      log?.emit("output.ready", {
+        kind: "artifact",
+        path: `attempts/${attemptId}/produced/${path}`,
+        state: "diagnostic",
+      });
     return {
       attemptId,
       harnessId: adapter.id,
@@ -3265,11 +3277,7 @@ export class Orchestrator {
             },
           },
           candidateAccess,
-          (ev) => {
-            const safeEv = redactHarnessEvent(ev);
-            safeInvoke(input.onHarnessEvent, safeEv);
-            log.emit("harness.event", harnessEventPayload(adapter.id, slot.attemptId, safeEv));
-          },
+          input.onHarnessEvent,
           input.signal,
           downgradeModel ?? undefined,
           input.effort,
@@ -3399,14 +3407,7 @@ export class Orchestrator {
                     },
                   },
                   candidateAccess,
-                  (ev) => {
-                    const safeEv = redactHarnessEvent(ev);
-                    safeInvoke(input.onHarnessEvent, safeEv);
-                    log.emit(
-                      "harness.event",
-                      harnessEventPayload(adapter.id, contAttemptId, safeEv),
-                    );
-                  },
+                  input.onHarnessEvent,
                   input.signal,
                   downgradeModel ?? undefined,
                   input.effort,
@@ -3564,6 +3565,18 @@ export class Orchestrator {
         mode,
         ledger,
         runs,
+        git:
+          input.workspaceKind !== "directory"
+            ? {
+                live:
+                  input.inPlace === true &&
+                  requestedSingleCandidate &&
+                  runs[0]?.reviewCwd === execRoot,
+                execRoot,
+                preTurnSha,
+                postTurnSha: earlyPostTurnSha,
+              }
+            : undefined,
         signal: input.signal,
         writeTelemetry: () =>
           this.writeRunTelemetry(
@@ -3834,11 +3847,7 @@ export class Orchestrator {
               },
             },
             candidateAccess,
-            (ev) => {
-              const safeEv = redactHarnessEvent(ev);
-              safeInvoke(input.onHarnessEvent, safeEv);
-              log.emit("harness.event", harnessEventPayload(synthAdapter.id, "synth", safeEv));
-            },
+            input.onHarnessEvent,
             input.signal,
             undefined,
             input.effort,
@@ -4236,6 +4245,7 @@ export class Orchestrator {
             pre_turn_sha: preTurnSha,
             post_turn_sha: postTurnSha,
             revert_anchor_id: revertAnchorId,
+            execution_root: adopted === true ? execRoot : null,
           },
         });
       }
@@ -4456,6 +4466,7 @@ export class Orchestrator {
   ): ReturnType<typeof reviewCandidate> {
     return reviewCandidate({
       ...input,
+      credentialObserverFactory: this.deps.credentialObserverFactory,
       reviewerTimeoutMs: input.reviewerTimeoutMs ?? reviewerTimeoutMs(this.config(input.cwd)),
       transientRetryPolicy:
         input.transientRetryPolicy ?? transientRetryPolicy(this.config(input.cwd)),
@@ -4876,11 +4887,7 @@ export class Orchestrator {
               },
             },
             convergenceAccess,
-            (ev) => {
-              const safeEv = redactHarnessEvent(ev);
-              safeInvoke(input.onHarnessEvent, safeEv);
-              log.emit("harness.event", harnessEventPayload(adapter.id, attemptId, safeEv));
-            },
+            input.onHarnessEvent,
             input.signal,
             undefined,
             input.effort,
@@ -4996,6 +5003,22 @@ export class Orchestrator {
         // per attempt, so the proof is spent per attempt.
         assertDelegatedEvidence(input.delegated === true, convergenceAccess, [run]);
         attemptTelemetries.push({ attemptId, harnessId: adapter.id, telemetry: run.telemetry });
+        lastPostTurnSha = null;
+        // Post-mutation fence for in-place: snapshot the live tree NOW (after the
+        // harness mutated it, before this attempt's review). The last attempt's
+        // value is the revert target persisted into work_product.yaml.
+        if (
+          input.inPlace === true &&
+          input.workspaceKind !== "directory" &&
+          !run.secretDiffRefusal
+        ) {
+          try {
+            lastPostTurnSha = await snapshotTree(execRoot);
+          } catch {
+            lastPostTurnSha = null;
+          }
+        }
+
         // Cancellation/deadline keeps priority over a belt failure finalized concurrently.
         if (input.signal?.aborted || processingBudgetDenial) break;
         if (
@@ -5076,16 +5099,6 @@ export class Orchestrator {
         if (run.outcomeClass === "interrupted") {
           interrupted = true;
           break;
-        }
-        // Post-mutation fence for in-place: snapshot the live tree NOW (after the
-        // harness mutated it, before this attempt's review). The last attempt's
-        // value is the revert target persisted into work_product.yaml.
-        if (input.inPlace === true && input.workspaceKind !== "directory") {
-          try {
-            lastPostTurnSha = await snapshotTree(execRoot);
-          } catch {
-            lastPostTurnSha = null;
-          }
         }
 
         // The review round is wrapped so a preflight/revalidation throw ends the
@@ -5428,6 +5441,7 @@ export class Orchestrator {
             pre_turn_sha: convAdopted === true ? preTurnSha : null,
             post_turn_sha: convAdopted === true ? lastPostTurnSha : null,
             revert_anchor_id: revertAnchorId,
+            execution_root: convAdopted === true ? execRoot : null,
           },
         });
       }
@@ -6667,9 +6681,8 @@ export class Orchestrator {
               suspensionVersion: () => reportInteraction?.suspensionVersion?.() ?? 0,
             });
             for await (const ev of watchedReport) {
-              if (input.signal?.aborted) break;
               const safeEv = redactHarnessEvent(ev);
-              safeInvoke(input.onHarnessEvent, safeEv);
+              if (safeEv.payload?.["buffered"] !== true) safeInvoke(input.onHarnessEvent, safeEv);
               // A thread ASK turn IS a chat turn now (INV-034): its native
               // session lives in the DURABLE per-lane home, so record it for the
               // next lane turn's resume. The read-only fallback chain is
@@ -6678,8 +6691,13 @@ export class Orchestrator {
               // latest lane session without a race.
               if (laneRun) observeNativeSessionEvent(input, adapter.id, safeEv);
               observeAuthSwitch(log, adapter.id, attemptId, safeEv);
-              log.emit("harness.event", harnessEventPayload(adapter.id, attemptId, safeEv));
+              log.emit(
+                "harness.event",
+                harnessEventPayload(adapter.id, attemptId, safeEv),
+                safeEv.payload?.["buffered"] !== true,
+              );
               appendLine(attemptEventsPath, JSON.stringify(safeEv));
+              if (input.signal?.aborted) break;
               observeAttemptTelemetry(telemetry, safeEv);
               emitPlanProgress((t, p) => log.emit(t, p), adapter.id, attemptId, safeEv);
               // read-only routes burn quota too (the orchestrate PLANNER is
@@ -7158,17 +7176,6 @@ export class Orchestrator {
         fallbackOpen = false;
       }
       const partialReport = [...attempts].reverse().find((a) => a.report)?.report ?? "";
-      if (partialReport) {
-        store.writeText(
-          join(paths.finalDir, opts.artifactName),
-          `# ${opts.title}\n\n> Unverified partial output. The run is ${webBlocked ? "blocked" : "failed"} because a required/attempted tool failed.\n\n${partialReport}\n`,
-        );
-        log.emit("output.ready", {
-          kind: opts.mode === "ask" ? "answer" : "report",
-          path: `final/${opts.artifactName}`,
-          state: "diagnostic",
-        });
-      }
       this.writeRunTelemetry(
         store,
         paths,

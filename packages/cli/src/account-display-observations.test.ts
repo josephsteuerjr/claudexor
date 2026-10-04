@@ -29,7 +29,10 @@ vi.mock("./registry.js", async (original) => ({
   buildRegistry: () => owned.adapters,
   buildGateway: () => ({ statusAllForAccounts: async () => [], statusAll: async () => [] }),
 }));
-vi.mock("./run-orchestrator.js", () => ({ preProgressRefusalLedger: { live: () => [] } }));
+vi.mock("./run-orchestrator.js", () => ({
+  preProgressRefusalLedger: { live: () => [] },
+  credentialUnusableLedger: { live: () => [], honored: () => [] },
+}));
 vi.mock("@claudexor/workspace", async (original) => ({
   ...(await original<typeof import("@claudexor/workspace")>()),
   probeGitCapability: async () => ({ state: "available" }),

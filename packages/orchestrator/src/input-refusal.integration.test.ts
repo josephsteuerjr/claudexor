@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -16,6 +16,11 @@ import {
   type QuotaSnapshot,
 } from "@claudexor/schema";
 import { Orchestrator } from "./orchestrator.js";
+import { createClaudeParser } from "../../harness-claude/src/parse.js";
+import {
+  withClaudeApiFailureParser,
+  withClaudeVendorFailure,
+} from "../../harness-claude/src/vendor-failure.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -31,7 +36,7 @@ const refusal: HarnessRequestRefusal = {
   native_code: "input_too_large",
 };
 
-function fixture(run: (spec: HarnessRunSpec) => AsyncIterable<HarnessEvent>) {
+function fixture(run: (spec: HarnessRunSpec) => AsyncIterable<HarnessEvent>, harness = "codex") {
   const root = mkdtempSync(join(tmpdir(), "input-refusal-"));
   roots.push(root);
   execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "pipe" });
@@ -45,7 +50,7 @@ function fixture(run: (spec: HarnessRunSpec) => AsyncIterable<HarnessEvent>) {
   const config = process.env.CLAUDEXOR_CONFIG_DIR!;
   const profiles = ["a", "b", "c"].map((id) => ({
     profile_id: id,
-    harness_id: "codex",
+    harness_id: harness,
     display_name: id,
     credential_kind: "config_dir_login",
     isolation_locator: join(config, "profiles", id),
@@ -56,7 +61,7 @@ function fixture(run: (spec: HarnessRunSpec) => AsyncIterable<HarnessEvent>) {
     JSON.stringify({
       credential_profiles: profiles,
       harnesses: {
-        codex: {
+        [harness]: {
           default_model: "target",
           fallback_model: "fallback",
           profile_policy: { limit_action: "rotate" },
@@ -65,11 +70,11 @@ function fixture(run: (spec: HarnessRunSpec) => AsyncIterable<HarnessEvent>) {
     }),
   );
   const adapter: HarnessAdapter = {
-    id: "codex",
+    id: harness,
     run,
     discover: async () =>
       HarnessManifest.parse({
-        id: "codex",
+        id: harness,
         display_name: "fixture",
         kind: "local_cli",
         provider_family: "local",
@@ -88,7 +93,7 @@ function fixture(run: (spec: HarnessRunSpec) => AsyncIterable<HarnessEvent>) {
       }),
     doctor: async () =>
       ConformanceReport.parse({
-        harness_id: "codex",
+        harness_id: harness,
         status: "ok",
         enabled_intents: ["implement", "repair", "explain", "audit", "plan", "synthesize"],
         auth_sources: [
@@ -97,7 +102,7 @@ function fixture(run: (spec: HarnessRunSpec) => AsyncIterable<HarnessEvent>) {
       }),
     probeCredentialProfile: async (p) => ({
       profile_id: p.profile_id,
-      harness_id: "codex",
+      harness_id: harness,
       availability: "available",
       verification: "passed",
       verification_source: "local_store",
@@ -108,13 +113,13 @@ function fixture(run: (spec: HarnessRunSpec) => AsyncIterable<HarnessEvent>) {
   // default doctor. Refusal tests then exercise the intended account order.
   const vendorSnapshots: QuotaSnapshot[] = profiles.map((profile) => ({
     subject: {
-      harness: "codex",
+      harness,
       credential_route: "vendor_native",
       plan_label: null,
       subject_id: profile.profile_id,
     },
     constraints: [],
-    source: "codex_app_server",
+    source: harness === "claude" ? "claude_oauth_usage" : "codex_app_server",
     observed_at: new Date().toISOString(),
     freshness: "fresh",
   }));
@@ -454,5 +459,92 @@ it.each([false, true])(
       resetsAt: null,
     });
     expect(failure.requestRefusal).toEqual(lastRefuses ? refusal : undefined);
+  },
+);
+
+it.each([
+  { mode: "ask" as const, version: "2.1.288", typed: true },
+  { mode: "agent" as const, version: "2.1.288", typed: true },
+  { mode: "plan" as const, version: "2.1.288", typed: true },
+  { mode: "ask" as const, version: "2.1.165", typed: false },
+  { mode: "agent" as const, version: "2.1.165", typed: false },
+  { mode: "plan" as const, version: "2.1.165", typed: false },
+])(
+  "$mode keeps Claude $version native cause and owner-selected rotation policy",
+  async ({ mode, version, typed }) => {
+    const frames = readFileSync(
+      new URL(
+        `../../harness-claude/fixtures/signals/vendor-cli-too-old-${version}.jsonl`,
+        import.meta.url,
+      ),
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const calls: string[] = [];
+    const { root, adapter, vendorSnapshots } = fixture(async function* (spec) {
+      calls.push(spec.credential_profile!.profile_id);
+      const parse = withClaudeApiFailureParser(createClaudeParser(), "/fixture/claude");
+      async function* nativeEvents() {
+        for (const frame of frames) {
+          for (const event of parse(frame, spec.session_id) ?? [])
+            yield { ...event, ...common(spec) };
+        }
+        yield {
+          ...common(spec),
+          type: "completed" as const,
+          payload: { exit_code: 1, harness_reported_error: true },
+        };
+      }
+      yield* withClaudeVendorFailure(nativeEvents());
+    }, "claude");
+    const result = await new Orchestrator({
+      registry: new Map([[adapter.id, adapter]]),
+      reviewers: [],
+      quotaSnapshots: () => vendorSnapshots,
+    }).run({
+      repoRoot: root,
+      mode,
+      prompt: "fixture",
+      harnesses: ["claude"],
+      models: { claude: "target" },
+      authPreference: "subscription",
+      review: false,
+      web: "off",
+      ...(mode === "agent" ? { inPlace: true, n: 1 } : {}),
+    });
+    expect(result.lifecycle).toBe("failed");
+    expect(calls).toEqual(
+      typed || mode === "plan"
+        ? ["a"]
+        : mode === "ask"
+          ? ["a", "b", "c", "a", "b", "c"]
+          : ["a", "b", "c"],
+    );
+    const failure = RunFailure.parse(
+      new ArtifactStore(root).readYaml(join(result.runDir, "final/failure.yaml")),
+    );
+    expect(failure.code).toBe(typed ? "vendor_cli_too_old" : null);
+    expect(failure.safeMessage).toContain(frames.at(-1)!.result);
+    expect(failure.vendorFailure).toMatchObject({
+      code: typed ? "claude_code_version_too_old" : null,
+      message: frames.at(-1)!.result,
+      source: "claude_stdout",
+    });
+    expect(failure.nextActions.join(" ")).not.toMatch(/Re-authenticate|crashed/);
+    expect(failure.resetsAt).toBeNull();
+    if (typed) {
+      expect(failure.category).toBe("harness_unavailable");
+      expect(failure.requestRefusal).toMatchObject({
+        kind: "vendor_cli_too_old",
+        binary_path: "/fixture/claude",
+        installed_version: version,
+      });
+      expect(failure.nextActions.join(" ")).toContain(
+        "Update the Claude Code CLI at /fixture/claude",
+      );
+      expect(failure.nextActions.join(" ")).toContain(version);
+    }
   },
 );

@@ -77,3 +77,12 @@ export function missingCliReport(advisory: string | null, bin: string = BIN): Co
     ],
   });
 }
+
+/** A usable fallback remains installed; skipped preferred entries are diagnostic. */
+export function installedCliCheck(version: string, path: string | null, advisory: string | null) {
+  return {
+    id: "installed",
+    status: "pass" as const,
+    detail: [path ? `${version} at ${path}` : version, advisory].filter(Boolean).join(" — "),
+  };
+}

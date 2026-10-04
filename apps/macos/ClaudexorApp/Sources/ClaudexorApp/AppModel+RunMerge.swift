@@ -21,6 +21,9 @@ extension AppModel {
         task.reviewVerdict = existing.reviewVerdict
         if !existing.plan.isEmpty { task.plan = existing.plan }
         task.answerText = existing.answerText ?? task.answerText
+        task.capturedArtifactPaths = existing.capturedArtifactPaths
+        task.primaryOutputPath = existing.primaryOutputPath
+        task.primaryOutputTruncated = existing.primaryOutputTruncated
         task.diagnosticText = existing.diagnosticText ?? task.diagnosticText
         if task.artifactPaths.isEmpty { task.artifactPaths = existing.artifactPaths }
         // Carry hydrated questions only while the daemon still says the run waits on

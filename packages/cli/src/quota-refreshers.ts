@@ -4,6 +4,7 @@ import { refreshClaudeOauthUsageQuota } from "./claude-oauth-usage.js";
 import { refreshClaudeStatuslineQuota } from "./claude-statusline.js";
 import { refreshCodexQuota } from "./codex-quota-source.js";
 import { refreshAgyQuota } from "./agy-quota-source.js";
+import type { QuotaDiagnosticSink } from "./quota-refresh-diagnostics.js";
 
 export interface QuotaRefresherRegistration {
   readonly source: QuotaSource;
@@ -13,7 +14,10 @@ export interface QuotaRefresherRegistration {
    * claude_statusline reads a local spool but publishes claude-subject
    * evidence, so it rides the claude lane. */
   readonly vendor: QuotaVendorRefresher["vendor"];
-  readonly refresh: QuotaVendorRefresher["refresh"];
+  readonly refresh: (
+    cycle?: QuotaRefreshCycle,
+    diagnostic?: QuotaDiagnosticSink,
+  ) => ReturnType<QuotaVendorRefresher["refresh"]>;
 }
 
 /** The daemon's top-level refreshers and the source each owns. Schema traits
@@ -23,16 +27,25 @@ export interface QuotaRefresherRegistration {
  * re-presents a token it remembers as rejected); the others take no options
  * from the cycle. */
 export const QUOTA_REFRESHER_REGISTRATIONS = [
-  { source: "codex_app_server", vendor: "codex", refresh: () => refreshCodexQuota() },
+  {
+    source: "codex_app_server",
+    vendor: "codex",
+    refresh: (cycle?: QuotaRefreshCycle, diagnostic?: QuotaDiagnosticSink) =>
+      refreshCodexQuota({ diagnostic, foreground: cycle?.foreground }),
+  },
   { source: "claude_statusline", vendor: "claude", refresh: () => refreshClaudeStatuslineQuota() },
   {
     source: "claude_oauth_usage",
     vendor: "claude",
-    refresh: (cycle?: QuotaRefreshCycle) => refreshClaudeOauthUsageQuota({}, cycle),
+    refresh: (cycle?: QuotaRefreshCycle, diagnostic?: QuotaDiagnosticSink) =>
+      refreshClaudeOauthUsageQuota(diagnostic ? { diagnostic } : {}, cycle),
   },
   { source: "agy_command_usage", vendor: "agy", refresh: () => refreshAgyQuota() },
 ] as const satisfies readonly QuotaRefresherRegistration[];
 
-export function quotaRefreshers(): QuotaVendorRefresher[] {
-  return QUOTA_REFRESHER_REGISTRATIONS.map(({ vendor, refresh }) => ({ vendor, refresh }));
+export function quotaRefreshers(diagnostic?: QuotaDiagnosticSink): QuotaVendorRefresher[] {
+  return QUOTA_REFRESHER_REGISTRATIONS.map(({ vendor, refresh }) => ({
+    vendor,
+    refresh: (cycle) => refresh(cycle, diagnostic),
+  }));
 }

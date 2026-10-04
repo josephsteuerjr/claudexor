@@ -8,6 +8,8 @@ import {
   REACTIVE_COOLDOWN_SOURCE,
   legacyV320QuotaSource,
   quotaSourceTraits,
+  quotaSnapshotIdentity,
+  QuotaWindowObservation,
   vendorResetDayCooldownEnd,
   type CredentialRoute,
   type HarnessEvent,
@@ -149,7 +151,17 @@ function quotaModelScope(constraint: QuotaConstraint) {
 }
 
 /** Existing prepare/upsert wire shape, reusable for an atomic reconciliation. */
-export function quotaSnapshotRecords(snapshot: QuotaSnapshot) {
+export function quotaSnapshotRecords(
+  snapshot: QuotaSnapshot,
+): Array<{ type: string; payload: unknown }> {
+  if (quotaSourceTraits(snapshot.source).snapshotMode === "window") {
+    return [
+      {
+        type: "quota.window.observed",
+        payload: QuotaWindowObservation.parse({ version: 1, snapshot }),
+      },
+    ];
+  }
   const legacy = legacyV320Snapshot(snapshot);
   const upsert = { type: "quota.snapshot.upserted", payload: legacy };
   if (
@@ -169,13 +181,7 @@ export function quotaSnapshotRecords(snapshot: QuotaSnapshot) {
 }
 
 export function snapshotKey(snapshot: QuotaSnapshot): string {
-  const subject = snapshot.subject;
-  return [
-    subject.harness,
-    subject.credential_route,
-    subject.subject_id ?? "",
-    snapshot.source,
-  ].join("\0");
+  return quotaSnapshotIdentity(snapshot);
 }
 
 /** Exact durable payload accepted by the strict v3.2.0 quota schemas. Keep an

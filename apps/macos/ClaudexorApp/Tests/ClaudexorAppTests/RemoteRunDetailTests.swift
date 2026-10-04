@@ -80,6 +80,34 @@ import Testing
     }
 
     @MainActor
+    @Test func retainedReportKeepsCauseAndArtifactAcrossRemoteHydrationAndListRefresh() async throws {
+        defer { RemoteRunDetailURLProtocol.handler = nil }
+        let (model, locationID) = makeModel(runId: "run-retained")
+        RemoteRunDetailURLProtocol.handler = { request in
+            guard request.url?.path == "/v2/runs/run-retained" else {
+                throw RemoteRunDetailError.badRequest
+            }
+            let body = ##"{"summary":{"runId":"run-retained","state":"failed","mode":"agent","outputReadyState":"diagnostic","error":"Native stream closed"},"primaryOutput":{"kind":"report","path":"final/retained-output.md","text":"# Useful partial review","truncated":true},"outcomeBanner":"Failed","artifacts":[{"path":"attempts/a01/produced/images","kind":"directory"},{"path":"attempts/a01/produced/images/result.png","kind":"file"}],"lastSeq":8}"##
+            return (response(for: request), Data(body.utf8), 0)
+        }
+        #expect(await model.loadRunDetail("run-retained", locationID: locationID))
+        let task = try #require(model.task("run-retained", at: locationID))
+        #expect(task.answerText == "# Useful partial review")
+        #expect(task.hasRetainedOutput)
+        #expect(task.primaryOutputPath == "final/retained-output.md")
+        #expect(task.primaryOutputTruncated)
+        #expect(task.capturedArtifactPaths == ["attempts/a01/produced/images/result.png"])
+        #expect(task.engineError == "Native stream closed")
+        let summary = try JSONDecoder().decode(RunSummary.self, from: Data(
+            #"{"runId":"run-retained","state":"failed","mode":"agent","outputReadyState":"diagnostic"}"#.utf8))
+        let refreshed = AppModel.mergeRefreshedTask(summary: summary, existing: task)
+        #expect(refreshed.hasRetainedOutput)
+        #expect(refreshed.primaryOutputPath == task.primaryOutputPath)
+        #expect(refreshed.primaryOutputTruncated)
+        #expect(refreshed.capturedArtifactPaths == task.capturedArtifactPaths)
+    }
+
+    @MainActor
     private func makeModel(runId: String) -> (AppModel, ExecutionLocationID) {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [RemoteRunDetailURLProtocol.self]

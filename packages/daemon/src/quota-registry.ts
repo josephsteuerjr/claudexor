@@ -6,7 +6,9 @@ import {
   QUOTA_GAP_ABSENCE_REASONS,
   QuotaAbsence as QuotaAbsenceSchema,
   QuotaSnapshot as QuotaSnapshotSchema,
+  QuotaWindowObservation,
   REACTIVE_COOLDOWN_SOURCE,
+  quotaSourceTraits,
   type CredentialRoute,
   type QuotaAbsence,
   type QuotaSnapshot,
@@ -42,10 +44,11 @@ import { QuotaRefreshCoordinator } from "./quota-refresh-coordinator.js";
 import { quotaSubjectIdentity } from "./quota-refresh-demand.js";
 
 const UPSERTED = "quota.snapshot.upserted";
+const WINDOW_OBSERVED = "quota.window.observed";
 const SCOPED_PREPARED = "quota.snapshot.scoped_prepared";
 const REMOVED = "quota.subject.removed";
 const PROJECTION_UPDATED = "quota.projection.updated";
-const REPLAY_TYPES = [SCOPED_PREPARED, UPSERTED, REMOVED, PROJECTION_UPDATED];
+const REPLAY_TYPES = [SCOPED_PREPARED, UPSERTED, WINDOW_OBSERVED, REMOVED, PROJECTION_UPDATED];
 /** Snapshots older than this are pruned from every projection read (W17):
  * a day-old observation is not quota truth, just footer clutter. */
 const MAX_SNAPSHOT_AGE_MS = 24 * 60 * 60_000;
@@ -125,6 +128,11 @@ export class QuotaRegistry {
       // matching legacy upsert. If the writer stopped or another record
       // intervened, ignore the incomplete prepare on replay.
       pendingScoped = null;
+      if (record.type === WINDOW_OBSERVED) {
+        this.apply(QuotaWindowObservation.parse(record.payload).snapshot);
+        rawMutationAfterMarker = true;
+        continue;
+      }
       if (record.type === REMOVED) {
         const payload = record.payload as { harness?: unknown; subject_id?: unknown };
         // subject_id is null for a harness's default/native subject, which is
@@ -454,7 +462,14 @@ export class QuotaRegistry {
   }
 
   upsert(value: QuotaSnapshot): void {
-    this.recordUpsert(value);
+    const snapshot = QuotaSnapshotSchema.parse(value);
+    if (quotaSourceTraits(snapshot.source).snapshotMode === "window") {
+      for (const constraint of snapshot.constraints) {
+        this.recordUpsert({ ...snapshot, constraints: [constraint] });
+      }
+    } else {
+      this.recordUpsert(snapshot);
+    }
     this.appendProjectionMarker("direct_mutation", this.now().toISOString());
   }
 

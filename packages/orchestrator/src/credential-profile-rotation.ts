@@ -12,7 +12,6 @@ import { quotaConstraintAppliesToModel } from "@claudexor/budget";
 import { stampCredentialProfileSelection } from "@claudexor/core";
 import {
   credentialPoolExhausted,
-  liveUnusableFor,
   poolMemberEvidence,
   profileQuotaBlock,
   type PoolExhaustionCandidate,
@@ -20,6 +19,7 @@ import {
 } from "./credential-cooldown.js";
 import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
 import { refusedBeforeProgress } from "./pre-progress-refusal.js";
+import { applicableCredentialUnusable } from "./account-evidence.js";
 import {
   reactiveRotationEvidence,
   rotationRetryEligible,
@@ -253,11 +253,14 @@ function rotationExhaustionCandidates(args: {
       // so typed, instead of hiding behind "not_ready" — a dead credential is
       // not a readiness hiccup, and its quota evidence never carries a
       // reopen promise.
-      const dead = liveUnusableFor(
-        args.unusable ?? [],
-        args.harnessId,
-        profile.profile_id,
-        args.model,
+      const dead = applicableCredentialUnusable(
+        { harness_id: args.harnessId, profile_id: profile.profile_id },
+        {
+          unusable: args.unusable,
+          quota: { snapshots: args.snapshots, absences: [] },
+          model: args.model,
+          route: profile.credential_kind === "api_key" ? "managed_api_key" : "vendor_native",
+        },
       );
       const rejected =
         profile.profile_id === args.current?.profile_id

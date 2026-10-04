@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlSetupJob } from "@claudexor/schema";
-import {
-  streamDurableCodexLogin,
-  terminalLoginFallback,
-  terminalLoginReport,
-} from "./setup-login-inline.js";
+import { streamDurableLogin } from "./setup-login-inline.js";
+import { terminalLoginFallback, terminalLoginReport } from "./setup-login-fallback.js";
 
 type TerminalJob = Pick<
   ControlSetupJob,
@@ -265,7 +262,7 @@ function makeTransport(snapshots: unknown[], postResponse?: unknown) {
 
 const ADDR = { baseUrl: "http://127.0.0.1:0", token: "test-token" };
 
-describe("D-17 audit 8: streamDurableCodexLogin one-action fallback", () => {
+describe("D-17 audit 8: streamDurableLogin one-action fallback", () => {
   let out: string[] = [];
   beforeEach(() => {
     out = [];
@@ -278,7 +275,7 @@ describe("D-17 audit 8: streamDurableCodexLogin one-action fallback", () => {
 
   it("on a TTY, accepting the offer STARTS the browser_redirect job in one action", async () => {
     const { fetchImpl, posts } = makeTransport([snapshot(unsupportedJob())]);
-    const code = await streamDurableCodexLogin(ADDR, "setup-inline-1", {
+    const code = await streamDurableLogin(ADDR, "setup-inline-1", {
       label: "codex",
       fallback: { harness: "codex" },
       promptYesNo: async () => true,
@@ -300,7 +297,7 @@ describe("D-17 audit 8: streamDurableCodexLogin one-action fallback", () => {
 
   it("declining the offer starts nothing and points at the exact command (exit 1)", async () => {
     const { fetchImpl, posts } = makeTransport([snapshot(unsupportedJob())]);
-    const code = await streamDurableCodexLogin(ADDR, "setup-inline-1", {
+    const code = await streamDurableLogin(ADDR, "setup-inline-1", {
       label: "codex",
       fallback: { harness: "codex" },
       promptYesNo: async () => false,
@@ -314,7 +311,7 @@ describe("D-17 audit 8: streamDurableCodexLogin one-action fallback", () => {
 
   it("scopes an accepted fallback to the server-owned profile, not the observer", async () => {
     const { fetchImpl, posts } = makeTransport([snapshot(unsupportedJob("work"))]);
-    const code = await streamDurableCodexLogin(ADDR, "setup-inline-1", {
+    const code = await streamDurableLogin(ADDR, "setup-inline-1", {
       label: "codex/wrong-observer",
       fallback: { harness: "codex" },
       promptYesNo: async () => true,
@@ -328,7 +325,7 @@ describe("D-17 audit 8: streamDurableCodexLogin one-action fallback", () => {
 
   it("--json emits the typed nextAction on the miss and never auto-starts a job", async () => {
     const { fetchImpl, posts } = makeTransport([snapshot(unsupportedJob())]);
-    const code = await streamDurableCodexLogin(ADDR, "setup-inline-1", {
+    const code = await streamDurableLogin(ADDR, "setup-inline-1", {
       label: "codex",
       json: true,
       fallback: { harness: "codex" },
@@ -350,7 +347,7 @@ describe("D-17 audit 8: streamDurableCodexLogin one-action fallback", () => {
 
   it("--json keeps a profile miss scoped to the server-owned profile", async () => {
     const { fetchImpl, posts } = makeTransport([snapshot(unsupportedJob("work"))]);
-    const code = await streamDurableCodexLogin(ADDR, "setup-inline-1", {
+    const code = await streamDurableLogin(ADDR, "setup-inline-1", {
       label: "codex/work",
       json: true,
       fallback: { harness: "codex" },
@@ -374,7 +371,7 @@ describe("D-17 audit 8: streamDurableCodexLogin one-action fallback", () => {
       userCode: "WXYZ-7788",
     };
     const { fetchImpl, posts } = makeTransport([snapshot(activeJob(), deviceCode)]);
-    const code = await streamDurableCodexLogin(ADDR, "setup-inline-1", {
+    const code = await streamDurableLogin(ADDR, "setup-inline-1", {
       label: "codex",
       json: true,
       fallback: { harness: "codex" },
@@ -393,7 +390,7 @@ describe("D-17 audit 8: streamDurableCodexLogin one-action fallback", () => {
       snapshot(activeJob("running", "launching")),
       snapshot(unsupportedJob()),
     ]);
-    const code = await streamDurableCodexLogin(ADDR, "setup-inline-1", {
+    const code = await streamDurableLogin(ADDR, "setup-inline-1", {
       label: "codex",
       fallback: { harness: "codex" },
       promptYesNo: async () => false,
@@ -410,7 +407,7 @@ describe("D-17 audit 8: streamDurableCodexLogin one-action fallback", () => {
       process.emit("SIGINT");
       return jsonResponse(snapshot(activeJob()));
     };
-    const code = await streamDurableCodexLogin(ADDR, "setup-inline-1", {
+    const code = await streamDurableLogin(ADDR, "setup-inline-1", {
       label: "codex",
       detachExitCode: 130,
       sleep: async () => {},
@@ -422,7 +419,7 @@ describe("D-17 audit 8: streamDurableCodexLogin one-action fallback", () => {
 
   it("ACP terminal mode refuses unsupported device auth without starting a second Terminal", async () => {
     const { fetchImpl, posts } = makeTransport([snapshot(unsupportedJob())]);
-    const code = await streamDurableCodexLogin(ADDR, "setup-inline-1", {
+    const code = await streamDurableLogin(ADDR, "setup-inline-1", {
       label: "codex",
       detachExitCode: 130,
       sleep: async () => {},

@@ -1,8 +1,9 @@
-import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { userInfo } from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
+import {
+  readClaudeOauthCredential,
+  taggedRefreshFailure,
+  type ClaudeOauthCredential,
+} from "./claude-oauth-credential.js";
 import { loadConfig } from "@claudexor/config";
 import type { QuotaRefreshCycle, QuotaRefreshResult } from "@claudexor/daemon";
 import {
@@ -23,126 +24,25 @@ import {
 import { noProjectRepoRoot, sha256 } from "@claudexor/util";
 import { fetchClaudeOauthUsage } from "./claude-oauth-fetch.js";
 import { readAccountsMigrationFile } from "./accounts-unified-migration.js";
+import {
+  emitQuotaDiagnostic,
+  type QuotaDiagnosticSink,
+  type QuotaRefreshDiagnostic,
+} from "./quota-refresh-diagnostics.js";
 
 const SOURCE = "claude_oauth_usage" as const;
 
-/**
- * The PRIMARY subscription-quota source (W5.3, live-proven 2026-07-17):
- * `GET api.anthropic.com/api/oauth/usage` with a profile's OAuth access token
- * returns proactive five_hour/seven_day utilization — the stream's rate-limit
- * signals arrive only reactively, AFTER a limit bites.
- *
- * Security (INV-062 class): the access token is read from the profile's OWN
- * vendor store — the keychain item on macOS, the vendor's
- * `<configDir>/.credentials.json` (documented 0600 file store) elsewhere —
- * held transiently for one serial refresh cycle, and never persisted,
- * logged, or included in errors. Before probing a known-expired or near-expiry
- * refreshable credential, Claudexor wakes Claude Code's prompt-free MCP server
- * and lets the vendor refresh its own store; a known-fresh 401 remains the
- * vendor's explicit rejection evidence.
- */
-
-/** Vendor formula, live-verified: `Claude Code-credentials-<sha256(configDir)[:8]>`. */
-export function claudeOauthKeychainItem(configDir: string): string {
-  return `Claude Code-credentials-${sha256(configDir).replace("sha256:", "").slice(0, 8)}`;
-}
-
-export interface ClaudeOauthCredential {
-  accessToken: string;
-  subscriptionType: string | null;
-  expiresAtMs: number | null;
-  hasRefreshToken: boolean;
-}
-
-const execFileAsync = promisify(execFile);
-
-/** Read the profile's OAuth credential from the vendor's own store: the
- * profile-keyed keychain item on macOS (`security`), or the vendor's
- * `<configDir>/.credentials.json` everywhere else — Linux has no keychain. */
-export async function readClaudeOauthCredential(
-  configDir: string,
-  platform: NodeJS.Platform = process.platform,
-): Promise<ClaudeOauthCredential | null> {
-  if (platform !== "darwin") return readClaudeOauthCredentialFile(configDir);
-  try {
-    const { stdout } = await execFileAsync(
-      "security",
-      [
-        "find-generic-password",
-        "-s",
-        claudeOauthKeychainItem(configDir),
-        "-a",
-        userInfo().username,
-        "-w",
-      ],
-      { timeout: 5_000, maxBuffer: 1024 * 1024 },
-    );
-    return parseClaudeOauthCredential(stdout);
-  } catch {
-    return null; // no item / locked keychain — honest absence
-  }
-}
-
-/** The non-macOS vendor store (`.credentials.json`, documented mode 0600).
- * A missing file is the honest logged-out null; a present-but-unreadable or
- * unparseable file throws a reason-tagged error carrying only the error
- * class — never file bytes or a token (INV-062). */
-async function readClaudeOauthCredentialFile(
-  configDir: string,
-): Promise<ClaudeOauthCredential | null> {
-  let raw: string;
-  try {
-    raw = await readFile(join(configDir, ".credentials.json"), "utf8");
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return null;
-    throw taggedRefreshFailure(`credential file unreadable (${code ?? "io_error"})`);
-  }
-  const credential = parseClaudeOauthCredential(raw);
-  if (credential === null) {
-    throw taggedRefreshFailure("credential file did not parse as a vendor credential");
-  }
-  return credential;
-}
-
-function taggedRefreshFailure(detail: string): Error {
-  return Object.assign(new Error(detail), {
-    quotaAbsenceReason: "refresh_failed" as QuotaAbsence["reason"],
-  });
-}
-
-/** Accepts both credential shapes seen in the wild: flat and `{claudeAiOauth}`. */
-export function parseClaudeOauthCredential(raw: string): ClaudeOauthCredential | null {
-  try {
-    const parsed = JSON.parse(raw.trim()) as Record<string, unknown>;
-    const body = (
-      parsed["claudeAiOauth"] && typeof parsed["claudeAiOauth"] === "object"
-        ? parsed["claudeAiOauth"]
-        : parsed
-    ) as Record<string, unknown>;
-    const token = body["accessToken"];
-    if (typeof token !== "string" || token.length === 0) return null;
-    return {
-      accessToken: token,
-      subscriptionType:
-        typeof body["subscriptionType"] === "string" ? body["subscriptionType"] : null,
-      expiresAtMs:
-        typeof body["expiresAt"] === "number" && Number.isFinite(body["expiresAt"])
-          ? body["expiresAt"]
-          : null,
-      hasRefreshToken: typeof body["refreshToken"] === "string" && body["refreshToken"].length > 0,
-    };
-  } catch {
-    return null;
-  }
-}
+/** Full subscription inventory from oauth/usage, independent of passive stream
+ * windows. Access material from claude-oauth-credential stays transient for one
+ * serial refresh cycle. Claude Code owns renewal and persistence; diagnostics contain only
+ * expiry/presence and physical operation receipts, never credentials. */
 
 /** A vendor rejection remembered per PRESENTED token (INV-062: the token's
  * hash, never the token; process memory only; never persisted or logged).
- * Re-presenting a credential the vendor has already rejected buys nothing and
- * costs a lot: the vendor answers a 401 storm with a one-hour 429, and the
- * per-vendor poll floor then blacks out every healthy sibling (live journal:
- * healthy profiles fresh 20 % of the day beside one revoked row). So a
+ * Re-presenting a proven rejection needlessly uses endpoint capacity. Usage
+ * reads have returned one-hour Retry-After pauses, whose vendor-lane floor
+ * also delays healthy siblings; that is not a measured global request budget.
+ * So a
  * background cycle re-states the typed `auth_revoked` absence for a
  * remembered token WITHOUT an HTTP request — the same doctrine as the codex
  * source's logged-out precheck — until the token bytes change (any re-login,
@@ -202,6 +102,7 @@ export type ClaudeOauthCredentialRefresher = (
   configDir: string,
   platform: NodeJS.Platform,
   readCredential: typeof readClaudeOauthCredential,
+  diagnostic?: NonNullable<Parameters<typeof refreshClaudeNativeAuth>[2]>["diagnostic"],
 ) => Promise<ClaudeOauthCredential | null>;
 
 /** Keep refresh-token custody and store writes inside Claude Code. Claudexor
@@ -211,10 +112,12 @@ async function refreshCredentialDefault(
   configDir: string,
   platform: NodeJS.Platform,
   readCredential: typeof readClaudeOauthCredential,
+  diagnostic?: NonNullable<Parameters<typeof refreshClaudeNativeAuth>[2]>["diagnostic"],
 ): Promise<ClaudeOauthCredential | null> {
   const refreshed = await refreshClaudeNativeAuth(
     claudeNativeEnv(undefined, configDir),
     async () => (await readCredential(configDir, platform))?.expiresAtMs ?? null,
+    { diagnostic },
   );
   if (!refreshed) throw taggedRefreshFailure(VENDOR_REFRESH_FAILED_DETAIL);
   const credential = await readCredential(configDir, platform);
@@ -305,6 +208,7 @@ export interface ClaudeOauthUsageDeps {
   fetchUsage: (accessToken: string) => Promise<unknown>;
   now: () => Date;
   platform: NodeJS.Platform;
+  diagnostic: QuotaDiagnosticSink;
 }
 
 function claudeOauthAbsence(
@@ -346,12 +250,28 @@ export async function refreshClaudeOauthUsageQuota(
 ): Promise<QuotaRefreshResult> {
   const readCredential = deps.readCredential ?? readClaudeOauthCredential;
   const refreshCredential = deps.refreshCredential ?? refreshCredentialDefault;
-  const fetchUsage = deps.fetchUsage ?? fetchClaudeOauthUsage;
   const now = deps.now ?? (() => new Date());
   const platform = deps.platform ?? process.platform;
   // Rejections observed by THIS cycle count only if no credential change
   // intervened; one expired memory is released for re-verification per cycle.
   const epoch = rejectionEpoch;
+  const operationId = randomUUID();
+  const report = (
+    profileId: string | null,
+    record: Pick<QuotaRefreshDiagnostic, "stage" | "outcome"> & Partial<QuotaRefreshDiagnostic>,
+  ) => {
+    if (!deps.diagnostic) return;
+    emitQuotaDiagnostic(deps.diagnostic, {
+      ...record,
+      operationId,
+      source: SOURCE,
+      profileId,
+      at: now().toISOString(),
+      foreground: cycle?.foreground === true,
+      credentialEpoch: epoch,
+      current: epoch === rejectionEpoch,
+    });
+  };
   releaseExpiredRejection(now().getTime());
   const notLoggedInDetail =
     platform === "darwin"
@@ -392,6 +312,11 @@ export async function refreshClaudeOauthUsageQuota(
       credential = await readCredential(candidate.configDir, platform);
     } catch (error) {
       const tagged = (error as { quotaAbsenceReason?: QuotaAbsence["reason"] })?.quotaAbsenceReason;
+      report(candidate.subjectId, {
+        stage: "credential_read",
+        outcome: "failed",
+        reason: tagged ?? "refresh_failed",
+      });
       absences.push(
         claudeOauthAbsence(
           candidate.subjectId,
@@ -403,6 +328,11 @@ export async function refreshClaudeOauthUsageQuota(
       continue;
     }
     if (!credential) {
+      report(candidate.subjectId, {
+        stage: "credential_read",
+        outcome: "skipped",
+        reason: "credential_absent_or_unreadable",
+      });
       absences.push(
         claudeOauthAbsence(candidate.subjectId, "not_logged_in", notLoggedInDetail, now()),
       );
@@ -431,6 +361,11 @@ export async function refreshClaudeOauthUsageQuota(
     const subject = subjectOf(candidate.subjectId);
     const pacedUntil = cycle?.pacing?.cooldownUntil(subject, now().getTime());
     if (pacedUntil !== null && pacedUntil !== undefined) {
+      report(candidate.subjectId, {
+        stage: "poll",
+        outcome: "skipped",
+        reason: "subject_rate_limited",
+      });
       absences.push(
         claudeOauthAbsence(
           candidate.subjectId,
@@ -442,6 +377,11 @@ export async function refreshClaudeOauthUsageQuota(
       continue;
     }
     if (throttledTokens.has(sha256(credential.accessToken))) {
+      report(candidate.subjectId, {
+        stage: "poll",
+        outcome: "skipped",
+        reason: "same_token_rate_limited",
+      });
       absences.push(
         claudeOauthAbsence(
           candidate.subjectId,
@@ -455,13 +395,35 @@ export async function refreshClaudeOauthUsageQuota(
     // Retain the existing snapshot and its observation time when another
     // account's retry caused this background lane cycle. All current aliases
     // were bound above, and poll floors have already been honored.
-    if (cycle?.shouldRefresh?.(subject) === false) continue;
+    if (cycle?.shouldRefresh?.(subject) === false) {
+      report(candidate.subjectId, {
+        stage: "poll",
+        outcome: "skipped",
+        reason: "primary_evidence_not_due",
+      });
+      continue;
+    }
     let beforeRequest = now();
     if (needsVendorRefresh(credential, beforeRequest)) {
+      const previousExpiresAtMs = credential.expiresAtMs;
+      let nativeResult: QuotaRefreshDiagnostic["native"];
+      report(candidate.subjectId, {
+        stage: "native_refresh",
+        outcome: "started",
+        previousExpiresAtMs,
+        hasRefreshToken: credential.hasRefreshToken,
+      });
       const originalCredentialStillValid =
         credential.expiresAtMs !== null && credential.expiresAtMs > beforeRequest.getTime();
       try {
-        const refreshed = await refreshCredential(candidate.configDir, platform, readCredential);
+        const refreshed = await refreshCredential(
+          candidate.configDir,
+          platform,
+          readCredential,
+          (native) => {
+            nativeResult = native;
+          },
+        );
         if (
           refreshed === null ||
           !claudeOauthAccessTokenIsFresh(refreshed.expiresAtMs, now().getTime())
@@ -471,8 +433,26 @@ export async function refreshClaudeOauthUsageQuota(
         credential = refreshed;
         item.credential = refreshed;
         bindCredentials();
+        report(candidate.subjectId, {
+          stage: "native_refresh",
+          outcome: "succeeded",
+          reason: "fresh_expiry_observed_writer_unknown",
+          previousExpiresAtMs,
+          expiresAtMs: credential.expiresAtMs,
+          native: nativeResult,
+        });
         beforeRequest = now();
       } catch (error) {
+        report(candidate.subjectId, {
+          stage: "native_refresh",
+          outcome: "failed",
+          reason:
+            (error as { code?: string })?.code === CLAUDE_AUTH_REFRESH_TERMINATION_UNCONFIRMED
+              ? "termination_unconfirmed"
+              : "fresh_expiry_not_observed",
+          previousExpiresAtMs,
+          native: nativeResult,
+        });
         // The five-minute wake is proactive. If Claude Code cannot refresh yet
         // but the presented access token is still unexpired, use that proven
         // token for this bounded request rather than hiding an available quota.
@@ -496,6 +476,11 @@ export async function refreshClaudeOauthUsageQuota(
     const tokenKey = sha256(credential.accessToken);
     const rejectedAt = rejectedTokens.get(tokenKey);
     if (rejectedAt !== undefined && !cycle?.foreground) {
+      report(candidate.subjectId, {
+        stage: "poll",
+        outcome: "skipped",
+        reason: "presented_token_already_rejected",
+      });
       // The SAME observation re-stated: its instant is the vendor's real
       // rejection time, not this cycle's clock (stable projection signature,
       // honest "revoked at" for downstream readers).
@@ -509,7 +494,20 @@ export async function refreshClaudeOauthUsageQuota(
       );
       continue;
     }
+    let httpStatus: number | undefined;
+    const fetchUsage =
+      deps.fetchUsage ??
+      ((token: string) =>
+        fetchClaudeOauthUsage(token, (status) => {
+          httpStatus = status;
+        }));
     try {
+      report(candidate.subjectId, {
+        stage: "usage_http",
+        outcome: "started",
+        expiresAtMs: credential.expiresAtMs,
+        hasRefreshToken: credential.hasRefreshToken,
+      });
       const requestStartedAt = now();
       const usage = await fetchUsage(credential.accessToken);
       rejectedTokens.delete(tokenKey);
@@ -519,6 +517,12 @@ export async function refreshClaudeOauthUsageQuota(
         credential.subscriptionType,
         requestStartedAt,
       );
+      report(candidate.subjectId, {
+        stage: "usage_http",
+        outcome: snapshot ? "succeeded" : "failed",
+        httpStatus,
+        reason: snapshot ? "windows_observed" : "no_parseable_windows",
+      });
       if (snapshot) snapshots.push(snapshot);
       else
         // BACKLOG Q-a (v3.0.3 S8): an HTTP 200 whose body parses to no quota
@@ -542,6 +546,13 @@ export async function refreshClaudeOauthUsageQuota(
       const tagged = (error as { quotaAbsenceReason?: QuotaAbsence["reason"] })?.quotaAbsenceReason;
       const retryAfterMs = (error as { retryAfterMs?: number | null })?.retryAfterMs;
       const observedAt = now();
+      report(candidate.subjectId, {
+        stage: "usage_http",
+        outcome: "failed",
+        httpStatus,
+        reason: tagged ?? "refresh_failed",
+        retryAfterMs,
+      });
       const rejectedWithoutFreshnessProof =
         tagged === "auth_revoked" &&
         credential.hasRefreshToken &&

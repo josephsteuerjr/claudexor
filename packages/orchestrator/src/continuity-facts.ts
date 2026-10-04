@@ -95,6 +95,7 @@ export interface ContinuitySummaryInputs {
   >;
   processingAdmission?: ProcessingAdmission;
   physicalDispatchStarted?: () => void;
+  credentialObserverFactory?: import("@claudexor/core").CredentialExecutionObserverFactory;
   billingVerificationForProfile?: import("./modelGovernance.js").ModelGovernedRoute["billingVerificationForProfile"];
   paidFallback?: import("./modelGovernance.js").ModelGovernedRoute["paidFallback"];
 }
@@ -132,6 +133,7 @@ export async function resolveContinuitySummary(
       processing: inputs.processing,
       processingAdmission: inputs.processingAdmission,
       physicalDispatchStarted: inputs.physicalDispatchStarted,
+      credentialObserverFactory: inputs.credentialObserverFactory,
       billingVerificationForProfile: inputs.billingVerificationForProfile,
       paidFallback: inputs.paidFallback,
     });

@@ -493,6 +493,13 @@ function hasActionableWorkProduct(runRoot: string): boolean {
       meta["result_kind"] !== "patch"
     )
       return false;
+    // Non-success Git drafts cannot be applied. Preserve their normal age and
+    // reference retention, not an action that can never be completed.
+    if (
+      doc.kind !== "files" &&
+      ["cancelled", "failed", "interrupted"].includes(String(meta["lifecycle"]))
+    )
+      return false;
     // Delivery/apply state is the mutable overlay (final/delivery_state.yaml);
     // fall back to the immutable work_product snapshot. An undelivered patch is
     // still the operator's to act on; applied and reverted have completed.

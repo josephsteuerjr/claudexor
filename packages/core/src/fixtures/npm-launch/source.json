@@ -1,0 +1,14 @@
+{
+  "package": "cmd-shim",
+  "version": "8.0.0",
+  "source": "https://github.com/npm/cmd-shim",
+  "generatedBy": "cmdShim(entrypoint, command)",
+  "platform": "win32 templates generated on darwin",
+  "currentTemplate": {
+    "package": "cmd-shim",
+    "version": "9.0.2",
+    "source": "https://github.com/npm/cmd-shim/blob/main/lib/index.js",
+    "fixture": "node-current.cmd"
+  },
+  "lineEndings": "Stored as LF; tests restore the generated CRLF form."
+}

@@ -80,6 +80,7 @@ public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
     /// exhaustion from a scoped ratio.
     public let appliesToModelPrefixes: [String]?
     public let appliesToModels: [String]?
+    public let appliesToUnspecifiedModel: Bool?
     public let usedRatio: Double?
     public let windowSeconds: Double?
     public let resetsAt: String?
@@ -90,10 +91,21 @@ public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
         case id, label
         case appliesToModels = "applies_to_models"
         case appliesToModelPrefixes = "applies_to_model_prefixes"
+        case appliesToUnspecifiedModel = "applies_to_unspecified_model"
         case usedRatio = "used_ratio"
         case windowSeconds = "window_seconds"
         case resetsAt = "resets_at"
         case cooldownUntil = "cooldown_until"
+    }
+
+    /// Presentation identity of the vendor window, never its changing value,
+    /// reset or display label. Distinct applicability must remain visible.
+    public var presentationID: String {
+        let scope: Any = appliesToModels.map { Array(Set($0)).sorted() as Any } ?? NSNull()
+        let fields: [Any] = [id, windowSeconds as Any? ?? NSNull(), scope,
+                             appliesToUnspecifiedModel == true]
+        let data = try? JSONSerialization.data(withJSONObject: fields)
+        return data.flatMap { String(data: $0, encoding: .utf8) } ?? id
     }
 }
 
@@ -130,6 +142,7 @@ public struct QuotaAvailability: Codable, Sendable, Equatable {
 }
 
 public struct QuotaSnapshot: Codable, Sendable, Equatable, Identifiable {
+    public let snapshotId: String?
     public let subject: QuotaSubject
     public let constraints: [QuotaConstraint]
     public let source: String
@@ -141,10 +154,11 @@ public struct QuotaSnapshot: Codable, Sendable, Equatable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case subject, constraints, source, freshness, availability
         case observedAt = "observed_at"
+        case snapshotId = "snapshot_id"
     }
 
     public var id: String {
-        [subject.harness, subject.credentialRoute, subject.subjectId ?? "", source].joined(separator: ":")
+        snapshotId ?? [subject.harness, subject.credentialRoute, subject.subjectId ?? "", source].joined(separator: ":")
     }
 }
 

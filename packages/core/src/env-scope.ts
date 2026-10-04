@@ -200,3 +200,20 @@ export function composeBaseEnv(
   if (inheritance !== "clean") return normalizedSource;
   return pickAllowlistedEnv(normalizedSource, CLEAN_ENV_ALLOWLIST, platform);
 }
+
+/** Apply the run patch once, after baseline PATH/OS identity preparation. */
+export function composeSpawnEnv(
+  inheritance: "mirror_native" | "clean" = "mirror_native",
+  patch: Record<string, string | null | undefined> = {},
+): NodeJS.ProcessEnv {
+  const env = composeBaseEnv(inheritance);
+  for (const [key, value] of Object.entries(patch)) {
+    if (process.platform === "win32")
+      for (const existing of Object.keys(env)) {
+        if (existing.toUpperCase() === key.toUpperCase()) delete env[existing];
+      }
+    if (value === null || value === undefined) delete env[key];
+    else env[key] = value;
+  }
+  return env;
+}

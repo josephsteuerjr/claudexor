@@ -50,3 +50,41 @@ describe("RunFailure.vendorFailure", () => {
     }
   });
 });
+
+describe("RunFailure request refusal variants", () => {
+  it("retains executable evidence without fabricated input measurements", () => {
+    const refusal = {
+      kind: "vendor_cli_too_old",
+      native_code: "claude_code_version_too_old",
+      source: "claude_stdout",
+      binary_path: "/install/claude",
+      installed_version: "2.1.288",
+    };
+    expect(
+      RunFailure.parse({ ...legacy, code: "vendor_cli_too_old", requestRefusal: refusal })
+        .requestRefusal,
+    ).toEqual(refusal);
+    expect(
+      RunFailure.safeParse({ ...legacy, requestRefusal: { ...refusal, native_code: "unknown" } })
+        .success,
+    ).toBe(false);
+  });
+
+  it("keeps the complete existing input refusal shape", () => {
+    const refusal = {
+      kind: "input_too_large",
+      native_code: "input_too_large",
+      scope: "turn_text",
+      unit: "unicode_scalars",
+      limit: 10,
+      actual: 11,
+      source: "fixture",
+    };
+    expect(RunFailure.parse({ ...legacy, requestRefusal: refusal }).requestRefusal).toEqual(
+      refusal,
+    );
+    expect(
+      RunFailure.safeParse({ ...legacy, requestRefusal: { ...refusal, limit: undefined } }).success,
+    ).toBe(false);
+  });
+});

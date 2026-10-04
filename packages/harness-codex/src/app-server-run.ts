@@ -6,7 +6,6 @@ import type { CodexEffortCatalog } from "./effort-probe.js";
 import {
   asObject,
   CodexAppServerController,
-  CodexRpcError,
   codexAppServerEvents,
   codexAppServerThreadParams,
   codexRequestRefusal,
@@ -18,6 +17,7 @@ import {
   type JsonObject,
 } from "./app-server-protocol.js";
 import { parseCodexEvent, parseCodexStderrFailure, type CodexParseState } from "./parse.js";
+import { parseCodexRpcError } from "./rpc-error.js";
 
 export { CodexAppServerController } from "./app-server-protocol.js";
 export { codexAppServerEvents, codexAppServerThreadParams } from "./app-server-protocol.js";
@@ -58,6 +58,8 @@ export async function* runCodexAppServer(
   let activeTurnId: string | null = null;
   const ownedCommandItemIds = new Set<string>();
   const stderrRing: string[] = [];
+  let launchAdvisory: string | null = null;
+  let launchAdvisoryShown = false;
   let droppedUnrecognizedEvents = 0;
   let harnessReportedError = false;
   let terminationUnconfirmed: { survivors: number[]; unresolved: JsonObject[] } | null = null;
@@ -95,14 +97,7 @@ export async function* runCodexAppServer(
       const rpcError = asObject(object["error"]);
       if (rpcError) {
         if (request.taint) harnessReportedError = true;
-        const code = typeof rpcError["code"] === "number" ? rpcError["code"] : null;
-        request.reject(
-          new CodexRpcError(
-            code,
-            String(rpcError["message"] ?? "Codex app-server request failed"),
-            rpcError["data"],
-          ),
-        );
+        request.reject(parseCodexRpcError(rpcError));
         return;
       }
       const result = asObject(object["result"]);
@@ -173,6 +168,8 @@ export async function* runCodexAppServer(
           } catch (error) {
             throw new Error(`Invalid Codex app-server frame: ${errorText(error)}`);
           }
+        } else if (event.type === "launch_advisory") {
+          launchAdvisory = event.detail;
         } else if (event.type === "stderr") {
           stderrRing.push(event.line);
           if (stderrRing.length > 40) stderrRing.shift();
@@ -280,6 +277,9 @@ export async function* runCodexAppServer(
     const stderrTail = redactSecrets(stderrRing.join("\n")).slice(-1_000).trim();
     return {
       ...extra,
+      ...(launchAdvisory && !launchAdvisoryShown
+        ? { launch_advisory: redactSecrets(launchAdvisory) }
+        : {}),
       ...(harnessReportedError ? { harness_reported_error: true } : {}),
       ...(stderrTail ? { stderr_tail: stderrTail } : {}),
       ...(droppedUnrecognizedEvents
@@ -426,6 +426,16 @@ export async function* runCodexAppServer(
           : {}),
       },
     };
+    if (launchAdvisory) {
+      yield {
+        type: "status",
+        session_id: input.spec.session_id,
+        ts: nowIso(),
+        text: redactSecrets(launchAdvisory),
+        payload: { launch_advisory: true },
+      };
+      launchAdvisoryShown = true;
+    }
     let pendingTerminal: JsonObject | null = null;
     for (;;) {
       const notification = await takeNotification();

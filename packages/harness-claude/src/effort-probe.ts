@@ -149,7 +149,9 @@ export async function claudeRunEffortResolution(
 }
 
 /** The PATH a run's env patch selects the binary on, when it carries one. */
-export function claudeRunPatchPath(spec: { env?: HarnessRunSpec["env"] }): string | undefined {
+export function claudeRunPatchPath(spec: {
+  env?: Record<string, string | null | undefined>;
+}): string | undefined {
   return typeof spec.env?.PATH === "string" ? spec.env.PATH : undefined;
 }
 
@@ -308,9 +310,11 @@ function helpProbeIdentity(patchPath?: string): { key: string; spawn: string } {
       : harnessBinaryIdentityOnPath(BIN, patchPath);
   return {
     key: JSON.stringify(
-      id ? [id.path, id.ino, id.size, id.mtimeMs] : ["unresolved", BIN, patchPath ?? null],
+      id
+        ? [id.path, id.ino, id.size, id.mtimeMs, id.interpreter]
+        : ["unresolved", BIN, patchPath ?? null],
     ),
-    spawn: id?.path ?? BIN,
+    spawn: id?.launcher ?? id?.path ?? BIN,
   };
 }
 
