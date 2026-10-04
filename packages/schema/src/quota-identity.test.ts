@@ -57,9 +57,8 @@ describe("quota window identity", () => {
   it("keeps full inventory slots stable and singleton observations independent", () => {
     const full = { ...snapshot, source: "claude_oauth_usage" as const };
     expect(quotaSnapshotIdentity({ ...full, constraints: [] })).toBe(quotaSnapshotIdentity(full));
-    expect(quotaSnapshotIdentity({ ...snapshot, observed_at: "2026-10-04T01:00:00Z" })).toBe(
-      quotaSnapshotIdentity(snapshot),
-    );
+    const reobserved: QuotaSnapshot = { ...snapshot, observed_at: "2026-10-04T01:00:00Z" };
+    expect(quotaSnapshotIdentity(reobserved)).toBe(quotaSnapshotIdentity(snapshot));
     expect(
       quotaSnapshotIdentity({ ...snapshot, constraints: [{ ...constraint, id: "seven_day" }] }),
     ).not.toBe(quotaSnapshotIdentity(snapshot));

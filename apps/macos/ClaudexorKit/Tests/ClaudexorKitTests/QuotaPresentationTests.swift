@@ -14,9 +14,10 @@ import Testing
         freshness: String = "fresh",
         plan: String? = "Max",
         subjectId: String? = nil,
+        snapshotId: String? = nil,
         constraints: [[String: Any]]
     ) throws -> QuotaSnapshot {
-        let object: [String: Any] = [
+        var object: [String: Any] = [
             "subject": [
                 "harness": harness,
                 "credential_route": route,
@@ -28,6 +29,7 @@ import Testing
             "observed_at": observedAt,
             "freshness": freshness,
         ]
+        if let snapshotId { object["snapshot_id"] = snapshotId }
         let data = try JSONSerialization.data(withJSONObject: object)
         return try JSONDecoder().decode(QuotaSnapshot.self, from: data)
     }
@@ -142,7 +144,7 @@ import Testing
         ])
         let groups = QuotaPresentation.groups(from: [usage], now: now)
         #expect(groups.count == 1)
-        #expect(groups.first?.windows.map(\.id) == ["w5h", "wweek"])
+        #expect(groups.first?.windows.map(\.label) == ["5h", "Week"])
         #expect(groups.first?.nextResetAt == "2026-07-16T14:00:00Z")
         #expect(groups.first?.routeLabel == "Subscription")
     }
@@ -168,7 +170,7 @@ import Testing
         #expect(groups.count == 1)
         let group = try #require(groups.first)
         // Superseded copy hidden: the newer usage snapshot's 63% wins.
-        #expect(group.windows.map(\.id) == ["w5h"])
+        #expect(group.windows.map(\.label) == ["5h"])
         #expect(group.windows.first?.usedRatio == 0.63)
         // Cooldown rides as a badge, never as a window row.
         #expect(group.cooldownUntil == "2026-07-16T12:30:00Z")
@@ -217,6 +219,35 @@ import Testing
         let groups = QuotaPresentation.groups(from: [native, api], now: now)
         #expect(groups.count == 2)
         #expect(Set(groups.map(\.routeLabel)) == ["Subscription", "API key"])
+    }
+
+    @Test func simultaneousPartialWindowsHaveDistinctServerAndProvenanceIDs() throws {
+        let five = try snapshot(source: "claude_rate_limit_event", snapshotId: "window-five",
+                                constraints: [window("five_hour", label: "5 hour", used: 0.2)])
+        let week = try snapshot(source: "claude_rate_limit_event", snapshotId: "window-week",
+                                constraints: [window("seven_day", label: "Week", used: 0.4)])
+        let group = try #require(QuotaPresentation.groups(from: [five, week], now: now).first)
+        #expect(five.id != week.id)
+        #expect(group.windows.count == 2)
+        #expect(Set(group.sources.map(\.id)).count == 2)
+        let updated = try snapshot(source: "claude_rate_limit_event", observedAt: "2026-07-16T12:00:00Z",
+                                   snapshotId: "window-five", constraints: [window("five_hour", label: "Renamed", used: 0.7)])
+        #expect(updated.id == five.id)
+        #expect(updated.constraints.first?.presentationID == five.constraints.first?.presentationID)
+        let legacy = try snapshot(constraints: [window("five_hour", label: "5 hour")])
+        #expect(legacy.id == "claude:vendor_native::claude_statusline")
+    }
+
+    @Test func sameVendorWindowWithDifferentApplicabilityIsNotDeduplicated() throws {
+        let opus = try snapshot(source: "claude_rate_limit_event", snapshotId: "opus-week",
+                                constraints: [window("weekly", label: "Opus", appliesToModels: ["opus", "best", "opus"])])
+        let sonnet = try snapshot(source: "claude_rate_limit_event", snapshotId: "sonnet-week",
+                                  constraints: [window("weekly", label: "Sonnet", appliesToModels: ["sonnet"])])
+        let group = try #require(QuotaPresentation.groups(from: [opus, sonnet], now: now).first)
+        #expect(group.windows.count == 2)
+        #expect(Set(group.windows.map(\.id)).count == 2)
+        let sameOpus = try snapshot(constraints: [window("weekly", label: "Alias", appliesToModels: ["best", "opus"])])
+        #expect(sameOpus.constraints.first?.presentationID == opus.constraints.first?.presentationID)
     }
 
     @Test func credentialRouteHumanizerCoversEveryWireValueAndDegradesHonestly() {

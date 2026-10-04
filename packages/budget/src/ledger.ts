@@ -13,6 +13,7 @@ import type {
 import {
   BudgetLease as BudgetLeaseSchema,
   CostEvidence as CostEvidenceSchema,
+  quotaSnapshotIdentity,
 } from "@claudexor/schema";
 import { newId, nowIso, sha256 } from "@claudexor/util";
 import {
@@ -437,14 +438,7 @@ export class BudgetLedger {
 
   /** Seed durable quota projection without collapsing credential identities. */
   observeQuotaSnapshot(snapshot: QuotaSnapshot): void {
-    const subject = snapshot.subject;
-    const key = [
-      subject.harness,
-      subject.credential_route,
-      subject.subject_id ?? "",
-      snapshot.source,
-    ].join("\0");
-    this.quotaSnapshots.set(key, snapshot);
+    this.quotaSnapshots.set(quotaSnapshotIdentity(snapshot), snapshot);
   }
 
   observationsFor(harnessId: string): BudgetObservation[] {
