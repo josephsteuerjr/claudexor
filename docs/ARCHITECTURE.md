@@ -1188,8 +1188,15 @@ requested model, generation and ordering. Both recording and success clearing
 respect that binding: old-generation results cannot affect a newer login, and
 a success from an older dispatch cannot erase a newer dispatch's refusal. A
 negative observation made after the last successful contact remains meaningful
-even when it comes from a session that started earlier. A bounded success
-watermark suppresses a delayed refusal that was actually observed before recovery.
+even when it comes from a session that started earlier. The ledger retains
+negative observation boundaries within its existing memory and expiry bounds,
+including after a success hides the current refusal. A later-arriving concurrent
+refusal therefore cannot restore only an incomplete part of that evidence.
+Readiness suppresses the merged refusal only when one real successful contact
+covers both its dispatch order and actual observation time. Successful contacts
+that cover different boundaries remain separate until one actual contact covers
+them both; combining their maxima would fabricate a recovery that never happened.
+The bounded collection counts retained contacts, not only account keys.
 An actual observed model is required to heal a model-scoped refusal; the request
 is not proof of which model was served. Credential mutation windows still make
 observations ineligible while the vendor may be changing the store. External
