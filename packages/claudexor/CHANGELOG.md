@@ -1,5 +1,17 @@
 # claudexor
 
+## 3.20.0
+
+### Minor Changes
+
+- 78788ef: Add durable thread folders: a thread can carry one optional `folder` label (1–120 characters, `null` = none) that the daemon stores and journals, set through `POST /v2/threads` or `PATCH /v2/threads/:id` and returned on every thread projection. A PATCH that changes only the folder keeps the thread's `updatedAt`, so filing never reorders thread lists or changes the `--resume` target. The macOS sidebar groups threads by folder (the plain list while no thread has one; one section per name, then Ungrouped) with Move to Folder, New Folder…, Rename… and Remove Folder…; folder renames and removals skip threads in the trash and report partial failures, and an engine older than folders is reported as such instead of with a raw validation error.
+- 808b825: Thread deletion in the macOS app is now a trash lifecycle. "Delete" moves a thread to a collapsed Trash section with one click, "Restore" brings it back for 30 days, and "Delete Now…" purges it after a confirmation that states exactly what is removed and what stays for the thread's workspace mode; it never promises to erase the conversation, whose messages stay in the local engine journal, or the saved sessions an agent keeps in its own storage. A failed or unanswered Delete Now re-reads the thread list, promises Trash only while the engine still lists the thread there, and calls the thread deleted only when that list skipped no project and had no row the app could not read. Archived threads now move into their own collapsed section; thread folders group only the active threads, and an archived or trashed thread keeps its folder for when it comes back. The purge route answers 409 `thread_busy` while any turn of the thread is queued or running, ask and plan turns included, because purge deletes the session home such a turn can run in; trash and restore stay unrestricted. The daemon's retention pass (at startup and on `claudexor gc`) now purges trash whose 30-day window has ended and finishes any purge whose directory cleanup failed after it was journaled, names those threads in the receipt (`purged_threads` and `purge_leftovers`, requested with `trash_purge_report`) and in `claudexor gc --dry-run`, and ACP `session/list` no longer lists trashed threads.
+
+### Patch Changes
+
+- Updated dependencies [c12828c]
+  - @claudexor/cli@3.20.0
+
 ## 3.19.0
 
 ### Patch Changes

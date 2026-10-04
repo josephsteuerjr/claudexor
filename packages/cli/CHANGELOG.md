@@ -1,5 +1,48 @@
 # @claudexor/cli
 
+## 3.20.0
+
+### Minor Changes
+
+- c12828c: Add a generic ACP v1 client harness with GitHub Copilot CLI as its first vendor.
+  Use managed tokens and scoped homes, bounded typed streams, process-tree
+  cancellation, a free session doctor and explicit paid write conformance.
+  Model inventory is advisory; missing cost remains unknown. Copilot ACP is in
+  preview: workspace writes are unfenced when permission callbacks are absent.
+  Live input, native login and MCP injection are not included in this stage.
+
+  Port permission, environment, launch, translation and lifecycle semantics from
+  Róger Valderrama (@germago119), razzant/ouroboros#769, with the Q00 MIT notice
+  retained in the new package.
+
+### Patch Changes
+
+- Updated dependencies [c12828c]
+  - @claudexor/harness-acp@3.20.0
+  - @claudexor/core@3.20.0
+  - @claudexor/workspace@3.20.0
+  - @claudexor/util@3.20.0
+  - @claudexor/daemon@3.20.0
+  - @claudexor/delivery@3.20.0
+  - @claudexor/gateway@3.20.0
+  - @claudexor/harness-agy@3.20.0
+  - @claudexor/harness-claude@3.20.0
+  - @claudexor/harness-codex@3.20.0
+  - @claudexor/harness-cursor@3.20.0
+  - @claudexor/harness-fake@3.20.0
+  - @claudexor/harness-opencode@3.20.0
+  - @claudexor/harness-raw-api@3.20.0
+  - @claudexor/orchestrator@3.20.0
+  - @claudexor/review@3.20.0
+  - @claudexor/control-api@3.20.0
+  - @claudexor/acp-server@3.20.0
+  - @claudexor/artifact-store@3.20.0
+  - @claudexor/config@3.20.0
+  - @claudexor/journal@3.20.0
+  - @claudexor/mcp-server@3.20.0
+  - @claudexor/schema@3.20.0
+  - @claudexor/secrets@3.20.0
+
 ## 3.19.0
 
 ### Minor Changes
