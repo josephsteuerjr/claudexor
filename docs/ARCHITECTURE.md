@@ -3901,7 +3901,8 @@ contradictory report (completed with `required_inputs`, needs_input without
 any), a historical fence-only envelope with a non-string `output` — is a CLEAN
 outcome: the lifecycle succeeds, `work_state` is
 `{state: unverified, source: validated, unverified_reason}` (the typed reason
-rides attempt telemetry and the run's outcome facts), and the deliverable is
+rides attempt telemetry and the run's outcome facts, and the shared outcome
+banner renders `work state unverified: <reason>`), and the deliverable is
 the COMPLETE answer text with nothing cut: a trailing fence that is the
 consumer's own JSON or code stays, and so does a broken footer attempt, so a
 malformed `needs_input` claim cannot veto but remains readable in the answer.

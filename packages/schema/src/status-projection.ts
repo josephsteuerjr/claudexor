@@ -130,6 +130,16 @@ export function outcomeBanner(
   facts: RunOutcomeFacts | null,
   delivery: { applyState: RunApplyState; hasApplyableChange: boolean },
 ): string | null {
+  const headline = outcomeHeadline(facts, delivery);
+  const reason =
+    facts?.work_state?.state === "unverified" ? facts.work_state.unverified_reason : undefined;
+  return headline && reason ? `${headline} · work state unverified: ${reason}` : headline;
+}
+
+function outcomeHeadline(
+  facts: RunOutcomeFacts | null,
+  delivery: { applyState: RunApplyState; hasApplyableChange: boolean },
+): string | null {
   if (!facts) return null; // not terminal — no honest headline yet
   if (facts.lifecycle !== "succeeded") return runOutcomeLabel(facts);
   switch (delivery.applyState) {
