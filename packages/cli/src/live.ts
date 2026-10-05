@@ -100,6 +100,11 @@ export function formatRunEventLine(ev: Record<string, unknown>): string | null {
                 harness: String(
                   (p["lane_switched_from"] as Record<string, unknown>)["harness"] ?? "?",
                 ),
+                profileId:
+                  typeof (p["lane_switched_from"] as Record<string, unknown>)["profileId"] ===
+                  "string"
+                    ? String((p["lane_switched_from"] as Record<string, unknown>)["profileId"])
+                    : null,
               }
             : null,
       });

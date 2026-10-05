@@ -366,7 +366,10 @@ deferred; they are recorded here now.
   daemon-side typed refusal + macOS Save guard shipped in v3.1.0).
 - QA-039: real resumable uploads (D-22; v3.1.0 ships honest single-shot
   catalog wording instead).
-- Auto-continuation beyond the proven Claude refill-exhaustion case (D-22).
+- Auto-continuation beyond the proven Claude refill-exhaustion case (D-22): account
+  and transport stops are done (in-run continuation ladder); the remaining
+  context-exhaustion follow-ups (`prompt_too_long`, codex typed context frames,
+  a second continuation) stay deferred.
 - D-13 step D: transcript List migration for pathologically long threads —
   A/B/C/E sufficed at owner dogfood, List reserved for pathological threads.
 
