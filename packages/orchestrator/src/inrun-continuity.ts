@@ -307,6 +307,9 @@ export class InRunContinuity {
     cancelReason: string | null;
     workState: WorkState | null | undefined;
   }): Promise<RunResumable | null> {
+    // A continued try whose attempt ended on a loop exit that skipped
+    // `afterTry` (a request or processing refusal) still owes its receipt.
+    this.emitReceipt(input.runSpec);
     await this.relocate(input.runSpec);
     const vetoed =
       input.workState?.state === "needs_input" || input.workState?.state === "incomplete";
