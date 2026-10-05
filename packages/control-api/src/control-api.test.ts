@@ -7645,6 +7645,42 @@ describe("DaemonControlApiServer", () => {
       },
     );
 
+    it("accept_clean_patch delivers the exact bytes behind a redacted copy", async () => {
+      await withAppliableProject(async (base, project, record) => {
+        redactedRun(record, project);
+        const decision = await apiFetch(`${base}/runs/run-d1/decision`, {
+          method: "POST",
+          headers: authed({ "Idempotency-Key": "v4c-accept-clean" }),
+          body: JSON.stringify({ action: "accept_clean_patch" }),
+        });
+        expect(decision.status).toBe(200);
+        expect(((await decision.json()) as { status?: string }).status).toBe("applied");
+        expect(readFileSync(join(project, "x"), "utf8")).toBe(`token = ${secret}\n`);
+      });
+    });
+
+    it("refuses the exact patch cleanly when a later edit conflicts with it", async () => {
+      await withAppliableProject(async (base, project, record) => {
+        redactedRun(record, project);
+        // The user changed the same line after the run finished.
+        writeFileSync(join(project, "x"), "edited later\n");
+        execFileSync("git", ["commit", "-qam", "later edit"], { cwd: project });
+
+        const applied = await apiFetch(`${base}/runs/run-d1/apply`, {
+          method: "POST",
+          headers: authed(),
+          body: JSON.stringify({ mode: "apply" }),
+        });
+        expect(applied.status).toBe(409);
+        const body = await applied.text();
+        // An ordinary conflict, decided on the exact patch — not the typed
+        // exact-bytes refusal and never a partial apply of the redacted copy.
+        expect(body).not.toContain("patch_exact_bytes_unavailable");
+        expect(body).not.toContain(secret);
+        expect(readFileSync(join(project, "x"), "utf8")).toBe("edited later\n");
+      });
+    });
+
     it("binds accept_risk to the digest of the EXACT patch and then applies exact bytes", async () => {
       await withAppliableProject(async (base, project, record) => {
         redactedRun(record, project);

@@ -70,6 +70,20 @@ export interface CandidateCapture {
   persistedDiff?: string;
   secretLike?: SecretLikeFinding;
   captureRefusal?: CaptureRefusal;
+  /** Set when the private exact patch object of an isolated candidate could
+   * not be written: its envelope is kept and this is where the bytes still are. */
+  exactBytesRetainedAt?: string;
+}
+
+/** Disclosure fields of one attempt record (`attempt.yaml`). */
+export function attemptDisclosure(capture: CandidateCapture): Record<string, unknown> {
+  return {
+    ...(capture.captureRefusal ? { capture_refusal: capture.captureRefusal } : {}),
+    ...(capture.secretLike ? { secret_like: capture.secretLike } : {}),
+    ...(capture.exactBytesRetainedAt
+      ? { exact_bytes_retained_at: capture.exactBytesRetainedAt }
+      : {}),
+  };
 }
 
 /**
@@ -135,17 +149,16 @@ export async function captureCandidateWorkspace(input: {
   // bytes and is about to be removed, so its exact object is written NOW. If
   // that write fails the envelope is kept: a deferred Apply then refuses typed
   // while the bytes, the answer and the run state stay readable.
-  if (
+  const retained =
     redactedCopy &&
     !inPlace &&
-    createRevertAnchorFromPatchOrNull(input.projectRoot, captured.diff) === null
-  ) {
-    wsm.retainEnvelope(envelope);
-  }
+    createRevertAnchorFromPatchOrNull(input.projectRoot, captured.diff) === null;
+  if (retained) wsm.retainEnvelope(envelope);
   return {
     diff: captured.diff,
     ...(redactedCopy ? { persistedDiff: copy.text } : {}),
     ...(secretLike ? { secretLike } : {}),
+    ...(retained ? { exactBytesRetainedAt: envelope.worktree_path } : {}),
   };
 }
 
@@ -163,26 +176,26 @@ function refused(disposition: CaptureRefusal["disposition"], detail: string): Ca
 export function persistFinalPatch(
   store: ArtifactStore,
   finalDir: string,
-  run: { diff: string; persistedDiff?: string; secretLike?: SecretLikeFinding },
+  run: Pick<CandidateCapture, "diff" | "persistedDiff" | "secretLike" | "exactBytesRetainedAt">,
 ): { patchSha256: string; meta: Record<string, unknown> } {
   const copy = run.persistedDiff ?? persistedPatchCopy(run.diff, []).text;
   assertPersistableText("final patch copy", copy);
   store.writeText(join(finalDir, "patch.diff"), copy);
-  return {
-    patchSha256: sha256(run.diff),
-    meta: {
-      ...(run.secretLike ? { secret_like: run.secretLike } : {}),
-      ...(copy !== run.diff
-        ? {
-            persisted_patch: "redacted",
-            // null: the exact bytes could not be stored; a deferred Apply answers
-            // patch_exact_bytes_unavailable instead of applying the copy.
-            exact_patch_object: createRevertAnchorFromPatchOrNull(store.repoRoot, run.diff),
-          }
-        : {}),
-    },
-  };
+  const meta: Record<string, unknown> = run.secretLike ? { secret_like: run.secretLike } : {};
+  if (copy !== run.diff) {
+    meta["persisted_patch"] = "redacted";
+    // null: the exact bytes could not be stored; a deferred Apply answers
+    // patch_exact_bytes_unavailable instead of applying the copy.
+    const exactObject = createRevertAnchorFromPatchOrNull(store.repoRoot, run.diff);
+    meta["exact_patch_object"] = exactObject;
+    if (exactObject === null && run.exactBytesRetainedAt) {
+      meta["exact_bytes_retained_at"] = run.exactBytesRetainedAt;
+    }
+  }
+  return { patchSha256: sha256(run.diff), meta };
 }
+
+export { secretLikeSummaryLine };
 
 /** `\n`-prefixed disclosure line for a summary template; "" when clean. */
 export function summaryDisclosure(finding: SecretLikeFinding | undefined): string {

@@ -19,6 +19,7 @@ import { readRevertAnchor, type WorkspaceManager } from "@claudexor/workspace";
 
 import { PERSISTED_PATCH_NOTICE } from "./persistedPatch.js";
 import {
+  attemptDisclosure,
   captureCandidateWorkspace,
   CountedAnswerAssembly,
   persistFinalPatch,
@@ -327,6 +328,12 @@ describe("exact bytes of an isolated candidate survive its envelope (INV-062)", 
     expect(result.persistedDiff).not.toContain(fakeKey("f"));
     // ...and the only other holder of the exact bytes is not deleted.
     expect(retained).toEqual(["env-test"]);
+    // The diagnostic says where those bytes still are.
+    expect(result.exactBytesRetainedAt).toBe(envelope.worktree_path);
+    expect(attemptDisclosure(result)).toMatchObject({
+      exact_bytes_retained_at: envelope.worktree_path,
+      secret_like: { total_matches: 1 },
+    });
   });
 
   it("does not write an exact object for an in-place candidate at capture time", async () => {
@@ -393,6 +400,14 @@ describe("persistFinalPatch", () => {
 
     expect(saved.meta).toEqual({ persisted_patch: "redacted", exact_patch_object: null });
     expect(readFileSync(join(paths.finalDir, "patch.diff"), "utf8")).not.toContain(fakeKey("n"));
+    // With a kept envelope the record points at the surviving exact bytes.
+    expect(
+      persistFinalPatch(store, paths.finalDir, { diff, exactBytesRetainedAt: "/kept/tree" }).meta,
+    ).toEqual({
+      persisted_patch: "redacted",
+      exact_patch_object: null,
+      exact_bytes_retained_at: "/kept/tree",
+    });
   });
 });
 

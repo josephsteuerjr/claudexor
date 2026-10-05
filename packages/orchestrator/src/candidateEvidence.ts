@@ -36,6 +36,9 @@ export interface CandidateRun {
   /** The candidate's changes could not be captured at all. Secret-like content
    * is never a refusal; this is the honest name of a failed capture. */
   captureRefusal?: CaptureRefusal;
+  /** Where the exact bytes of an isolated candidate still are when its private
+   * exact patch object could not be written (the envelope is kept, not deleted). */
+  exactBytesRetainedAt?: string;
   /** D-16 r7: the finalizer's outcome class for THIS attempt. An `interrupted`
    * candidate (terminal context exhaustion with NO completed WorkReport) is
    * never reviewed/arbitrated/adopted as clean — it terminalizes the run

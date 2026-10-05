@@ -2866,8 +2866,7 @@ export class Orchestrator {
             errors: errors.slice(0, 5),
             ...telemetrySummary(telemetry),
             outcome: telemetry.outcome,
-            ...(captureRefusal ? { capture_refusal: captureRefusal } : {}),
-            ...(captured.secretLike ? { secret_like: captured.secretLike } : {}),
+            ...secretDiff.attemptDisclosure(captured),
             gates: gates.map((g) => ({ id: g.id, status: g.status })),
             branch: envelope.branch_name,
             ...(directoryCapture.files
@@ -3353,7 +3352,7 @@ export class Orchestrator {
                 harness: adapter.id,
                 profileId: input.credentialProfileId ?? null,
                 priorPrompt: input.prompt,
-                priorOutput: run.answerText ?? run.diff ?? "",
+                priorOutput: run.answerText ?? run.persistedDiff ?? run.diff ?? "",
               }),
             );
             // Reserve the continuation lease BEFORE any disclosure: a denied lease
@@ -4259,7 +4258,7 @@ export class Orchestrator {
           evidences,
           synth.reason,
           actualReviewVerified,
-          winnerRun.secretLike,
+          secretDiff.secretLikeSummaryLine(winnerRun.secretLike),
         ),
       );
       // summary.md is a DIAGNOSTIC artifact only (V8/PLAN addendum 2): it no

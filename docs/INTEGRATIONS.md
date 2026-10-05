@@ -551,7 +551,12 @@ exactly `run_facts_invalid` and `invalid_service_response` to a schema-valid
 minimal handle that keeps the caller's runId, nulls the receipt and sibling
 authority fields, and carries a typed secret-redacted `detailProblem`, while
 404, auth, daemon-loss, untyped 500, and transport failures remain ordinary
-tool errors.
+tool errors. The same read tools also return `secretLike`: the INV-062
+disclosure of a run whose output held secret-like strings (hidden-match counts,
+changed-file paths, withheld binaries and images, whether the saved patch is a
+redacted copy and whether its exact object was recorded), or `null` when
+nothing was hidden. `run_result` answers with the primary output first, so this
+field is the only place that fact reaches an MCP host.
 
 Current operational behavior:
 
