@@ -566,7 +566,8 @@ Runs record it as `attempts[].effort_resolution` in
 attempt retains the final native execution's receipt after account rotation.
 Codex model results obtain observation only from Responses' `reasoning.effort`;
 `appliedOptions` keeps its existing provider-echo meaning. Session adapters do
-not claim an observed value. Adaptation disclosures are status/log events and
+not claim an observed value. Adaptation disclosures, including an exact effort
+selection that changes a `--model` id, are status/log events and
 never injected assistant messages. These fields add no operation, generation,
 retry, account-selection or budget authority. A rejected final-route preference
 ends that attempt without account rotation, model/harness fallback or repair retry;

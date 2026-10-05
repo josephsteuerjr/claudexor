@@ -4,6 +4,7 @@ import {
   mergeEffortLadders,
   type EffortHint,
   type EffortResolution,
+  type HarnessRunSpec,
 } from "@claudexor/schema";
 
 /**
@@ -269,9 +270,14 @@ export function resolveEffortEvidence(
 export function effortResolutionEvent(
   sessionId: string,
   receipt: EffortResolution,
+  spec?: Pick<HarnessRunSpec, "model_hint" | "processing">,
 ): import("@claudexor/schema").HarnessEvent {
+  const modelChanged =
+    receipt.parameter === "--model" &&
+    spec?.processing?.submittedNative != null &&
+    spec.processing.submittedNative !== spec.model_hint;
   const detail =
-    receipt.requested && receipt.resolution !== "exact"
+    receipt.requested && (receipt.resolution !== "exact" || modelChanged)
       ? `effort=${receipt.requested}: ${receipt.resolution}; submitted=${receipt.submitted ?? "omitted (native default)"}` +
         (receipt.reason ? `; ${receipt.reason}` : "")
       : null;

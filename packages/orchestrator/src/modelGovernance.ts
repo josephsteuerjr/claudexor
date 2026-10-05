@@ -288,7 +288,7 @@ export async function* runModelGovernedRoute(
   // so the id sent, the level and this disclosure cannot disagree; a route with
   // no effort carrier at all records the preference as omitted here; a flag
   // adapter (Claude, Codex, ACP) emits its own receipt at its final route.
-  if (preparedEffort) yield effortResolutionEvent(spec.session_id, preparedEffort);
+  if (preparedEffort) yield effortResolutionEvent(spec.session_id, preparedEffort, spec);
   else if (!routed.adapter.effortParameter) {
     yield effortResolutionEvent(
       spec.session_id,
