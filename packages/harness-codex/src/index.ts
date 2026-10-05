@@ -58,6 +58,7 @@ import { CLAUDEXOR_VERSION, nowIso, redactSecrets } from "@claudexor/util";
 import { parseCodexEvent, parseCodexStderrFailure, type CodexParseState } from "./parse.js";
 // prettier-ignore
 import { CODEX_ACCESS_PROFILES, probeCodexCredentialProfile, resolveCodexProfileRoute } from "./profile.js";
+import { codexContinuity } from "./continuity.js";
 import { smokeIsolatedApiKey } from "./smoke.js";
 export { canonicalCodexProfileHome, codexAccountIdentity } from "./profile.js";
 import { codexImageArgs } from "./attachments.js";
@@ -598,7 +599,7 @@ export function createCodexAdapter(deps: Partial<CodexRuntimeDeps> = {}): Harnes
     review(spec: HarnessRunSpec): AsyncIterable<HarnessEvent> {
       return controlledRun(spec);
     },
-
+    continuity: codexContinuity,
     async cancel(sessionId: string): Promise<void> {
       await controllers.get(sessionId)?.cancel();
     },
@@ -611,7 +612,6 @@ export function createCodexAdapter(deps: Partial<CodexRuntimeDeps> = {}): Harnes
         ? controller.steer(input)
         : { outcome: "unsupported" as const, reason: "no_live_session" as const };
     },
-
     probeCredentialProfile(
       profile: CredentialProfile,
       abortSignal?: AbortSignal,
