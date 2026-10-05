@@ -2139,7 +2139,9 @@ Endpoint semantics beyond the inventory:
   successor command is the durable claim: one accepted successor per
   predecessor across every ingress and restart; a successor refused before
   its run started holds no claim, one that ran and failed stays the head.
-  Omitted `mode`, `scope`, `execution`, `harnesses`, `primaryHarness`, `model`
+  Exact Retry and `rerun_with_feedback` replay the original request, so for a
+  successor that ran they answer the same `continuation_superseded`: the
+  caller continues the head instead. Omitted `mode`, `scope`, `execution`, `harnesses`, `primaryHarness`, `model`
   and `models` come from the predecessor (resolved before request defaults;
   explicit values win; nothing else is inherited), and `prompt` is the
   caller's continuation text — empty only here. The first try of the
