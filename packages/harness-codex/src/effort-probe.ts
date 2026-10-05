@@ -12,9 +12,14 @@ import {
  * or malformed answer falls back to the recorded snapshot below.
  */
 import { spawn } from "node:child_process";
-import type { HarnessEvent, HarnessRunSpec, ModelEffortCapability } from "@claudexor/schema";
+import type {
+  EffortResolution,
+  HarnessEvent,
+  HarnessRunSpec,
+  ModelEffortCapability,
+} from "@claudexor/schema";
 import { EffortHint, effortLevelsForModel, mergeEffortLadders } from "@claudexor/schema";
-import { effortRankLadder, resolveEffort } from "@claudexor/core";
+import { effortLadders, resolveEffortEvidence } from "@claudexor/core";
 import { nowIso } from "@claudexor/util";
 import { readCodexProcessingModels } from "./processing.js";
 import type { ProcessingCapability, HarnessModel } from "@claudexor/schema";
@@ -436,35 +441,47 @@ export async function codexEffortsForEnv(
   return await codexEffortCapability(deps.probeEfforts, deps.nowMs, BIN, probeEnv(envPatch));
 }
 
-/**
- * Internal projection for arg builders; the run emits the shared typed receipt.
- */
+/** The ONE effort result of a codex route: arg builders read `submitted`, the
+ * run records the receipt, the disclosure seams describe it. */
 export interface CodexEffortResolution {
-  /** The level to send, or null when no flag should be sent at all. */
-  effort: EffortHint | null;
-  /** True when `effort` differs from the request — the merged vendor order clamped it. */
-  clamped: boolean;
+  resolution: EffortResolution;
   /** The model whose advertised ladder decided this (the hint, or the catalog default). */
   effectiveModel: string | null;
 }
 
+/** Where the run's catalog came from and whether it may be trusted (INV-105). */
+export interface CodexEffortProvenance {
+  source: EffortResolution["source"];
+  /** A snapshot fallback on an unpinned CLI version: nothing may be submitted. */
+  untrusted: boolean;
+}
+
 /**
- * The effort value to send for one (model, requested) pair: advertised passes
+ * The effort receipt for one (model, requested) pair: advertised passes
  * through verbatim, a level a SIBLING model advertises clamps inside the merged
  * vendor order (`ultra` on gpt-5.4 → `xhigh` because the merged codex ladder
- * places it), anything else sends no flag at all.
- *
- * Inconsistent/incomparable vendor lists cannot authorize a substitution.
+ * places it), a word no codex model lists is placed by the shared preference
+ * order onto the model's own ladder (`none` → `low`, disclosed), anything else
+ * is rejected and sends no flag. Inconsistent vendor lists cannot authorize a
+ * substitution. Arg builders that only read `submitted` use the default
+ * provenance; the run supplies its own so the recorded receipt is exact.
  */
 export function codexEffortResolution(
   catalog: CodexEffortCatalog,
   model: string | null | undefined,
   requested: EffortHint | null | undefined,
+  provenance: CodexEffortProvenance = { source: "live_probe", untrusted: false },
 ): CodexEffortResolution {
-  const { effectiveModel, advertised, ladder, unverifiable } = codexEffortInputs(catalog, model);
-  const check = resolveEffort(requested, unverifiable ? [] : advertised, ladder);
-  if (check.status !== "ok") return { effort: null, clamped: false, effectiveModel };
-  return { effort: check.effort, clamped: check.clamped, effectiveModel };
+  const { effectiveModel, advertised, ladders, unverifiable } = codexEffortInputs(catalog, model);
+  const resolution = resolveEffortEvidence(
+    requested,
+    advertised,
+    ladders,
+    provenance.source,
+    "model_reasoning_effort",
+    unverifiable || provenance.untrusted,
+  );
+  return { resolution, effectiveModel };
 }
 
 /** Shared capability inputs for arg builders and the typed run receipt. */
