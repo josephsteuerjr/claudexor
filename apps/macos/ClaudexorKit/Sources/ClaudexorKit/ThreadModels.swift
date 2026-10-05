@@ -210,12 +210,13 @@ public struct ThreadTurnContinuity: Codable, Sendable, Equatable {
         self.laneSwitchedFrom = laneSwitchedFrom
     }
 
-    /// The ONE disclosure one-liner (INV-137) — a verbatim port of the
-    /// engine's `continuityLabel` (packages/schema status-projection). Only a
-    /// `packet` continuation discloses; `native_resume`/`fresh` return nil (the
-    /// lane already held the context — nothing to say). Phrasing is kept
-    /// identical to the CLI so every surface reads the same sentence.
+    /// The ONE disclosure one-liner (INV-137) — a verbatim port of the engine's
+    /// `continuityLabel`: a `packet` discloses; a `native_resume` on ANOTHER lane
+    /// means the session was MOVED there mid-run; in-lane resume/fresh say nothing.
     public var disclosure: String? {
+        if kind == "native_resume", let from = laneSwitchedFrom {
+            return "continued natively on another account · session moved from \(from.profileId ?? from.harness)"
+        }
         guard kind == "packet" else { return nil }
         let noun = packetTurns == 1 ? "turn" : "turns"
         var line = "continued with thread context · \(packetTurns) \(noun)"

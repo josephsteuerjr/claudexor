@@ -214,6 +214,15 @@ export type EnvMap = Record<string, string | null | undefined>;
  */
 export const CONTINUITY_PROFILE_LOCATOR_ENV = "CLAUDEXOR_PROFILE_LOCATOR";
 
+/**
+ * The typed `payload.code` of the error event an adapter yields when the
+ * session it recovered at its earliest handshake is NOT the one
+ * `resume_session_id` asked for (codex: the `thread/resume` reply before
+ * `turn/start`). The engine reads only this code (never prose) and records
+ * `identityCheck: mismatch_before_effects`.
+ */
+export const CONTINUITY_IDENTITY_MISMATCH_CODE = "resume_identity_mismatch";
+
 /** A native session the adapter located: the concrete history file (the holder) plus sidecars. */
 export interface LocatedNativeSession {
   found: true;

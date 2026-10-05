@@ -187,14 +187,32 @@ function outcomeHeadline(
  * — CLI print, macOS turn card, ACP — renders continuity through this helper
  * so the phrasing never diverges. Returns null for the cases with nothing to
  * disclose (a fresh first turn, or a plain in-lane native resume that carried
- * no packet); a lane switch or a hydrated gap always yields a visible line.
+ * no packet); a lane switch or a hydrated gap always yields a visible line —
+ * including a native resume on ANOTHER lane, which means the session was
+ * MOVED to that account mid-run and continued natively there.
  */
+/** The lane a disclosure payload switched away from (`lane_switched_from`), typed from an event payload. */
+export function laneSwitchedFromPayload(
+  value: unknown,
+): { harness: string; profileId: string | null } | null {
+  if (!value || typeof value !== "object") return null;
+  const lane = value as Record<string, unknown>;
+  return {
+    harness: String(lane["harness"] ?? "?"),
+    profileId: typeof lane["profileId"] === "string" ? lane["profileId"] : null,
+  };
+}
+
 export function continuityLabel(disclosure: {
   kind: "native_resume" | "packet" | "fresh";
   packetTurns?: number;
   summarized?: boolean;
   laneSwitchedFrom?: { harness: string; profileId?: string | null } | null;
 }): string | null {
+  if (disclosure.kind === "native_resume" && disclosure.laneSwitchedFrom) {
+    const from = disclosure.laneSwitchedFrom;
+    return `continued natively on another account · session moved from ${from.profileId ?? from.harness}`;
+  }
   if (disclosure.kind !== "packet") return null;
   const turns = disclosure.packetTurns ?? 0;
   const noun = turns === 1 ? "turn" : "turns";

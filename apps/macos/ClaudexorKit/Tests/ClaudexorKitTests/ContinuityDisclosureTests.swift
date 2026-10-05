@@ -20,6 +20,13 @@ import Testing
         #expect(c("packet", turns: 4).disclosure == "continued with thread context · 4 turns")
     }
 
+    @Test func movedSessionDisclosesNativeResumeOnAnotherLane() {
+        #expect(c("native_resume", from: .init(harness: "claude", profileId: "proton14")).disclosure
+            == "continued natively on another account · session moved from proton14")
+        #expect(c("native_resume", from: .init(harness: "claude", profileId: nil)).disclosure
+            == "continued natively on another account · session moved from claude")
+    }
+
     @Test func packetAppendsCondensedAndLaneSwitch() {
         let note = c("packet", turns: 6, summarized: true,
                      from: .init(harness: "codex", profileId: nil)).disclosure

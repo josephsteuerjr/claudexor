@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   acpStopReason,
+  continuityLabel,
   makeOutcomeFacts,
   needsDecision,
   needsOperatorAttention,
@@ -254,5 +255,36 @@ describe("requiredActionsFor (GH #29 minimal typed required actions)", () => {
       requiredActionsFor(makeOutcomeFacts("failed", { reason: "harness_failed" }), false),
     ).toEqual([]);
     expect(requiredActionsFor(null, false)).toEqual([]);
+  });
+});
+
+describe("continuityLabel (INV-137 disclosure line)", () => {
+  it("discloses a packet with its turn count, condensation and lane switch", () => {
+    expect(continuityLabel({ kind: "packet", packetTurns: 1 })).toBe(
+      "continued with thread context · 1 turn",
+    );
+    expect(
+      continuityLabel({
+        kind: "packet",
+        packetTurns: 6,
+        summarized: true,
+        laneSwitchedFrom: { harness: "codex", profileId: null },
+      }),
+    ).toBe("continued with thread context · 6 turns (older turns condensed) · switched from codex");
+  });
+
+  it("discloses a MOVED session: a native resume on another lane names the previous account", () => {
+    expect(
+      continuityLabel({
+        kind: "native_resume",
+        laneSwitchedFrom: { harness: "claude", profileId: "proton14" },
+      }),
+    ).toBe("continued natively on another account · session moved from proton14");
+    expect(
+      continuityLabel({ kind: "native_resume", laneSwitchedFrom: { harness: "claude" } }),
+    ).toBe("continued natively on another account · session moved from claude");
+    // A plain in-lane native resume and a fresh first turn still say nothing.
+    expect(continuityLabel({ kind: "native_resume", packetTurns: 3 })).toBeNull();
+    expect(continuityLabel({ kind: "fresh" })).toBeNull();
   });
 });

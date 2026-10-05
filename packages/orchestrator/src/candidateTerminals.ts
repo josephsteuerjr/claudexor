@@ -23,6 +23,7 @@ import {
 import { cancelledResult } from "./runTerminals.js";
 import { gatesPassed } from "@claudexor/review";
 import { publishUnverifiedGitCandidate } from "./candidateWorkProduct.js";
+import { resumableOf, resumableTerminal } from "./continuity-terminal.js";
 
 interface CandidateTerminalContext {
   ledger: BudgetLedger;
@@ -105,6 +106,8 @@ export async function cancelledCandidatesResult(
     ledger.spend(),
     signal,
     store,
+    undefined,
+    resumableOf(runs),
   );
 }
 
@@ -266,6 +269,7 @@ export async function failedCandidatesResult(
     phase,
     error: rootCause,
     failure_ref: "final/failure.yaml",
+    ...resumableTerminal(store, paths, runs),
   });
   return {
     runId,

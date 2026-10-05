@@ -86,6 +86,7 @@ import {
 import { createClaudeLiveInput, type ClaudeLiveInput } from "./live-input.js";
 import { withClaudeInstructionsFile } from "./instructions-file.js";
 import { CLAUDE_MODEL_INVENTORY, probeClaudeModels } from "./model-probe.js";
+import { claudeContinuity } from "./continuity.js";
 
 export const CLAUDE_PROVIDER_ENV_DENYLIST = PROVIDER_SECRET_ENV.filter(
   (k) => k !== "ANTHROPIC_API_KEY",
@@ -387,8 +388,8 @@ export function createClaudeAdapter(deps: Partial<ClaudeRuntimeDeps> = {}): Harn
         ],
       });
     },
-
     doctor: (spec) => claudeDoctor(spec, runtime, claudeNativeEnv),
+    continuity: claudeContinuity,
 
     run(spec: HarnessRunSpec): AsyncIterable<HarnessEvent> {
       return runClaude(spec, runtime, live);

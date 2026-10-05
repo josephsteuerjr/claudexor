@@ -219,14 +219,16 @@ export const RunEventType = z
      * never leaves a disclosure claiming a continuation launched. No attempt ran
      * and the one-shot is not consumed. Payload: {from_attempt, cause, reason}. */
     "run.continuation.denied",
-    /** A continued try's receipt (INTERFACES §3): carrier, cause, accounts,
-     * workspace, memory, instructions and THIS try's attested model. Emitted
-     * once per continued try, the first try of a `continueFrom` successor
-     * included. Payload: RunContinuityReceipt. */
+    /** Per-try receipt of a CONTINUED try: the in-run continuation ladder's
+     * later tries and the first try of a `continueFrom` successor. Carrier,
+     * cause, accounts, workspace, memory and this try's model attestation.
+     * Payload: {harness_id, attempt_id, session_id, receipt:
+     * RunContinuityReceipt}. */
     "run.continuity",
     /** A stopped run's isolated envelope was kept for continuation (custody
-     * `retained`). Payload: {attempt_id, root, cause}. Released by adoption
-     * (`continueFrom`) or the discard decision; never removed automatically. */
+     * `retained`). Payload: {attempt_id, root, cause, bytes}. Released by
+     * adoption (`continueFrom`), apply or the discard decision; never removed
+     * automatically. */
     "workspace.retained",
   ])
   .describe(
