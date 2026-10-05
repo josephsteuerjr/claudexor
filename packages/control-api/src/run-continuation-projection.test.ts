@@ -1,0 +1,177 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ControlRunSummary } from "@claudexor/schema";
+import {
+  WorkspaceManager,
+  adoptRetainedEnvelope,
+  retainForContinuation,
+} from "@claudexor/workspace";
+import { stringify as stringifyYaml } from "yaml";
+import { afterAll, describe, expect, it } from "vitest";
+import { continuationSummary } from "./run-continuation-projection.js";
+import type { DaemonRunRecord } from "./run-record.js";
+
+const dirs: string[] = [];
+afterAll(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function temp(name: string): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `claudexor-chain-proj-${name}-`)));
+  dirs.push(dir);
+  return dir;
+}
+
+function runDir(): string {
+  const dir = temp("run");
+  mkdirSync(join(dir, "final"), { recursive: true });
+  return dir;
+}
+
+function capsule(dir: string, attempt: string, sid: string, mtimeMs: number): void {
+  mkdirSync(join(dir, "attempts", attempt), { recursive: true });
+  writeFileSync(
+    join(dir, "attempts", attempt, "session-capsule.json"),
+    JSON.stringify({
+      harness: "claude",
+      nativeSessionId: sid,
+      holderProfileId: "claude-a",
+      file: `/store/${sid}.jsonl`,
+      mtimeMs,
+      sidecars: [],
+      cwd: "/work",
+      requestedModel: null,
+    }),
+  );
+}
+
+const written = {
+  cause: "pool_exhausted",
+  resetsAt: "2026-10-06T21:00:00.000Z",
+  limitWindow: "five_hour",
+  limitEvidence: "window",
+  carriers: ["native", "native_moved", "packet"],
+  limitCode: "credential_pool_exhausted",
+  session: { harness: "claude", nativeSessionId: "sid-A", holderProfileId: "claude-a" },
+  workspace: { kind: "none", root: null },
+};
+
+function initRepo(): string {
+  const dir = temp("repo");
+  execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "config", "user.email", "t@t"]);
+  execFileSync("git", ["-C", dir, "config", "user.name", "t"]);
+  writeFileSync(join(dir, "a.txt"), "a\n");
+  execFileSync("git", ["-C", dir, "add", "-A"]);
+  execFileSync("git", ["-C", dir, "commit", "-qm", "init"]);
+  return dir;
+}
+
+describe("continuationSummary (run-status projection of the continueFrom chain)", () => {
+  it("projects the engine's terminal block, the predecessor link and the receipts (detail only)", () => {
+    const dir = runDir();
+    writeFileSync(join(dir, "final", "resumable.yaml"), stringifyYaml(written));
+    const rec: DaemonRunRecord = {
+      id: "job-s",
+      runId: "run-s",
+      state: "failed",
+      runDir: dir,
+      params: { continueFrom: "run-p" },
+    };
+    const receipt = {
+      tryIndex: 0,
+      attemptId: "a01",
+      carrier: "native",
+      cause: "pool_exhausted",
+      from: { runId: "run-p", attemptId: "a01", profileId: "claude-a" },
+      to: { profileId: "claude-a" },
+      workspace: "same_root",
+      memory: "full",
+      instructions: "as_sent",
+      reingestedTokens: 1200,
+      observedModel: "claude-opus-5-5",
+      modelMismatch: false,
+      identityCheck: "matched_before_effects",
+      inputDelivery: "confirmed",
+    };
+    const events = [
+      { type: "harness.event", payload: {} },
+      { type: "run.continuity", payload: { harness_id: "claude", receipt } },
+    ];
+    const detail = continuationSummary(rec, events);
+    expect(detail).toMatchObject({
+      continueFrom: "run-p",
+      resumable: written,
+      continuity: [receipt],
+    });
+    // List rows never read the event log: absent is not "no receipts".
+    expect(continuationSummary(rec)).not.toHaveProperty("continuity");
+    // The fields fit the published summary shape.
+    expect(() =>
+      ControlRunSummary.parse({ jobId: "job-s", runId: "run-s", state: "failed", ...detail }),
+    ).not.toThrow();
+    // Non-terminal runs carry no terminal facts.
+    expect(continuationSummary({ ...rec, state: "running" })).toMatchObject({
+      resumable: null,
+      retainedEnvelope: null,
+    });
+  });
+
+  it("overlays the CURRENT workspace: a kept envelope, then none once a successor adopted it", async () => {
+    const repo = initRepo();
+    const dir = runDir();
+    writeFileSync(join(dir, "final", "resumable.yaml"), stringifyYaml(written));
+    const env = await new WorkspaceManager(repo).create({
+      taskId: "task-k",
+      attemptId: "a01",
+      baseRef: "HEAD",
+      custody: { runId: "run-k", runDir: dir },
+    });
+    writeFileSync(join(env.worktree_path, "a.txt"), "edited\n");
+    const custody = retainForContinuation(env, { runId: "run-k", runDir: dir }, "pool_exhausted");
+    const rec: DaemonRunRecord = { id: "job-k", runId: "run-k", state: "failed", runDir: dir };
+    expect(continuationSummary(rec)).toMatchObject({
+      resumable: { workspace: { kind: "retained_envelope", root: env.worktree_path } },
+      retainedEnvelope: { root: env.worktree_path, cause: "pool_exhausted" },
+    });
+    expect(continuationSummary(rec).retainedEnvelope?.bytes).toBeGreaterThan(0);
+    adoptRetainedEnvelope(custody, { runId: "run-next", runDir: runDir() });
+    expect(continuationSummary(rec)).toMatchObject({
+      resumable: { workspace: { kind: "none", root: null } },
+      retainedEnvelope: null,
+    });
+  });
+
+  it("derives the block of a run the daemon found running at its restart (host_restart)", () => {
+    const dir = runDir();
+    capsule(dir, "a01", "sid-old", 1);
+    capsule(dir, "a01c", "sid-new", 2);
+    const rec: DaemonRunRecord = {
+      id: "job-r",
+      runId: "run-r",
+      state: "interrupted",
+      runDir: dir,
+      params: {
+        scope: { kind: "project", root: "/project" },
+        execution: { isolation: "live", workspaceRoot: "/snapshot" },
+      },
+    };
+    expect(continuationSummary(rec).resumable).toEqual({
+      cause: "host_restart",
+      resetsAt: null,
+      limitWindow: null,
+      limitEvidence: null,
+      carriers: ["native", "packet"],
+      limitCode: null,
+      session: { harness: "claude", nativeSessionId: "sid-new", holderProfileId: "claude-a" },
+      workspace: { kind: "in_place", root: "/snapshot" },
+    });
+    // An engine-terminal interrupted run (it committed RunFacts) is not a restart.
+    writeFileSync(join(dir, "final", "run_facts.yaml"), "schema_version: 1\n");
+    expect(continuationSummary(rec).resumable).toBeNull();
+    // Finished work has no block at all.
+    expect(continuationSummary({ ...rec, state: "succeeded" }).resumable).toBeNull();
+  });
+});

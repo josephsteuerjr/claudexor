@@ -2125,6 +2125,48 @@ validator dump, and validates the per-run SSE cursor as a nonnegative integer
 
 Endpoint semantics beyond the inventory:
 
+- `POST /v2/runs` with `continueFrom: <runId>` continues a terminal run of this
+  daemon — stopped, limited, cancelled, interrupted or finished — as a new
+  run, the next link of its continuation chain. One shared admission rule
+  (`continuationRefusal` in `@claudexor/schema`) answers typed:
+  `predecessor_unknown` (404, also another daemon's ids), `predecessor_live`
+  (409), `continue_from_with_thread` (400; a thread continues through its
+  turns), `continue_from_unsupported` (400; only a single-candidate Agent or
+  an Ask run can carry the predecessor's session — not plan, best-of,
+  attempts/until-clean, deep-scan or council) and `continuation_superseded`
+  (409, context `head` = the newest link of the chain). The daemon applies it
+  inside the enqueue RPC immediately before acceptance, so the accepted
+  successor command is the durable claim: one accepted successor per
+  predecessor across every ingress and restart; a successor refused before
+  its run started holds no claim, one that ran and failed stays the head.
+  Omitted `mode`, `scope`, `execution`, `harnesses`, `primaryHarness`, `model`
+  and `models` come from the predecessor (resolved before request defaults;
+  explicit values win; nothing else is inherited), and `prompt` is the
+  caller's continuation text — empty only here. The first try of the
+  successor's first candidate attempt is planned through the in-run
+  continuation planner from the predecessor's session capsule and terminal
+  `resumable` facts: `native` (same account, resume by id), `native_moved`
+  (the session moved into the successor's account store), `packet` (a fresh
+  session briefed by the evidence index) or `fresh` (the predecessor did no
+  work: the index carries its work order); another harness gets the packet,
+  and `continueCarrier: "packet"` forces the re-brief. A native carrier never
+  resends the original prompt: the continuation notice (cause, any undelivered
+  input) plus the caller's text is the user prompt, and a follow-up on
+  finished work is the caller's text alone. The chain's work order
+  (predecessor's work order + continuation text) is recorded as
+  `context/work-order.md`. That try's `run.continuity` receipt names the
+  predecessor (`from.runId`) and `workspace` `same_root` / `different_root`;
+  its later tries continue in-run with the predecessor's sticky `acted`, so a
+  failed first try never falls back to a context-free replay. Workspace: an
+  explicit `execution.workspaceRoot` or live isolation wins; otherwise a
+  predecessor whose isolated envelope was kept (below) is continued IN that
+  envelope — same path, files and base, one cumulative patch. `GET
+  /v2/runs/:id` projects `continueFrom`, `resumable` (the engine's terminal
+  block with the CURRENT workspace overlaid; a run the daemon found running at
+  its restart gets a derived block, cause `host_restart`, from its session
+  capsule and custody), `continuity` (the per-try receipts; run detail only —
+  list rows omit it) and `retainedEnvelope` (root, disk use, cause).
+  `continueFrom` appears in `GET /v2/agent-capabilities` `runControlKeys`.
 - Threads are the chat/session-first conversation SSOT (run lineage + native
   harness sessions). A thread declares a `workspace.mode`: `in_place` (default)
   mutates the live project tree; `isolated` keeps a persistent git worktree per
@@ -2812,6 +2854,26 @@ the purged (or would-be-purged) expired trash and `purge_leftovers` the
 finished (or would-be-finished) purges; like `data_root_unrecognized` both are
 opt-in (`trash_purge_report`, sent only by a lockstep CLI), the startup pass
 requests them for its log line, and `claudexor gc` prints them.
+STOPPED ISOLATED WORK IS KEPT for `continueFrom` (A9): a daemon-owned,
+single-candidate, mutating Agent run records `live` custody of its isolated
+envelope (`continuation-custody.json` in the envelope base, written before
+any harness runs). When the candidate ends unfinished (cancelled, wall
+clock, errored, or a `needs_input` / `incomplete` report) AND there is
+something to continue (a diff, a session capsule, or a tree that differs from
+its base), the envelope — tree and scoped home — is kept (custody
+`retained`, the run-dir pointer `final/retained-envelope.json`, a
+`workspace.retained` event; disk use is measured once and projected as
+`retainedEnvelope`) instead of disposed. Route-scoped auth that Claudexor
+itself seeds in that home (the Codex API-key `auth.json`, the Claude Keychain
+bridge link) is removed when it is kept; the adapters re-create it on the next
+spawn. Nothing removes a kept envelope automatically: a successor adopting it
+(custody moves, the tree is never deleted), applying the run's result, or the
+`discard` decision releases it, and disk retention keeps a run tree that holds
+one. The crash sweep never treats a kept envelope as an orphan (its auth is
+stripped again); an envelope whose holder run died mid-attempt with changes is
+kept the same way with cause `host_restart`. Delegate belt children,
+in-place runs and race/synthesis/review envelopes keep their ordinary
+lifecycle.
 While running it snapshots its live harness child process groups to
 `daemon/pids.json`; the NEXT startup reaps recorded orphans that survived a
 crash (pid liveness + command-name recycling guard) and sweeps workspace

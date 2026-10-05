@@ -25,6 +25,7 @@ import { TERMINAL_STATES } from "./sse-shared.js";
 import { readFilesWorkProduct } from "./files-work-product.js";
 import { appendRunAuditEvent } from "./run-audit.js";
 import { discardRunResult } from "./run-discard.js";
+import { continuationSummary } from "./run-continuation-projection.js";
 import { applyFilesResult } from "./files-apply-route.js";
 import { deliverableWorkspaceChanges } from "@claudexor/workspace";
 import { streamRunEvents } from "./run-events-stream.js";
@@ -2500,6 +2501,7 @@ function summarizeRun(
       task?.run_lineage.delegated_from_run_id ??
       null,
     delegation: telemetry?.delegation ?? null,
+    ...continuationSummary(rec, eventsSnapshot),
     taskId: rec.taskId,
     state: rec.state,
     runDir: rec.runDir,

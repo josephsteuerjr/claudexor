@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandListQuery } from "@claudexor/schema";
@@ -169,5 +169,59 @@ describe("POST /v2/runs with continueFrom", () => {
       expect(blank.status).toBe(400);
     });
     expect(enqueued).toHaveLength(0);
+  });
+});
+
+describe("GET /v2/runs/:id continuation facts", () => {
+  it("serves summary.resumable and summary.continuity from the run's artifacts", async () => {
+    const runDir = tempDir();
+    mkdirSync(join(runDir, "final"), { recursive: true });
+    const resumable = {
+      cause: "transport",
+      resetsAt: null,
+      limitWindow: null,
+      limitEvidence: null,
+      carriers: ["native", "packet"],
+      limitCode: null,
+      session: { harness: "codex", nativeSessionId: "th-1", holderProfileId: null },
+      workspace: { kind: "in_place", root: runDir },
+    };
+    writeFileSync(join(runDir, "final", "resumable.yaml"), JSON.stringify(resumable));
+    const receipt = {
+      tryIndex: 1,
+      attemptId: "a01",
+      carrier: "native",
+      cause: "transport",
+      from: { runId: "run-c", attemptId: "a01", profileId: null },
+      to: { profileId: null },
+      workspace: "same_root",
+      memory: "full",
+      instructions: "as_sent",
+      reingestedTokens: null,
+      observedModel: "gpt-6-sol",
+      modelMismatch: null,
+      identityCheck: "matched_before_effects",
+      inputDelivery: "confirmed",
+    };
+    writeFileSync(
+      join(runDir, "events.jsonl"),
+      `${JSON.stringify({ seq: 1, ts: "2026-10-06T00:00:00.000Z", run_id: "run-c", task_id: "t", type: "run.continuity", payload: { receipt } })}\n`,
+    );
+    const { daemon } = fakeDaemon([
+      { id: "job-c", runId: "run-c", state: "failed", runDir, params: { continueFrom: "run-p" } },
+    ]);
+    await withServer(daemon, async (base) => {
+      const response = await globalThis.fetch(`${base}/v2/runs/run-c`, {
+        headers: { authorization: "Bearer tok", "X-Claudexor-Protocol-Major": "3" },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { summary: Record<string, unknown> };
+      expect(body.summary).toMatchObject({
+        continueFrom: "run-p",
+        resumable,
+        continuity: [receipt],
+        retainedEnvelope: null,
+      });
+    });
   });
 });

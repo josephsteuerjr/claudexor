@@ -19,7 +19,8 @@ export type ContinuationRefusalCode =
   | "continue_from_with_thread"
   | "predecessor_unknown"
   | "predecessor_live"
-  | "continuation_superseded";
+  | "continuation_superseded"
+  | "continue_from_unsupported";
 
 export interface ContinuationRefusal {
   code: ContinuationRefusalCode;
@@ -80,6 +81,19 @@ function chainHead<R extends ContinuationRecord>(successor: R, records: readonly
 const THREAD_ACTION =
   "Continue a thread through POST /v2/threads/:id/turns; continueFrom continues one-shot runs.";
 
+/** The run shape a successor request names, when its first try cannot carry
+ * the predecessor's work: the engine plans one session for the first
+ * candidate attempt of an Agent or Ask run, so several racing candidates, a
+ * repair loop, a research sweep or a plan would run without it. */
+function unsupportedShape(request: unknown): string | null {
+  const p = (request ?? {}) as Record<string, unknown>;
+  if (p["mode"] === "plan") return "plan";
+  if (typeof p["n"] === "number" && p["n"] > 1) return "best-of";
+  if (typeof p["attempts"] === "number" || p["untilClean"] === true) return "repair-loop";
+  if (p["deepScan"] === true) return "deep-scan";
+  return p["council"] === true ? "council" : null;
+}
+
 /**
  * Why `request` may not be admitted as a successor now, or null when it may
  * (or when it is no continuation at all). One accepted successor per
@@ -99,6 +113,16 @@ export function continuationRefusal<R extends ContinuationRecord>(
       status: 400,
       message: "continueFrom and threadId are mutually exclusive",
       requiredAction: THREAD_ACTION,
+    };
+  }
+  const shape = unsupportedShape(request);
+  if (shape !== null) {
+    return {
+      code: "continue_from_unsupported",
+      status: 400,
+      message: `continueFrom continues single-candidate Agent and Ask runs, not a ${shape} run`,
+      requiredAction:
+        "Continue with a single-candidate Agent or Ask run (omit n, attempts, untilClean, deepScan and council; pass mode explicitly when the predecessor was a plan), or start a new run.",
     };
   }
   const predecessor = continuationPredecessor(from, records);

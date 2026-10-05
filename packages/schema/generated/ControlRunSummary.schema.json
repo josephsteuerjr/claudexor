@@ -422,8 +422,7 @@
             "additionalProperties": false,
             "description": "Receipt of one continued try: carrier, cause, accounts, memory, model attestation."
           },
-          "default": [],
-          "description": "One receipt per continued try (carrier, cause, accounts, memory, model)."
+          "description": "One receipt per continued try (carrier, cause, accounts, memory, model), from the run's event log: projected on run detail (GET /runs/:id), omitted from list rows."
         },
         "retainedEnvelope": {
           "anyOf": [

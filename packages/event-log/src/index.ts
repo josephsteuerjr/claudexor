@@ -2,7 +2,7 @@ import type { RunEvent, RunEventType } from "@claudexor/schema";
 import { RunEvent as RunEventSchema } from "@claudexor/schema";
 import { existsSync, statSync, truncateSync, unlinkSync } from "node:fs";
 import { appendLine, nowIso, readTextSafe, redactSecrets } from "@claudexor/util";
-export { RETAINED_OUTPUT_PATH, writeRetainedOutput } from "./retained-output.js";
+export { RETAINED_OUTPUT_PATH, retainedOutput, writeRetainedOutput } from "./retained-output.js";
 
 export type TerminalRunEventType = Extract<
   RunEventType,

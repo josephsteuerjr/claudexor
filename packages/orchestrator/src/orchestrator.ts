@@ -28,7 +28,8 @@ import {
   OrchestratorCredentials,
   reviewerProfileResolver,
 } from "./orchestrator-credentials.js";
-import { InRunContinuity } from "./inrun-continuity.js";
+import type { InRunContinuity } from "./inrun-continuity.js";
+import { openContinuity } from "./continue-from.js";
 import { resumableTerminal } from "./continuity-terminal.js";
 import { accountPoolRows } from "./account-pool.js";
 import type { PreProgressRefusalMemory } from "./pre-progress-refusal.js";
@@ -2486,14 +2487,16 @@ export class Orchestrator {
     const onAbort = () => void adapter.cancel?.(activeSessionId)?.catch(() => {});
     if (signal?.aborted) onAbort();
     else signal?.addEventListener("abort", onAbort, { once: true });
-    const continuity = new InRunContinuity(
+    let continuity: InRunContinuity;
+    ({ continuity, spec } = await openContinuity(
       this.continuityDeps(adapter, routed, contract, attemptId, paths, runInput, log, {
         envelope,
         harnessHome,
         workOrder: prompt,
         firstPrompt: spec.prompt,
       }),
-    );
+      { spec, continuation: runInput?.continuation, store },
+    ));
     try {
       for (let nativeTry = 0; !signal?.aborted; nativeTry += 1) {
         // A3 per-try isolation: neither output nor progress markers leak across tries.
@@ -6635,14 +6638,16 @@ export class Orchestrator {
       const retryPolicy = transientRetryPolicy(this.config(input.repoRoot));
       let activeSessionId = spec.session_id;
       const live = liveAttempt(input, routed, paths, contract, attemptId, () => activeSessionId);
-      const continuity = new InRunContinuity(
+      let continuity: InRunContinuity;
+      ({ continuity, spec } = await openContinuity(
         this.continuityDeps(adapter, routed, contract, attemptId, paths, input, log, {
           envelope: null,
           harnessHome: null,
           workOrder: input.prompt,
           firstPrompt: spec.prompt,
         }),
-      );
+        { spec, continuation: input.continuation, store },
+      ));
       const onAbort = () => void adapter.cancel?.(activeSessionId)?.catch(() => {});
       if (input.signal) {
         if (input.signal.aborted) onAbort();

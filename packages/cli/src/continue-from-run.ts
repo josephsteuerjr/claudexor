@@ -1,0 +1,77 @@
+/**
+ * What the daemon hands a run about the `continueFrom` chain (RunInput
+ * `continuation`): every daemon-owned run may keep its stopped isolated work
+ * for continuation (only the daemon admits a successor or discards a kept
+ * envelope); a successor additionally names its predecessor and, when it runs
+ * in the predecessor's workspace, adopts the predecessor's retained envelope.
+ *
+ * Delegate belt children keep the ordinary dispose: their parent integrates
+ * their results and starts new children, so a kept child tree would only
+ * accumulate. Admission (INTERFACES §1) already proved the predecessor is a
+ * terminal run of this daemon; this resolves it from the same records.
+ */
+import type { ControlRunStartRequest } from "@claudexor/schema";
+import type { RunInput } from "@claudexor/orchestrator";
+import { retainedEnvelopeOfRun } from "@claudexor/workspace";
+
+interface CommandRecords {
+  all(): ReadonlyArray<{
+    records(): ReadonlyArray<{ runId?: string; runDir?: string; state: string; params: unknown }>;
+  }>;
+}
+
+type ChainRecord = ReturnType<ReturnType<CommandRecords["all"]>[number]["records"]>[number];
+
+function paramsOf(record: ChainRecord): Record<string, unknown> {
+  return record.params && typeof record.params === "object"
+    ? (record.params as Record<string, unknown>)
+    : {};
+}
+
+/** The predecessor's work order: every prompt of its chain, root first (a
+ * retained-history ancestor that was pruned simply ends the walk). */
+function chainWorkOrder(records: readonly ChainRecord[], predecessor: ChainRecord): string {
+  const prompts: string[] = [];
+  const seen = new Set<string>();
+  for (
+    let record: ChainRecord | undefined = predecessor;
+    record?.runId && !seen.has(record.runId);
+  ) {
+    seen.add(record.runId);
+    const params = paramsOf(record);
+    if (typeof params["prompt"] === "string" && params["prompt"].trim())
+      prompts.unshift(params["prompt"].trim());
+    const parent = params["continueFrom"];
+    record = typeof parent === "string" ? records.find((r) => r.runId === parent) : undefined;
+  }
+  return prompts.join("\n\n");
+}
+
+export function continuationForRun(
+  p: ControlRunStartRequest,
+  commands: CommandRecords,
+): NonNullable<RunInput["continuation"]> {
+  const retain = !p.delegatedFromRunId;
+  if (!p.continueFrom) return { retain };
+  const records = commands.all().flatMap((store) => store.records());
+  const predecessor = records.find((record) => record.runId === p.continueFrom);
+  if (!predecessor?.runId || !predecessor.runDir) return { retain };
+  // An explicit live root or another project runs elsewhere: the kept envelope stays kept.
+  const kept = retainedEnvelopeOfRun(predecessor.runDir, predecessor.runId);
+  const ownWorkspace =
+    p.execution.isolation !== "live" &&
+    !p.execution.workspaceRoot &&
+    p.scope.kind === "project" &&
+    kept?.envelope.repo_root === p.scope.root;
+  return {
+    retain,
+    adopt: ownWorkspace ? kept : null,
+    from: {
+      runId: predecessor.runId,
+      runDir: predecessor.runDir,
+      state: predecessor.state,
+      workOrder: chainWorkOrder(records, predecessor),
+      preference: p.continueCarrier ?? "auto",
+    },
+  };
+}

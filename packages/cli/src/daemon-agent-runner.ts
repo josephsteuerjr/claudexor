@@ -27,6 +27,7 @@ import {
   threadRunStartRequiresGit,
 } from "./thread-execution-workspace.js";
 import { threadRunResumeInputs, threadContinuityContext } from "./thread-continuity-context.js";
+import { continuationForRun } from "./continue-from-run.js";
 
 /** Agent commands alone own projects, tool execution, and conversation continuity.
  * Model commands are dispatched before entering this run-normalization boundary. */
@@ -188,6 +189,7 @@ export function createDaemonAgentRunner(deps: {
         onLiveAttempt: (attempt) => liveInputs.register(attempt),
         threadId,
         executionRoot,
+        continuation: continuationForRun(p, threads),
         retryOf: p.retryOf ?? null,
         projectGitInitialization,
         ...threadRunResumeInputs(threads, threadId, requestedProfileId),

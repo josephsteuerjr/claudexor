@@ -637,8 +637,10 @@ export const ControlRunSummary = z
       ),
     continuity: z
       .array(RunContinuityReceipt)
-      .default([])
-      .describe("One receipt per continued try (carrier, cause, accounts, memory, model)."),
+      .optional()
+      .describe(
+        "One receipt per continued try (carrier, cause, accounts, memory, model), from the run's event log: projected on run detail (GET /runs/:id), omitted from list rows.",
+      ),
     retainedEnvelope: ControlRetainedEnvelope.nullable()
       .default(null)
       .describe("Isolated envelope kept for continuation (disk use visible); null when none."),

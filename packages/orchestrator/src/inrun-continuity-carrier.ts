@@ -38,6 +38,11 @@ export interface ContinuedTry {
   toProfileId: string | null;
   memory: RunContinuityReceipt["memory"];
   inputDelivery: RunContinuityReceipt["inputDelivery"];
+  /** The first try of a `continueFrom` successor: the predecessor's run and
+   * attempt, and whether this run executes in its root. In-run tries leave
+   * both unset (this run, same root). */
+  from?: { runId: string; attemptId: string };
+  workspace?: RunContinuityReceipt["workspace"];
 }
 
 /** The typed limit that ended a try (A11 evidence quality). */
@@ -234,9 +239,13 @@ export function continuityReceipt(input: {
     attemptId: deps.attemptId,
     carrier: continued.carrier,
     cause: continued.cause,
-    from: { runId: deps.runId, attemptId: deps.attemptId, profileId: continued.fromProfileId },
+    from: {
+      runId: continued.from?.runId ?? deps.runId,
+      attemptId: continued.from?.attemptId ?? deps.attemptId,
+      profileId: continued.fromProfileId,
+    },
     to: { profileId: continued.toProfileId },
-    workspace: "same_root",
+    workspace: continued.workspace ?? "same_root",
     memory: continued.memory === "full" && input.nativeRejected ? "unknown" : continued.memory,
     instructions: "as_sent",
     reingestedTokens: input.reingestedTokens,

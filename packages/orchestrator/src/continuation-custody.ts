@@ -24,6 +24,7 @@ import {
   type WorkspaceManager,
 } from "@claudexor/workspace";
 import type { CandidateRun } from "./candidateEvidence.js";
+import type { ContinueFromSource } from "./continue-from.js";
 
 interface EnvelopeHolder {
   runId: string;
@@ -43,6 +44,9 @@ export interface RunContinuation {
   retain: boolean;
   /** The predecessor's retained envelope this run adopts (`continueFrom`). */
   adopt?: EnvelopeCustody | null;
+  /** The predecessor whose work the first candidate attempt continues
+   * (`continueFrom`); consumed by that attempt (`continue-from.ts`). */
+  from?: ContinueFromSource | null;
 }
 
 /**
@@ -145,6 +149,9 @@ async function settleCandidateEnvelope(
   }
   const holder = { runId: custody.holder_run_id, runDir: custody.holder_run_dir };
   const retained = retainForContinuation(env, holder, cause);
+  // The terminal `resumable` block (written after this settle) names the kept tree.
+  if (run?.resumable)
+    run.resumable.workspace = { kind: "retained_envelope", root: env.worktree_path };
   ctx.log?.emit("workspace.retained", {
     attempt_id: run?.attemptId ?? env.attempt_id,
     root: env.worktree_path,

@@ -83,6 +83,26 @@ describe("continuationRefusal (INTERFACES §1 admission)", () => {
     expect(continuationRefusal({ continueFrom: "run-a" }, records)).toBeNull();
   });
 
+  it("refuses run shapes whose first try cannot carry the predecessor's work", () => {
+    const records = [done("job-p", "run-p")];
+    for (const shape of [
+      { mode: "plan" },
+      { n: 3 },
+      { attempts: 2 },
+      { untilClean: true },
+      { mode: "ask", deepScan: true },
+      { mode: "plan", council: true },
+    ]) {
+      expect(continuationRefusal({ continueFrom: "run-p", ...shape }, records)).toMatchObject({
+        code: "continue_from_unsupported",
+        status: 400,
+      });
+    }
+    for (const shape of [{}, { mode: "agent", n: 1 }, { mode: "ask" }, { create: true }]) {
+      expect(continuationRefusal({ continueFrom: "run-p", ...shape }, records)).toBeNull();
+    }
+  });
+
   it("projects a refusal as a typed problem error", () => {
     const refusal = continuationRefusal({ continueFrom: "run-x" }, []);
     expect(continuationRefusalError(refusal!)).toMatchObject({

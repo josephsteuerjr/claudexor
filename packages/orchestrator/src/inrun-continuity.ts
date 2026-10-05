@@ -110,6 +110,8 @@ export interface InRunContinuityDeps {
   >;
   emit: ContinuityEmit;
   newSessionId: () => string;
+  /** A `continueFrom` successor's first try (continue-from.ts): predecessor `acted` + receipt. */
+  seed?: { acted: boolean; continued: ContinuedTry } | null;
   /** Thread facts for the moved-session disclosure (INV-137); null outside a thread. */
   thread: {
     threadId: string;
@@ -189,6 +191,8 @@ export class InRunContinuity {
 
   constructor(private readonly deps: InRunContinuityDeps) {
     this.capsule = readSessionCapsule(deps.attemptDir);
+    this.acted = deps.seed?.acted === true;
+    this.continued = deps.seed?.continued ?? null;
   }
 
   /** The loop calls this before each try spawns; `abort` is THIS try's controller. */
