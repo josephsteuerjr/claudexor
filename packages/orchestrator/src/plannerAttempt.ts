@@ -9,7 +9,6 @@ import { join } from "node:path";
 import type { ArtifactStore, RunPaths } from "@claudexor/artifact-store";
 import type { BudgetLedger } from "@claudexor/budget";
 import {
-  AnswerAssembly,
   countsAsAgentProgress,
   type InteractionChannel,
   type ProcessingAdmission,
@@ -49,6 +48,7 @@ import { observeNativeSessionEvent } from "./credential-profiles.js";
 import type { BudgetDenial } from "./budgetFailure.js";
 import { declaredFailure, type DeclaredFailure } from "./runTerminalResults.js";
 import { runModelGovernedRoute } from "./modelGovernance.js";
+import { CountedAnswerAssembly } from "./secretDiff.js";
 import type { RoutedAdapter, RunInput } from "./orchestrator.js";
 import {
   harnessEventPayload,
@@ -70,6 +70,7 @@ export interface PlannerAttemptOutcome {
   harnessFailedBeforeReport: boolean;
   reportProblem?: UnwrappedAnswer["reportProblem"];
   text: string | null;
+  answerMatches?: number;
   telemetry: AttemptTelemetry | null;
   budgetDenied: boolean;
   budgetDenial?: BudgetDenial | null;
@@ -85,6 +86,7 @@ export function plannerAttemptSummary(outcome: PlannerAttemptOutcome) {
     outcomeClass: outcome.outcomeClass,
     error: outcome.error,
     declaredFailure: outcome.declaredFailure,
+    answerMatches: outcome.answerMatches,
   };
 }
 
@@ -198,7 +200,7 @@ export async function runPlannerAttempt(
     return {
       ...prepared,
       attemptEventsPath: join(paths.attemptsDir, attemptId, "events.jsonl"),
-      answer: new AnswerAssembly(),
+      answer: new CountedAnswerAssembly(),
       telemetry: createAttemptTelemetry(
         prepared.knobs.webPolicy,
         contract.external_context.web_required,
@@ -327,7 +329,7 @@ export async function runPlannerAttempt(
           void adapter.cancel?.(spec.session_id)?.catch(() => {});
           break;
         }
-        answer.observe(safeEv);
+        answer.observeCounted(ev, safeEv);
         if (safeEv.type === "error")
           harnessError = safeEv.error ? redactSecrets(safeEv.error) : "harness emitted an error";
       }
@@ -427,6 +429,7 @@ export async function runPlannerAttempt(
     harnessFailedBeforeReport,
     reportProblem: planUnwrapped.reportProblem,
     text,
+    answerMatches: answer.secretLikeMatches(),
     telemetry,
     budgetDenied: false,
   };

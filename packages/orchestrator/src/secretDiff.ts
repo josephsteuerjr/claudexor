@@ -63,6 +63,17 @@ export class CountedAnswerAssembly extends AnswerAssembly {
   }
 }
 
+/** Read-only products have no patch or media findings. Their selected answer's
+ * pre-redaction count uses the same disclosure shape as a candidate capture. */
+export function answerSecretLikeFinding(answerMatches = 0): SecretLikeFinding | undefined {
+  return buildSecretLikeFinding({
+    copy: { text: "", files: [], unattributedMatches: 0 },
+    binaryPaths: [],
+    mediaWithheld: [],
+    answerMatches,
+  });
+}
+
 export interface CandidateCapture {
   /** The EXACT candidate patch: apply, synthesis, digests and gates read it. */
   diff: string;

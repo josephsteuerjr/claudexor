@@ -28,7 +28,7 @@
   "packages/mcp-server/src/index.ts": 654,
   "packages/orchestrator/src/attemptTelemetry.ts": 829,
   "packages/orchestrator/src/orchestrator.ts": 7572,
-  "packages/orchestrator/src/planRun.ts": 612,
+  "packages/orchestrator/src/planRun.ts": 479,
   "packages/review/src/reviewEngine.ts": 1253,
   "packages/budget/src/ledger.ts": 611,
   "packages/schema/src/control.ts": 1623,

@@ -1368,7 +1368,9 @@ persistence classifier.
   `matches` and rule `kinds`, `binary_paths`, `media_withheld`,
   `answer_matches` (counted before the first redaction) and `total_matches`.
   `final/summary.md` adds one line, and the MCP read tools project the same
-  record as `secretLike`.
+  record as `secretLike`. Read-only Ask, Plan and their reducers use the same
+  pre-redaction answer counter: the selected final answer supplies the count,
+  or the sum of the retained scouts when deep-scan returns a raw bundle.
 - **Apply binds to the exact digest.** `meta.patch_sha256` is always the digest
   of the exact patch, so a redacted copy cannot pass the apply gate on any
   route. When the saved copy differs, meta records `persisted_patch: redacted`
