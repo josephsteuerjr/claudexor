@@ -424,21 +424,21 @@ export class InRunContinuity {
 
   /** The process died after progress: the same account resumes its session
    * (bounded), or re-briefs once a typed fact rejected that session. With no
-   * session recorded at all there is nothing to resume: the run ends
-   * continuable (`resumable`, carrier packet) for the caller. */
+   * session recorded at all (the harness never reported one) the same account
+   * continues on a new session re-briefed by the evidence index (owner 1B),
+   * under the same bound. */
   private async afterTransport(facts: TryFacts): Promise<AfterTryVerdict> {
     this.lastCause = "transport";
-    if (this.capsule === null) {
-      // A packet try that died before doing anything replayed no effect: the
-      // structural branch hops it to the next account with the same packet
-      // (today's pre-progress failover, now on the packet carrier). Anything
-      // else with no session to resume ends continuable for the caller.
-      const packetDiedUnused =
-        this.settledCarrier === "packet" &&
-        !facts.sawRetryable &&
-        !facts.markers.sawAgentProgress &&
-        facts.markers.fileChanges === 0;
-      if (!packetDiedUnused) return { kind: "break" };
+    // A packet try that died before doing anything replayed no effect: the
+    // structural branch hops it to the next account with the same packet
+    // (today's pre-progress failover, now on the packet carrier).
+    const packetDiedUnused =
+      this.capsule === null &&
+      this.settledCarrier === "packet" &&
+      !facts.sawRetryable &&
+      !facts.markers.sawAgentProgress &&
+      facts.markers.fileChanges === 0;
+    if (packetDiedUnused) {
       const rotated = await this.rotate(facts, true);
       if (rotated && "poolExhausted" in rotated) {
         this.lastCause = "pool_exhausted";

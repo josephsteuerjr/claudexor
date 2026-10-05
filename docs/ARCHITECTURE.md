@@ -4002,7 +4002,8 @@ prompt is the original prompt plus the bounded evidence index; owner answer
 1B) — never a fresh replay; a transport death (errored, not aborted, not a
 typed refusal, not context exhaustion) resumes the same session on the same
 account (`native`), or `packet` once a typed fact (locate miss, identity
-mismatch, adapter rejection) proved the native carrier unusable, bounded by
+mismatch, adapter rejection, no session ever reported) proved the native
+carrier unusable, bounded by
 `transient_retry.max_retries` per account; hops are bounded by the profiles
 already tried. A bare backoff frame (`retry_delay_ms`, no reset, no
 constraint) is transport when a session exists to resume. On a native carrier

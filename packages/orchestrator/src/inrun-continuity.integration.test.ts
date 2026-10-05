@@ -402,6 +402,55 @@ describe("in-run continuation (agent lane, in place)", () => {
     });
   });
 
+  it("transport death after an edit with NO session reported → same-account PACKET (1B), bounded by max_retries", async () => {
+    const continued = await run({
+      mode: "agent",
+      profiles: ["a", "b"],
+      maxRetries: 2,
+      continuity: null,
+      script: function* ({ spec, emit, resume, tryOfProfile }) {
+        if (tryOfProfile === 1) {
+          yield emit({ type: "started" });
+          writeFileSync(join(spec.cwd, "part1.txt"), "x\n");
+          yield emit({ type: "file_change", payload: { path: "part1.txt" } });
+          yield* crash(emit);
+          return;
+        }
+        expect(resume).toBeNull();
+        yield emit({ type: "started" });
+        yield emit({ type: "message", text: "re-briefed and finished", final: true });
+        yield emit({ type: "completed" });
+      },
+    });
+    expect(continued.result.lifecycle, continued.result.summary).toBe("succeeded");
+    expect(continued.spawns.map((s) => [s.profile, s.resume])).toEqual([
+      ["a", null],
+      ["a", null],
+    ]);
+    expect(continued.spawns[1]!.prompt).toContain("# Evidence index of the interrupted work");
+    expect(continued.rotated).toHaveLength(0);
+    expect(continued.receipts.map((r) => [r["carrier"], r["cause"], r["memory"]])).toEqual([
+      ["packet", "transport", "partial"],
+    ]);
+
+    // The bound: a process that keeps dying stops after max_retries continuations, continuable.
+    const bounded = await run({
+      mode: "agent",
+      profiles: ["a", "b"],
+      maxRetries: 2,
+      continuity: null,
+      script: function* ({ spec, emit, tryOfProfile }) {
+        yield emit({ type: "started" });
+        writeFileSync(join(spec.cwd, `part${tryOfProfile}.txt`), "x\n");
+        yield emit({ type: "file_change", payload: { path: `part${tryOfProfile}.txt` } });
+        yield* crash(emit);
+      },
+    });
+    expect(bounded.result.lifecycle).not.toBe("succeeded");
+    expect(bounded.spawns.map((s) => s.profile)).toEqual(["a", "a", "a"]);
+    expect(bounded.resumable).toMatchObject({ cause: "transport", carriers: ["packet"] });
+  });
+
   it("native rejected by the adapter's typed fact → same-account PACKET with the evidence index (1B), never a fresh replay", async () => {
     const o = await run({
       mode: "agent",
