@@ -673,6 +673,27 @@ terminal exists. Native thread/turn ids are control handles, not durable engine
 truth; the daemon journal remains authoritative. Stop pauses an active goal,
 interrupts the exact stored turn id, terminates only background terminals whose
 item ids were observed in that run, verifies quiescence, then reaps app-server.
+Finality belongs to the ROOT thread (`app-server-threads.ts`): Codex may spawn
+native sub-agents whose threads emit their own `turn/started`, items, token
+usage and `turn/completed` on the same stdio stream, so a notification is the
+run's own only when its `threadId` is absent or equal to the thread
+`thread/start`/`thread/resume` returned (per thread, never per turn: a goal
+continuation runs several root turns). Only root frames move the active turn,
+the owned command set, the thread's health (`systemError`), the pending final
+and the terminal candidate; `started.native_turn_id` is the `turn/start` RPC
+result's turn and `completed.native_turn_id` the last root turn. Sub-agent
+frames are not dropped: tool calls/results, thinking, file changes and token
+usage stay on the timeline tagged `payload.native_thread_id` /
+`native_turn_id` / `subagent: true` (their tokens stay in the run's usage), a
+sub-agent's agent TEXT is re-emitted as a `status` event
+(`code: subagent_message`) and never as a `message` (the same rule the claude
+adapter applies to `parent_tool_use_id` frames), its plan progress never
+overwrites the root's, and its lifecycle frames are recognized without
+becoming finality; the terminal discloses `subagent_threads`. After the root
+turn completed, "thread settled" is re-checked on any notification and, in
+silence, after the poll interval. A sub-agent's failed command therefore stays
+tool-warning evidence beside the root's delivered final instead of escalating
+through the deliverable-less tool-error exception.
 Native in-turn retry notices use the existing nonterminal `api_retry` status;
 their wire mapping is documented in INTEGRATIONS' Harness Stream Reference.
 Adapters without a verified prompt transport retain their vendor-specific path.

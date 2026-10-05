@@ -3106,6 +3106,98 @@ describe("Orchestrator", () => {
     );
   });
 
+  it("a native sub-agent's failed command is a warning once the ROOT thread delivered its final", async () => {
+    // The codex app-server adapter owns finality by ROOT thread: a sub-agent's
+    // command failure stays tagged timeline evidence, its text is a status row
+    // (never a message), and the typed final is the root's. With the root
+    // deliverable present the orchestrator keeps the answer and discloses the
+    // child's error as a warning — it no longer escalates through
+    // unrecoveredToolErrorFailure as "failed without recovery".
+    const repo = await initRepo();
+    const child = {
+      native_thread_id: "thread-child",
+      native_turn_id: "turn-child",
+      subagent: true,
+    };
+    const asker = askAdapter("asker", function* (sessionId) {
+      const ts = new Date().toISOString();
+      yield {
+        type: "started",
+        session_id: sessionId,
+        ts,
+        payload: { native_session_id: "thread-root", native_turn_id: "turn-root" },
+      };
+      yield {
+        type: "tool_call",
+        session_id: sessionId,
+        ts,
+        text: "cat missing.py",
+        tool: { name: "command", kind: "command", use_id: "cmd-child", target: "cat missing.py" },
+        payload: { status: "inProgress", item_id: "cmd-child", ...child },
+      };
+      yield {
+        type: "tool_result",
+        session_id: sessionId,
+        ts,
+        text: "tool_result: error: cat: missing.py: No such file or directory",
+        tool: {
+          name: "command",
+          kind: "command",
+          use_id: "cmd-child",
+          target: "cat missing.py",
+          status: "error",
+          exit_code: 1,
+          error_summary: "cat: missing.py: No such file or directory",
+        },
+        payload: { exit_code: 1, status: "failed", item_id: "cmd-child", ...child },
+      };
+      yield {
+        type: "status",
+        session_id: sessionId,
+        ts,
+        text: "[]\nNO_FINDINGS",
+        payload: { code: "subagent_message", ...child },
+      };
+      yield {
+        type: "message",
+        session_id: sessionId,
+        ts,
+        text: "Root verdict: PASS",
+        final: true,
+        payload: { final_source: "last_agent_message" },
+      };
+      yield {
+        type: "completed",
+        session_id: sessionId,
+        ts,
+        payload: {
+          native_session_id: "thread-root",
+          native_turn_id: "turn-root",
+          subagent_threads: 1,
+        },
+      };
+    });
+    const res = await new Orchestrator({
+      registry: new Map([["asker", asker]]),
+      reviewers: [],
+    }).run({ repoRoot: repo, prompt: "review", mode: "ask", harnesses: ["asker"] });
+    expect(res.lifecycle).toBe("succeeded");
+    expect(res.facts.reason ?? null).toBeNull();
+    expect(existsSync(join(res.runDir, "final", "failure.yaml"))).toBe(false);
+    const answer = readFileSync(join(res.runDir, "final", "answer.md"), "utf8");
+    expect(answer).toContain("Root verdict: PASS");
+    expect(answer).not.toContain("NO_FINDINGS");
+    const telemetry = new ArtifactStore(repo).readYaml<{
+      attempts?: Array<{ outcome?: Record<string, unknown> }>;
+    }>(join(res.runDir, "final", "telemetry.yaml"));
+    expect(telemetry?.attempts?.[0]?.outcome).toMatchObject({
+      deliverable_present: true,
+      harness_errored: false,
+      tool_warnings_count: 1,
+      status: "success_with_warnings",
+    });
+  });
+
   it("QA-050: a zero-budget Ask refusal is a typed budget failure (phase=budget, code=finite_zero, route preserved) with budget remediation, never auth/setup", async () => {
     const repo = await initRepo();
     const asker = askAdapter("asker", function* (sessionId) {
