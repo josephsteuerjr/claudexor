@@ -1819,7 +1819,8 @@ describe("Codex app-server root-thread ownership (native sub-agents)", () => {
    * thread/goal/get and thread/backgroundTerminals/list answer from `lifecycle`. */
   function scriptedServer(
     script: (request: Request, push: Push) => void,
-    lifecycle: () => { status: string; goal?: unknown; background?: unknown[] },
+    lifecycle: (method: string) => { status: string; goal?: unknown; background?: unknown[] },
+    afterFrame?: (frame: Record<string, unknown>) => void,
   ) {
     const writes: Request[] = [];
     const replies: string[] = [];
@@ -1837,11 +1838,14 @@ describe("Codex app-server root-thread ownership (native sub-agents)", () => {
           writes.push(request);
           if (request.method === "initialize") push({ id: request.id, result: {} });
           else if (request.method === "thread/read")
-            push({ id: request.id, result: { thread: { status: { type: lifecycle().status } } } });
+            push({
+              id: request.id,
+              result: { thread: { status: { type: lifecycle(request.method).status } } },
+            });
           else if (request.method === "thread/goal/get")
-            push({ id: request.id, result: { goal: lifecycle().goal ?? null } });
+            push({ id: request.id, result: { goal: lifecycle(request.method).goal ?? null } });
           else if (request.method === "thread/backgroundTerminals/list")
-            push({ id: request.id, result: { data: lifecycle().background ?? [] } });
+            push({ id: request.id, result: { data: lifecycle(request.method).background ?? [] } });
           else script(request, push);
         },
         end() {
@@ -1859,8 +1863,11 @@ describe("Codex app-server root-thread ownership (native sub-agents)", () => {
         { once: true },
       );
       while (!stop || replies.length) {
-        if (replies.length) yield { type: "stdout", line: replies.shift()! };
-        else
+        if (replies.length) {
+          const line = replies.shift()!;
+          yield { type: "stdout", line };
+          afterFrame?.(JSON.parse(line));
+        } else
           await new Promise<void>((resolve) => {
             wake = resolve;
           });
@@ -1883,6 +1890,7 @@ describe("Codex app-server root-thread ownership (native sub-agents)", () => {
   async function collect(
     spawn: typeof spawnProcess,
     specExtra: Record<string, unknown> = {},
+    controller?: CodexAppServerController,
   ): Promise<HarnessEvent[]> {
     const events: HarnessEvent[] = [];
     for await (const event of runCodexAppServer({
@@ -1897,11 +1905,302 @@ describe("Codex app-server root-thread ownership (native sub-agents)", () => {
       }),
       env: {},
       spawn,
+      controller,
       pollIntervalMs: 0,
     }))
       events.push(event);
     return events;
   }
+
+  // Each bit independently places one child notification before/after the RPC
+  // reply. Exercise the real loop, including immediate control-state effects.
+  const startupCases = ["start", "resume"].flatMap((operation) =>
+    Array.from({ length: 16 }, (_, beforeMask) => ({ operation, beforeMask })),
+  );
+  it.each(startupCases)(
+    "classifies child notifications around thread/$operation (before mask $beforeMask)",
+    async ({ operation, beforeMask }) => {
+      const controller = new CodexAppServerController();
+      let earlySteer: ReturnType<typeof controller.steer> | undefined;
+      let backgroundReads = 0;
+      const command = { type: "commandExecution", id: "cmd-child", command: "cat missing.py" };
+      const frames = [
+        {
+          method: "thread/status/changed",
+          params: { threadId: CHILD, status: { type: "systemError" } },
+        },
+        {
+          method: "item/started",
+          params: {
+            threadId: CHILD,
+            turnId: "turn-child",
+            item: { ...command, status: "inProgress" },
+          },
+        },
+        turnStarted(CHILD, "turn-child"),
+        agentMessage(CHILD, "turn-child", "msg-child", "child answer"),
+      ];
+      const server = scriptedServer(
+        (request, push) => {
+          if (request.method === `thread/${operation}`) {
+            frames.forEach((frame, index) => {
+              if (beforeMask & (1 << index)) push(frame);
+            });
+            push({ id: request.id, result: { thread: { id: ROOT } } });
+            frames.forEach((frame, index) => {
+              if (!(beforeMask & (1 << index))) push(frame);
+            });
+          } else if (request.method === "turn/steer") {
+            push({ id: request.id, result: { turnId: "turn-child" } });
+          } else if (request.method === "turn/start") {
+            // No root turn exists yet: an early child turn must not become a
+            // steer target merely because the thread reply has now arrived.
+            earlySteer = controller.steer({ messageId: "early-steer", text: "focus" });
+            push({ id: request.id, result: { turn: { id: "turn-root" } } });
+            push(turnStarted(ROOT, "turn-root"));
+            push({
+              method: "item/completed",
+              params: {
+                threadId: CHILD,
+                turnId: "turn-child",
+                item: {
+                  ...command,
+                  status: "failed",
+                  exitCode: 1,
+                  aggregatedOutput: "missing file",
+                },
+              },
+            });
+            for (const threadId of [CHILD, ROOT])
+              push({
+                method: "thread/tokenUsage/updated",
+                params: { threadId, tokenUsage: { last: { inputTokens: 17, outputTokens: 3 } } },
+              });
+            push(turnCompleted(CHILD, "turn-child", "failed"));
+            push(agentMessage(ROOT, "turn-root", "msg-root", "root answer"));
+            push(turnCompleted(ROOT, "turn-root"));
+          }
+        },
+        (method) => ({
+          status: "idle",
+          // If incorrectly owned, this child terminal forces an extra poll.
+          background:
+            method === "thread/backgroundTerminals/list" && backgroundReads++ === 0
+              ? [{ itemId: "cmd-child", processId: "process-child" }]
+              : [],
+        }),
+      );
+      const events = await collect(
+        server.spawn,
+        operation === "resume" ? { resume_session_id: ROOT } : {},
+        controller,
+      );
+      for (const event of events) expect(HarnessEvent.safeParse(event).success).toBe(true);
+      expect(events.filter((event) => event.type === "error")).toEqual([]);
+      expect(events.filter((event) => event.final)).toEqual([
+        expect.objectContaining({ type: "message", text: "root answer", final: true }),
+      ]);
+      expect(
+        events
+          .filter((event) => event.type === "message")
+          .every((event) => event.text === "root answer"),
+      ).toBe(true);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "status",
+          text: "child answer",
+          payload: expect.objectContaining({
+            code: "subagent_message",
+            native_thread_id: CHILD,
+            subagent: true,
+          }),
+        }),
+      );
+      expect(events.filter((event) => event.tool?.use_id === "cmd-child")).toEqual([
+        expect.objectContaining({
+          type: "tool_call",
+          payload: expect.objectContaining({ subagent: true }),
+        }),
+        expect.objectContaining({
+          type: "tool_result",
+          tool: expect.objectContaining({ status: "error", exit_code: 1 }),
+          payload: expect.objectContaining({ subagent: true }),
+        }),
+      ]);
+      expect(
+        events.filter((event) => event.type === "usage").map((event) => event.usage?.input_tokens),
+      ).toEqual([17, 17]);
+      expect(events[0]).toMatchObject({
+        type: "started",
+        payload: { native_session_id: ROOT, native_turn_id: "turn-root" },
+      });
+      expect(events.at(-1)).toMatchObject({
+        type: "completed",
+        payload: { native_session_id: ROOT, native_turn_id: "turn-root", subagent_threads: 1 },
+      });
+      expect(events.at(-1)?.payload).not.toHaveProperty("harness_reported_error");
+      await expect(earlySteer).resolves.toEqual({
+        outcome: "not_active",
+        reason: "no_active_turn",
+      });
+      expect(server.writes.filter((request) => request.method === "turn/steer")).toEqual([]);
+      expect(backgroundReads).toBe(1);
+      if (operation === "resume")
+        expect(
+          server.writes.find((request) => request.method === "thread/resume")?.params,
+        ).toMatchObject({ threadId: ROOT });
+    },
+  );
+
+  it.each(["start", "resume"])(
+    "retains root systemError received before thread/%s replies",
+    async (operation) => {
+      const server = scriptedServer(
+        (request, push) => {
+          if (request.method === `thread/${operation}`) {
+            push({
+              method: "thread/status/changed",
+              params: { threadId: ROOT, status: { type: "systemError" } },
+            });
+            push({ id: request.id, result: { thread: { id: ROOT } } });
+          } else if (request.method === "turn/start") {
+            push({ id: request.id, result: { turn: { id: "turn-root" } } });
+            push(turnStarted(ROOT, "turn-root"));
+            push(agentMessage(ROOT, "turn-root", "msg-root", "root answer"));
+            push(turnCompleted(ROOT, "turn-root"));
+          }
+        },
+        () => ({ status: "idle" }),
+      );
+      const events = await collect(
+        server.spawn,
+        operation === "resume" ? { resume_session_id: ROOT } : {},
+      );
+      expect(events.filter((event) => event.type === "error")).toEqual([
+        expect.objectContaining({ error: "Codex app-server thread settled in systemError" }),
+      ]);
+      expect(events.filter((event) => event.final)).toEqual([]);
+      expect(events.at(-1)?.payload).toMatchObject({ harness_reported_error: true });
+    },
+  );
+
+  it("binds a resumed root before the reply so an early root turn can be steered", async () => {
+    const controller = new CodexAppServerController();
+    let earlySteer: ReturnType<typeof controller.steer> | undefined;
+    const server = scriptedServer(
+      (request, push) => {
+        if (request.method === "thread/resume") {
+          push(turnStarted(ROOT, "turn-inherited"));
+          push(turnStarted(CHILD, "turn-child"));
+          push({ id: request.id, result: { thread: { id: ROOT } } });
+        } else if (request.method === "turn/steer") {
+          push({ id: request.id, result: { turnId: "turn-inherited" } });
+        } else if (request.method === "turn/start") {
+          push({ id: request.id, result: { turn: { id: "turn-root" } } });
+          push(turnStarted(ROOT, "turn-root"));
+          push(agentMessage(ROOT, "turn-root", "msg-root", "root answer"));
+          push(turnCompleted(ROOT, "turn-root"));
+        }
+      },
+      () => ({ status: "idle" }),
+      (frame) => {
+        const params = frame.params as Record<string, unknown> | undefined;
+        if (frame.method === "turn/started" && params?.threadId === CHILD)
+          earlySteer = controller.steer({ messageId: "early-steer", text: "focus" });
+      },
+    );
+    const events = await collect(server.spawn, { resume_session_id: ROOT }, controller);
+    await expect(earlySteer).resolves.toEqual({
+      outcome: "accepted",
+      nativeTurnId: "turn-inherited",
+    });
+    expect(server.writes.find((request) => request.method === "turn/steer")?.params).toMatchObject({
+      threadId: ROOT,
+      expectedTurnId: "turn-inherited",
+    });
+    expect(events.filter((event) => event.final)).toEqual([
+      expect.objectContaining({ text: "root answer", final: true }),
+    ]);
+  });
+
+  it.each([false, true])(
+    "replays early root effects in order after start (turn completed=%s)",
+    async (completed) => {
+      const controller = new CodexAppServerController();
+      let earlySteer: ReturnType<typeof controller.steer> | undefined;
+      let backgroundReads = 0;
+      const server = scriptedServer(
+        (request, push) => {
+          if (request.method === "thread/start") {
+            push(turnStarted(ROOT, "turn-inherited"));
+            push({
+              method: "item/started",
+              params: {
+                threadId: ROOT,
+                item: {
+                  type: "commandExecution",
+                  id: "cmd-root",
+                  command: "sleep 1",
+                  status: "inProgress",
+                },
+              },
+            });
+            if (completed) push(turnCompleted(ROOT, "turn-inherited"));
+            push(turnStarted(CHILD, "turn-child"));
+            // Legacy untagged MCP frames also wait for root binding; their order
+            // matters because a reversed replay would leave this server starting.
+            for (const status of ["starting", "ready"])
+              push({
+                method: "mcpServer/startupStatus/updated",
+                params: { name: "required_one", status },
+              });
+            push({ id: request.id, result: { thread: { id: ROOT } } });
+          } else if (request.method === "turn/start") {
+            earlySteer = controller.steer({ messageId: "early-steer", text: "focus" });
+            push({ id: request.id, result: { turn: { id: "turn-root" } } });
+            push(turnStarted(ROOT, "turn-root"));
+            push(agentMessage(ROOT, "turn-root", "msg-root", "root answer"));
+            push(turnCompleted(ROOT, "turn-root"));
+          } else if (request.method === "turn/steer") {
+            push({ id: request.id, result: { turnId: request.params?.expectedTurnId } });
+          }
+        },
+        (method) => ({
+          status: "idle",
+          background:
+            method === "thread/backgroundTerminals/list" && backgroundReads++ === 0
+              ? [{ itemId: "cmd-root", processId: "process-root" }]
+              : [],
+        }),
+      );
+      const events = await collect(
+        server.spawn,
+        {
+          extra_mcp_servers: [
+            { name: "required_one", command: "/bin/echo", args: [], env: {}, required: true },
+          ],
+        },
+        controller,
+      );
+      await expect(earlySteer).resolves.toEqual(
+        completed
+          ? { outcome: "not_active", reason: "no_active_turn" }
+          : { outcome: "accepted", nativeTurnId: "turn-inherited" },
+      );
+      expect(backgroundReads).toBeGreaterThanOrEqual(2);
+      expect(events.filter((event) => event.type === "error")).toEqual([]);
+      expect(events.filter((event) => event.final)).toEqual([
+        expect.objectContaining({ text: "root answer", final: true }),
+      ]);
+      expect(events[0]?.payload?.mcp_servers).toEqual([
+        { name: "required_one", status: "connected" },
+      ]);
+      expect(events.find((event) => event.type === "tool_call")?.payload).not.toHaveProperty(
+        "subagent",
+      );
+    },
+    2_000,
+  );
 
   it("finalizes the ROOT turn when a sub-agent turn finishes last with different text", async () => {
     const server = scriptedServer(

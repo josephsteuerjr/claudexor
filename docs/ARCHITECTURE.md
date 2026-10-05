@@ -729,8 +729,10 @@ native sub-agents whose threads emit their own `turn/started`, items, token
 usage and `turn/completed` on the same stdio stream, so a notification is the
 run's own only when its `threadId` is absent or equal to the thread
 `thread/start`/`thread/resume` returned (per thread, never per turn: a goal
-continuation runs several root turns). Only root frames move the active turn,
-the owned command set, the thread's health (`systemError`), the pending final
+continuation runs several root turns). Resume binds the requested thread id
+before sending the RPC. Start buffers notification state effects until its reply
+identifies the root, then classifies them in arrival order. Only root frames move
+the active turn, the owned command set, the thread's health (`systemError`), the pending final
 and the terminal candidate; `started.native_turn_id` is the `turn/start` RPC
 result's turn and `completed.native_turn_id` the last root turn. Sub-agent
 frames are not dropped: tool calls/results, thinking, file changes and token

@@ -14,7 +14,8 @@ import { parseCodexEvent, type CodexParseState } from "./parse.js";
  * last agent message is the answer, and its `thread/status/changed systemError`
  * fails the run. Ownership is per THREAD, never per turn: a goal continuation
  * legitimately runs several root turns in one run. A frame without a
- * `threadId` (older shapes, `thread/started`) is the root's.
+ * `threadId` (older shapes, `thread/started`) is the root's once the root is
+ * known. Before binding, notifications must wait for classification.
  */
 export function notificationThreadId(params: JsonObject | null): string | null {
   const threadId = params?.["threadId"];
@@ -23,7 +24,7 @@ export function notificationThreadId(params: JsonObject | null): string | null {
 
 export function ownsNotification(params: JsonObject | null, rootThreadId: string | null): boolean {
   const threadId = notificationThreadId(params);
-  return threadId === null || rootThreadId === null || threadId === rootThreadId;
+  return rootThreadId !== null && (threadId === null || threadId === rootThreadId);
 }
 
 /** Sub-agent lifecycle frames: recognized (never "dropped"), never finality. */

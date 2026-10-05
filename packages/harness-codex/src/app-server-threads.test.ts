@@ -13,8 +13,10 @@ describe("root-thread ownership of app-server notifications", () => {
     expect(ownsNotification({ turn: { id: "turn-1" } }, "thread-root")).toBe(true);
     expect(ownsNotification({ threadId: "thread-root" }, "thread-root")).toBe(true);
     expect(ownsNotification({ threadId: "thread-child" }, "thread-root")).toBe(false);
-    // Before the root thread is known nothing can be foreign.
-    expect(ownsNotification({ threadId: "thread-child" }, null)).toBe(true);
+    // Unknown ownership must wait for the start reply, including legacy frames.
+    expect(ownsNotification({ threadId: "thread-child" }, null)).toBe(false);
+    expect(ownsNotification({ threadId: "thread-root" }, null)).toBe(false);
+    expect(ownsNotification(null, null)).toBe(false);
     expect(notificationThreadId({ threadId: 7 })).toBeNull();
     expect(notificationThreadId({ threadId: "thread-child" })).toBe("thread-child");
   });

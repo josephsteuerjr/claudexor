@@ -60,7 +60,7 @@ export async function* runCodexAppServer(
   let nextId = 1;
   let processFailure: Error | null = null;
   let processStopped = false;
-  let nativeThreadId: string | null = null;
+  let nativeThreadId: string | null = input.spec.resume_session_id ?? null;
   let activeTurnId: string | null = null;
   const ownedCommandItemIds = new Set<string>();
   const subagents = new CodexSubagentThreads();
@@ -106,7 +106,10 @@ export async function* runCodexAppServer(
   };
   // Root-thread state only (app-server-threads.ts): a sub-agent thread's frames
   // never move the active turn, the owned command set, or the thread's health.
-  const observeOwnNotification = (method: string, params: JsonObject | null): void => {
+  const observeOwnNotification = (notification: JsonObject): void => {
+    const method = notification["method"];
+    const params = asObject(notification["params"]);
+    if (!ownsNotification(params, nativeThreadId)) return;
     if (method === "turn/started") {
       const turn = asObject(params?.["turn"]);
       if (typeof turn?.["id"] === "string") activeTurnId = turn["id"];
@@ -161,9 +164,7 @@ export async function* runCodexAppServer(
       return;
     }
     if (typeof object["method"] === "string") {
-      const params = asObject(object["params"]);
-      if (ownsNotification(params, nativeThreadId))
-        observeOwnNotification(object["method"], params);
+      observeOwnNotification(object);
       steer.observeEcho(object);
       notifications.push(object);
       notificationWaiter.wake?.();
@@ -253,12 +254,13 @@ export async function* runCodexAppServer(
   const nextNotification = async (
     method: string,
     accept: (params: JsonObject | null) => boolean = () => true,
+    consume = true,
   ): Promise<JsonObject> => {
     for (;;) {
       const index = notifications.findIndex(
         (item) => item["method"] === method && accept(asObject(item["params"])),
       );
-      if (index >= 0) return notifications.splice(index, 1)[0]!;
+      if (index >= 0) return consume ? notifications.splice(index, 1)[0]! : notifications[index]!;
       if (processFailure) throw processFailure;
       await new Promise<void>((resolve) => {
         notificationWaiter.wake = resolve;
@@ -357,7 +359,11 @@ export async function* runCodexAppServer(
     const thread = asObject(threadResult["thread"]);
     const threadId = thread?.["id"];
     if (typeof threadId !== "string") throw new Error("Codex app-server omitted thread id");
+    const rootWasUnknown = nativeThreadId === null;
     nativeThreadId = threadId;
+    // Nothing has consumed this queue yet. Classify startup state effects in
+    // arrival order now that start named the root; resume was bound upfront.
+    if (rootWasUnknown) notifications.forEach(observeOwnNotification);
     await waitForRequiredMcp();
     const turnResult = await request("turn/start", {
       threadId,
@@ -377,6 +383,9 @@ export async function* runCodexAppServer(
         ownsNotification(params, threadId) &&
         (typeof requestedTurnId !== "string" ||
           asObject(params?.["turn"])?.["id"] === requestedTurnId),
+      // Keep the start in timeline order: an earlier root completion must see
+      // the new turn queued before it can become the terminal candidate.
+      false,
     );
     const turnId =
       typeof requestedTurnId === "string"
