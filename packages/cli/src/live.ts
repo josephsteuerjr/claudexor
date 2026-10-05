@@ -9,6 +9,7 @@ import {
   InteractionQuestion as InteractionQuestionSchema,
   RunOutcomeFacts as RunOutcomeFactsSchema,
   continuityLabel,
+  laneSwitchedFromPayload,
   outcomeExitCode,
   processExitCode,
   runOutcomeLabel,
@@ -94,19 +95,7 @@ export function formatRunEventLine(ev: Record<string, unknown>): string | null {
         kind: (p["kind"] as "native_resume" | "packet" | "fresh") ?? "fresh",
         packetTurns: typeof p["packet_turns"] === "number" ? p["packet_turns"] : 0,
         summarized: p["summarized"] === true,
-        laneSwitchedFrom:
-          p["lane_switched_from"] && typeof p["lane_switched_from"] === "object"
-            ? {
-                harness: String(
-                  (p["lane_switched_from"] as Record<string, unknown>)["harness"] ?? "?",
-                ),
-                profileId:
-                  typeof (p["lane_switched_from"] as Record<string, unknown>)["profileId"] ===
-                  "string"
-                    ? String((p["lane_switched_from"] as Record<string, unknown>)["profileId"])
-                    : null,
-              }
-            : null,
+        laneSwitchedFrom: laneSwitchedFromPayload(p["lane_switched_from"]),
       });
       return line;
     }

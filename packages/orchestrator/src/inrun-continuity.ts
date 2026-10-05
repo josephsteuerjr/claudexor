@@ -25,8 +25,6 @@
  * resumed try never re-opens the `fresh` rung. Hops are bounded by
  * `triedProfiles`; same-account continuations by `max_retries` (A2).
  */
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   CONTINUITY_IDENTITY_MISMATCH_CODE,
   acceptedTryOutput,
@@ -35,7 +33,6 @@ import {
 } from "@claudexor/core";
 import {
   HarnessRunSpec as HarnessRunSpecSchema,
-  RunContinuityReceipt as RunContinuityReceiptSchema,
   type ContinuityIdentityCheck,
   type CredentialProfile,
   type HarnessEvent,
@@ -50,9 +47,16 @@ import {
 } from "@claudexor/schema";
 import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
 import type { AttemptTelemetry, TransientFailureObservation } from "./attemptTelemetry.js";
-import { decideCarrier, prepareCarrier, type CarrierFacts } from "./carrier-planner.js";
-import { diffStatFromPatch, steeringFromRunLog } from "./continuation-evidence-io.js";
-import { continuationNotice, packetContinuationPrompt } from "./continuity-notice.js";
+import {
+  composeContinuedTry,
+  continuityReceipt,
+  discloseMovedSession,
+  relocateCapsule,
+  resumableBlock,
+  uncertainInputFor,
+  type ContinuedTry,
+  type LimitEvidenceState,
+} from "./inrun-continuity-carrier.js";
 import {
   effectiveLimitAction,
   limitSubjectRoute,
@@ -64,13 +68,7 @@ import { emitTransientRetryPlan } from "./laneStreamEvents.js";
 import { rotatedSpecInLaneHome } from "./orchestrator-credentials.js";
 import type { PreProgressRefusalSubject } from "./pre-progress-refusal.js";
 import { transientRetryDelayMs, type TransientRetryPolicy } from "./runSupport.js";
-import {
-  readSessionCapsule,
-  registryProfile,
-  relocateSessionCapsule,
-  storeEnvFor,
-  writeSessionCapsule,
-} from "./session-capsule.js";
+import { readSessionCapsule, writeSessionCapsule } from "./session-capsule.js";
 
 type ContinuityEmit = (type: RunEventType, payload: Record<string, unknown>) => void;
 
@@ -162,21 +160,6 @@ export type AfterTryVerdict =
   /** A typed terminal (pinned limit, pool spent): the loop records the error and stops. */
   | { kind: "terminal"; error: Error }
   | { kind: "break" };
-
-interface ContinuedTry {
-  carrier: RunContinuityReceipt["carrier"];
-  cause: ResumableCause;
-  fromProfileId: string | null;
-  toProfileId: string | null;
-  memory: RunContinuityReceipt["memory"];
-  inputDelivery: RunContinuityReceipt["inputDelivery"];
-}
-
-interface LimitEvidenceState {
-  resetsAt: string | null;
-  retryDelayMs: number | null;
-  constraintId: string | null;
-}
 
 const TYPED_REFUSALS = new Set(["auth_failed", "capability_refused", "config_error"]);
 
@@ -341,35 +324,15 @@ export class InRunContinuity {
   }
 
   resumable(cause: ResumableCause): RunResumable {
-    const session = this.capsule && !this.nativeRejected ? this.capsule : null;
-    const carriers: RunResumable["carriers"] = [];
-    if (session) {
-      carriers.push("native");
-      if (this.deps.adapter.continuity) carriers.push("native_moved");
-    }
-    if (this.acted) carriers.push("packet");
-    return {
+    return resumableBlock({
+      deps: this.deps,
       cause,
-      resetsAt: this.limit?.resetsAt ?? null,
-      limitWindow: this.limit?.constraintId ?? null,
-      limitEvidence: this.limit
-        ? this.limit.resetsAt || this.limit.constraintId
-          ? "window"
-          : "unspecified"
-        : null,
-      carriers,
-      limitCode: this.terminalCode ?? (this.limit ? "vendor_limit_rejected" : null),
-      session: session
-        ? {
-            harness: session.harness,
-            nativeSessionId: session.nativeSessionId,
-            holderProfileId: session.holderProfileId,
-          }
-        : null,
-      workspace: this.deps.inPlace
-        ? { kind: "in_place", root: this.deps.cwd }
-        : { kind: "none", root: null },
-    };
+      capsule: this.capsule,
+      nativeRejected: this.nativeRejected,
+      acted: this.acted,
+      limit: this.limit,
+      terminalCode: this.terminalCode,
+    });
   }
 
   private breakWith(cause: ResumableCause): AfterTryVerdict {
@@ -568,143 +531,35 @@ export class InRunContinuity {
     cause: ResumableCause,
     delayMs: number,
   ): Promise<AfterTryVerdict> {
-    const from = facts.runSpec.credential_profile?.profile_id ?? null;
-    const to = base.credential_profile?.profile_id ?? null;
-    const effectiveModel = facts.telemetry.observedModel ?? base.model_hint ?? null;
-    const carrierFacts: CarrierFacts = {
-      capsule: this.capsule,
-      acted: this.acted,
-      cause,
-      sourceProfile: this.profileRef(facts.runSpec, from),
-      targetProfile: this.profileRef(base, to),
-      effectiveModel,
-      preference: "auto",
-      adapter: this.deps.adapter,
-      nativeRejected: this.nativeRejected,
-    };
-    const decision = decideCarrier(carrierFacts);
-    const prepared = await prepareCarrier(decision, {
-      facts: carrierFacts,
-      evidence: {
-        runDir: this.deps.runDir,
-        attemptId: this.deps.attemptId,
-        workOrder: this.deps.workOrder,
-        steering: [],
+    const composed = await composeContinuedTry(
+      {
+        deps: this.deps,
+        capsule: this.capsule,
+        acted: this.acted,
+        nativeRejected: this.nativeRejected,
+        tryIndex: this.tryIndex,
+        uncertainInput: uncertainInputFor(this.deps.runDir, this.previousTryUnstarted),
       },
-      targetCwd: base.cwd,
-      retainedOutput: acceptedTryOutput(facts.answer, facts.harnessErrored) || facts.answer.text(),
-      diffStat: facts.currentDiff ? diffStatFromPatch(facts.currentDiff) : null,
-    });
-    const uncertain = this.uncertainInput();
-    const notice = continuationNotice({ cause, uncertainInput: uncertain, callerText: null });
-    const inputDelivery = uncertain === null ? "confirmed" : "uncertain";
-    if (prepared.carrier === "fresh") {
-      this.continued = null;
-      return { kind: "continue", spec: base, delayMs };
-    }
-    // A null model hint must not re-resolve to another default on a new session (§7.1).
-    const modelHint = base.model_hint ?? (prepared.carrier === "packet" ? effectiveModel : null);
-    let spec: HarnessRunSpec;
-    if (prepared.carrier === "packet") {
-      const dir = join(this.deps.attemptDir, "continuation");
-      mkdirSync(dir, { recursive: true });
-      const evidencePath = join(dir, `evidence-index-try${this.tryIndex + 1}.md`);
-      writeFileSync(evidencePath, prepared.packet.markdown);
-      spec = HarnessRunSpecSchema.parse({
-        ...base,
-        model_hint: modelHint,
-        resume_session_id: null,
-        prompt: packetContinuationPrompt({
-          originalPrompt: this.deps.firstPrompt,
-          notice,
-          evidencePath,
-          evidenceMarkdown: prepared.packet.markdown,
-        }),
-      });
-    } else {
-      this.capsule = prepared.capsule;
-      writeSessionCapsule(this.deps.attemptDir, prepared.capsule);
-      spec = HarnessRunSpecSchema.parse({
-        ...base,
-        model_hint: modelHint,
-        resume_session_id: prepared.resumeRef.nativeSessionId,
-        prompt: notice,
-      });
-      if (prepared.carrier === "native_moved") this.discloseMove(prepared.capsule, from, to);
-    }
-    this.continued = {
-      carrier: prepared.carrier,
+      facts,
+      base,
       cause,
-      fromProfileId: from,
-      toProfileId: to,
-      memory: prepared.carrier === "packet" ? "partial" : "full",
-      inputDelivery,
-    };
-    return { kind: "continue", spec, delayMs };
-  }
-
-  private profileRef(spec: HarnessRunSpec, profileId: string | null) {
-    const row = registryProfile(this.deps.registry, profileId);
-    return {
-      profileId,
-      env: storeEnvFor(spec.env, row),
-      storeLocator: row?.isolation_locator ?? null,
-    };
-  }
-
-  /** The predecessor's input that may not be in the vendor history: the last
-   * try's prompt when it died before `started`, plus admitted-but-unconfirmed
-   * steering messages (`message.accepted` with no `message.delivered`). */
-  private uncertainInput(): string | null {
-    const parts: string[] = [];
-    if (this.previousTryUnstarted) parts.push(this.previousTryUnstarted.slice(0, 2048));
-    for (const message of steeringFromRunLog(this.deps.runDir))
-      if (message.delivery === "uncertain") parts.push(message.text.slice(0, 2048));
-    return parts.length ? parts.join("\n\n") : null;
-  }
-
-  /** INV-137: a moved session on a thread lane is a disclosed lane switch that
-   * resumes natively; its row is published only when the file survives dispose. */
-  private discloseMove(capsule: SessionCapsule, from: string | null, to: string | null): void {
-    const thread = this.deps.thread;
-    if (!thread) return;
-    const survives =
-      this.deps.inPlace ||
-      !capsule.file ||
-      !this.deps.isolatedHomeDir ||
-      !capsule.file.startsWith(this.deps.isolatedHomeDir);
-    if (survives)
-      thread.onSessionObserved?.(this.deps.adapter.id, capsule.nativeSessionId, this.tryModel, to);
-    this.deps.emit("session.continuity", {
-      thread_id: thread.threadId,
-      harness_id: this.deps.adapter.id,
-      kind: "native_resume",
-      packet_turns: 0,
-      summarized: false,
-      lane_switched_from: { harness: this.deps.adapter.id, profileId: from },
-      moved: true,
-    });
-    if (thread.turnId)
-      thread.onContinuityResolved?.(thread.turnId, {
-        kind: "native_resume",
-        packetTurns: 0,
-        summarized: false,
-        laneSwitchedFrom: { harness: this.deps.adapter.id, profileId: from },
-      });
+      delayMs,
+    );
+    this.continued = composed.continued;
+    if (composed.capsule) this.capsule = composed.capsule;
+    if (composed.moved && composed.capsule)
+      discloseMovedSession(
+        this.deps,
+        composed.capsule,
+        composed.moved.from,
+        composed.moved.to,
+        this.tryModel,
+      );
+    return composed.verdict;
   }
 
   private async relocate(runSpec: HarnessRunSpec): Promise<void> {
-    if (!this.capsule) return;
-    const holder = registryProfile(this.deps.registry, this.capsule.holderProfileId);
-    const located = await relocateSessionCapsule(
-      this.capsule,
-      this.deps.adapter.continuity,
-      storeEnvFor(runSpec.env, holder),
-    );
-    if (located.located === true) {
-      this.capsule = located.capsule;
-      writeSessionCapsule(this.deps.attemptDir, this.capsule);
-    }
+    if (this.capsule) this.capsule = await relocateCapsule(this.deps, this.capsule, runSpec);
   }
 
   /** The receipt of a continued try, emitted when the try settles (per-try model attestation). */
@@ -712,33 +567,20 @@ export class InRunContinuity {
     const continued = this.continued;
     if (!continued) return;
     this.continued = null;
-    const requested = this.tryRequestedModel;
-    const observed = this.tryModel;
-    const receipt: RunContinuityReceipt = RunContinuityReceiptSchema.parse({
-      tryIndex: this.tryIndex,
-      attemptId: this.deps.attemptId,
-      carrier: continued.carrier,
-      cause: continued.cause,
-      from: {
-        runId: this.deps.runId,
-        attemptId: this.deps.attemptId,
-        profileId: continued.fromProfileId,
-      },
-      to: { profileId: continued.toProfileId },
-      workspace: "same_root",
-      memory: continued.memory === "full" && this.nativeRejected ? "unknown" : continued.memory,
-      instructions: "as_sent",
-      reingestedTokens: this.tryFirstInputTokens,
-      observedModel: observed,
-      modelMismatch: requested !== null && observed !== null ? requested !== observed : null,
-      identityCheck: continued.carrier === "packet" ? "not_applicable" : this.tryIdentity,
-      inputDelivery: continued.inputDelivery,
-    });
     this.deps.emit("run.continuity", {
       harness_id: this.deps.adapter.id,
       attempt_id: this.deps.attemptId,
       session_id: runSpec.session_id,
-      receipt,
+      receipt: continuityReceipt({
+        deps: this.deps,
+        continued,
+        tryIndex: this.tryIndex,
+        requestedModel: this.tryRequestedModel,
+        observedModel: this.tryModel,
+        nativeRejected: this.nativeRejected,
+        identity: this.tryIdentity,
+        reingestedTokens: this.tryFirstInputTokens,
+      }),
     });
   }
 }

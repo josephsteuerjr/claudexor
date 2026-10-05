@@ -191,6 +191,18 @@ function outcomeHeadline(
  * including a native resume on ANOTHER lane, which means the session was
  * MOVED to that account mid-run and continued natively there.
  */
+/** The lane a disclosure payload switched away from (`lane_switched_from`), typed from an event payload. */
+export function laneSwitchedFromPayload(
+  value: unknown,
+): { harness: string; profileId: string | null } | null {
+  if (!value || typeof value !== "object") return null;
+  const lane = value as Record<string, unknown>;
+  return {
+    harness: String(lane["harness"] ?? "?"),
+    profileId: typeof lane["profileId"] === "string" ? lane["profileId"] : null,
+  };
+}
+
 export function continuityLabel(disclosure: {
   kind: "native_resume" | "packet" | "fresh";
   packetTurns?: number;
