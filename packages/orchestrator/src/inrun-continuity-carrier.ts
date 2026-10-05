@@ -92,7 +92,11 @@ export async function composeContinuedTry(
     capsule: ctx.capsule,
     acted: ctx.acted,
     cause,
-    sourceProfile: profileRef(deps, facts.runSpec, from),
+    sourceProfile: profileRef(
+      deps,
+      facts.runSpec,
+      ctx.capsule ? ctx.capsule.holderProfileId : from,
+    ),
     targetProfile: profileRef(deps, base, to),
     effectiveModel,
     preference: "auto",
@@ -123,12 +127,12 @@ export async function composeContinuedTry(
     uncertainInput: ctx.uncertainInput,
     callerText: null,
   });
-  // A null model hint must not re-resolve to another default on a new session
-  // (§7.1): the packet pins the attested model, but only an id the route itself
+  // A null hint must not re-resolve to another default on any continued try:
+  // native and packet carriers pin the attested model, but only an id the route itself
   // lists — an observed display label is never sent as a model id.
   const attested = facts.telemetry.observedModel;
   const pinned =
-    base.model_hint == null && prepared.carrier === "packet" && attested
+    base.model_hint == null && attested
       ? !!deps.route && (await routeListsModel(deps.route, base, attested))
       : false;
   const modelHint = base.model_hint ?? (pinned ? attested : null);
@@ -160,6 +164,7 @@ export async function composeContinuedTry(
     return { verdict: { kind: "continue", spec, delayMs }, continued, capsule: null };
   }
   writeSessionCapsule(deps.attemptDir, prepared.capsule);
+  await prepared.retire?.();
   const spec = HarnessRunSpecSchema.parse({
     ...base,
     model_hint: modelHint,

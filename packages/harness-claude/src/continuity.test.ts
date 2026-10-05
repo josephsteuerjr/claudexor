@@ -75,7 +75,10 @@ describe("claude continuity", () => {
       envB,
       "/w2",
     );
-    expect(moved).toEqual({ ok: true, resumeRef: { nativeSessionId: "sid-2" } });
+    expect(moved).toMatchObject({ ok: true, resumeRef: { nativeSessionId: "sid-2" } });
+    expect(existsSync(file)).toBe(true);
+    if (!moved.ok) throw new Error(moved.reason);
+    await moved.retire?.();
     const targetDir = join(b, "projects", claudeProjectDirName("/w2"));
     expect(readFileSync(join(targetDir, "sid-2.jsonl"), "utf8")).toContain("sid-2");
     expect(readFileSync(join(targetDir, "sid-2", "tool-results", "big.txt"), "utf8")).toBe(
@@ -105,4 +108,21 @@ describe("claude continuity", () => {
     );
     expect(reject({ ...base, type: "message", text: "400" })).toBe(false);
   });
+});
+
+it("a failed sidecar copy removes the copied destination transcript and keeps the source", async () => {
+  const a = store(process.env.CLAUDEXOR_CONFIG_DIR!, "failed-a");
+  const b = store(process.env.CLAUDEXOR_CONFIG_DIR!, "failed-b");
+  const file = seed(a, "/w", "sid-failed", true);
+  const moved = await claudeContinuity.move(
+    { file, sidecars: [join(a, "missing-sidecar")] },
+    { CLAUDEXOR_PROFILE_LOCATOR: a },
+    { CLAUDEXOR_PROFILE_LOCATOR: b },
+    "/w",
+  );
+  expect(moved.ok).toBe(false);
+  expect(existsSync(file)).toBe(true);
+  expect(existsSync(join(b, "projects", claudeProjectDirName("/w"), "sid-failed.jsonl"))).toBe(
+    false,
+  );
 });

@@ -3997,7 +3997,11 @@ transient rules above byte for byte. After progress: a typed vendor limit on an
 unpinned `rotate` route hops to the next eligible account and the next try
 carries the work — `native_moved` when the adapter's `continuity` located the
 session and moved it into the target store (claude: `<sid>.jsonl` + `<sid>/`
-sidecars; codex: every rollout part), else `packet` (a fresh session whose
+sidecars; codex: every rollout part). The capsule's holder is the source, even
+if another account's packet try failed before starting. A move copies and
+verifies all parts, then the engine writes the target capsule and invokes the
+adapter's retirement callback; a failed move removes its destination copies.
+When moving is unavailable, the carrier is `packet` (a fresh session whose
 prompt is the original prompt plus the bounded evidence index; owner answer
 1B) — never a fresh replay; a transport death (errored, not aborted, not a
 typed refusal, not context exhaustion) resumes the same session on the same
@@ -4011,7 +4015,9 @@ the user prompt is one constant notice ("the previous process stopped …
 continue from where it stopped … a cut-off tool call may or may not have taken
 effect … finish with a self-contained final message") — the original prompt
 is never resent and `instructions` are untouched (Claude resends its recorded
-system prompt on resume); an input whose delivery is uncertain (a try that died
+system prompt on resume). Native and packet continuations pin an initially
+unspecified model to its attested id only when the route lists that id; observed
+display labels are never sent as model ids. An input whose delivery is uncertain (a try that died
 before its first `started`, a steering message admitted but not echoed) rides the notice
 as a reference to reconcile, never a blind replay. Pinned accounts, `fail` /
 `ask` policies and a spent pool end typed. Thread session/checkpoint publication

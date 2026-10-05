@@ -82,8 +82,7 @@ export function fileStoreContinuity(
       const target = fileFor(toEnv, sid);
       execFileSync("mkdir", ["-p", join(target, "..")]);
       writeFileSync(target, readFileSync(located.file));
-      rmSync(located.file);
-      return { ok: true, resumeRef: { nativeSessionId: sid } };
+      return { ok: true, resumeRef: { nativeSessionId: sid }, retire: () => rmSync(located.file) };
     },
     ...over,
   };
