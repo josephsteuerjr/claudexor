@@ -278,8 +278,11 @@ describe("Council retains contradictory input through real planner attempts (#21
       {},
     ]);
     expect(run.result.lifecycle).toBe("succeeded");
-    // The fence parser owns its separator trim; staging preserves its full extraction.
-    expect(run.text("council/draft-planner-1.md")).toBe(draft.trimEnd());
+    // Nothing is cut on a footer problem: the merger reads the model's reply
+    // byte for byte, the contradictory footer included.
+    expect(run.text("council/draft-planner-1.md")).toBe(
+      `${draft}\n\n\`\`\`json\n${JSON.stringify({ work_report: contradiction })}\n\`\`\``,
+    );
     expect(run.read("attempts/p01/council-input.yaml")).toMatchObject({
       attempt_id: "p01",
       harness_id: "planner-1",

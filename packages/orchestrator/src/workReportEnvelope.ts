@@ -32,7 +32,9 @@ export type WorkReportChannel = "constrained_json" | "side_tool" | "instructed_f
 
 /** The per-attempt envelope decision made at spec build and consumed by the
  * unwrap. `active` means the orchestrator actually armed a WorkReport transport
- * for this route, so a missing/malformed report is a typed contract failure. */
+ * for this route, so a missing/malformed report is a typed contract failure on
+ * the native channels and a disclosed unverified work_state on the instructed
+ * fence. */
 export interface WorkReportEnvelopeMode {
   active: boolean;
   source: WorkReportSource;
@@ -175,7 +177,8 @@ export function resolveWorkReportEnvelope(opts: {
 
 /** The unwrapped attempt answer plus the extracted WorkReport (or a typed
  * contract violation). `deliverable` is what answer.md / the caller-schema
- * validator must see — never the envelope. */
+ * validator must see — never a valid envelope or footer; on an instructed
+ * footer problem it is the complete answer text. */
 export interface UnwrappedAnswer {
   deliverable: string;
   workReport: WorkReport | null;
@@ -325,23 +328,19 @@ export function unwrapWorkReportEnvelope(
  * strict reading; the two native channels stay strict because there the
  * envelope is the only witness of a substituted final).
  *
- * The deliverable is the COMPLETE answer: a trailing fence that is not the
- * model's footer attempt — prose, an array, an object without `work_report` —
- * is the consumer's own content and is never cut off. Only a fence that carries
- * a `work_report` key is metadata: a VALID one keeps the full contract (prefix
- * = deliverable; completed → completed; needs_input/incomplete → veto; a
- * historical fence-only `{work_report, output}` → its string output), a
- * broken one is trimmed only when a prefix exists to keep (a footer-only
- * broken block keeps the whole text) and the contradiction claim is retained
- * as evidence.
+ * Every unverified outcome keeps the COMPLETE answer text as the deliverable:
+ * nothing is cut. A trailing fence that is not a footer — prose, code, an
+ * array, an object without `work_report` — is the consumer's own content, and
+ * a broken footer attempt stays visible too, so a malformed `needs_input`
+ * claim is never hidden from the reader (the contradiction claim is also
+ * retained as typed evidence). Only a VALID report is metadata and leaves the
+ * deliverable: the prefix is the answer (completed → completed;
+ * needs_input/incomplete → veto), and a historical fence-only
+ * `{work_report, output}` reply yields its string output.
  */
 function unwrapInstructedFence(answerText: string, mode: WorkReportEnvelopeMode): UnwrappedAnswer {
-  const unverified = (
-    reason: WorkReportUnverifiedReason,
-    detail: string,
-    deliverable = answerText,
-  ): UnwrappedAnswer => ({
-    deliverable,
+  const unverified = (reason: WorkReportUnverifiedReason, detail: string): UnwrappedAnswer => ({
+    deliverable: answerText,
     workReport: null,
     source: mode.source,
     contractViolation: null,
@@ -361,6 +360,13 @@ function unwrapInstructedFence(answerText: string, mode: WorkReportEnvelopeMode)
   const obj = parsed as Record<string, unknown>;
   if (!("work_report" in obj))
     return unverified("report_missing", "the last fenced block carries no work_report");
+  const check = checkWorkReport(obj["work_report"]);
+  if (!check.ok) {
+    return {
+      ...unverified(check.reason, check.detail),
+      ...(check.reportProblem ? { reportProblem: check.reportProblem } : {}),
+    };
+  }
   // The complete normal markdown is canonical. The legacy output slot is
   // consulted only for historical fence-only replies; when both exist the
   // prefix wins deterministically, without length/heading heuristics that
@@ -371,16 +377,17 @@ function unwrapInstructedFence(answerText: string, mode: WorkReportEnvelopeMode)
   let deliverable = prefix ?? "";
   if (prefix === null && obj["output"] !== undefined) {
     const extracted = extractOutput(obj, mode);
-    if ("violation" in extracted) return unverified("legacy_output_invalid", extracted.violation);
-    deliverable = extracted.deliverable;
+    if ("violation" in extracted) {
+      // An unusable historical output slot never downgrades a valid veto: the
+      // needs_input/incomplete report stands and the whole reply is kept.
+      if (check.report.state === "completed")
+        return unverified("legacy_output_invalid", extracted.violation);
+      deliverable = answerText;
+    } else {
+      deliverable = extracted.deliverable;
+    }
   }
-  const check = checkWorkReport(obj["work_report"]);
-  if (check.ok)
-    return { deliverable, workReport: check.report, source: mode.source, contractViolation: null };
-  return {
-    ...unverified(check.reason, check.detail, prefix ?? answerText),
-    ...(check.reportProblem ? { reportProblem: check.reportProblem } : {}),
-  };
+  return { deliverable, workReport: check.report, source: mode.source, contractViolation: null };
 }
 
 type WorkReportCheck =

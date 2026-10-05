@@ -401,7 +401,9 @@ primary first); `--n` on a plan is legal ONLY with `--council`. Degradation is
 honest: a failed member is disclosed (event + `council/membership.yaml`) and the
 merge proceeds with the usable inputs (one input still merges). A useful draft
 with a contradictory `completed` plus `required_inputs` report is retained as
-explicitly unverified input, while its original attempt remains failed. The
+explicitly unverified input, while its original attempt remains failed (where
+the report footer is only requested, as on Cursor, the attempt does not fail and
+the draft is accepted with an unverified work state). The
 merger prefers an accepted draft's lane, then an eligible unverified lane; no
 eligible input is a typed failure. The final plan must still pass its own checks. Run
 detail carries a `council` projection (membership + per-member status + who

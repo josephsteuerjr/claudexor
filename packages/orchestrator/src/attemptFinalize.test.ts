@@ -18,6 +18,7 @@ const needsInput: WorkReport = {
   state: "needs_input",
   required_inputs: [{ kind: "decision", locator: "db-backend", description: "which db?" }],
 };
+const incomplete: WorkReport = { state: "incomplete", required_inputs: [] };
 
 const ACTIVE: WorkReportEnvelopeMode = {
   active: true,
@@ -231,6 +232,16 @@ describe("unwrapWorkReportEnvelope", () => {
       });
       // The whole reply is kept: never "[object Object]", never an empty answer.
       expect(r.deliverable).toBe(text);
+    });
+    it(`instructed_fence: a valid veto outranks a fence-only legacy ${label} output`, () => {
+      for (const report of [needsInput, incomplete]) {
+        const text = fenceEnvelope({ work_report: report, output: badOutput });
+        const r = unwrapWorkReportEnvelope(text, FENCE);
+        expect(r.workReport).toEqual(report);
+        expect(r.unverified).toBeUndefined();
+        expect(r.contractViolation).toBeNull();
+        expect(r.deliverable).toBe(text);
+      }
     });
   }
 
@@ -477,34 +488,44 @@ describe("unwrapWorkReportEnvelope", () => {
     expect(r.contractViolation).toBeNull();
   });
 
-  it("instructed_fence: a broken footer attempt is trimmed off a present prefix and disclosed", () => {
-    const answer = [
-      "# Answer",
-      "Full detail.",
+  it("instructed_fence: a broken footer attempt is disclosed and nothing is cut from the answer", () => {
+    for (const answer of [
+      ["# Answer", "Full detail.", fenceEnvelope({ work_report: { state: "bogus" } })].join("\n"),
       fenceEnvelope({ work_report: { state: "bogus" } }),
-    ].join("\n");
-    const r = unwrapWorkReportEnvelope(answer, FENCE);
-    expect(r.deliverable).toBe("# Answer\nFull detail.");
-    expect(r.workReport).toBeNull();
-    expect(r.contractViolation).toBeNull();
-    expect(r.unverified).toEqual({
-      reason: "report_malformed",
-      detail: expect.stringMatching(/work_report missing or malformed/),
-    });
+    ]) {
+      const r = unwrapWorkReportEnvelope(answer, FENCE);
+      expect(r.deliverable).toBe(answer);
+      expect(r.workReport).toBeNull();
+      expect(r.contractViolation).toBeNull();
+      expect(r.unverified).toEqual({
+        reason: "report_malformed",
+        detail: expect.stringMatching(/work_report missing or malformed/),
+      });
+    }
   });
 
-  it("instructed_fence: a footer-only broken attempt keeps the whole text", () => {
-    const answer = fenceEnvelope({ work_report: { state: "bogus" } });
+  it("instructed_fence: a malformed needs_input claim stays readable in the answer (never a veto, never hidden)", () => {
+    // The required_inputs kind is outside the enum, so the report is not valid:
+    // it cannot veto, but the reader must still see what the model asked for.
+    const footer = fenceEnvelope({
+      work_report: {
+        state: "needs_input",
+        required_inputs: [{ kind: "api_key", locator: null, description: "Need the staging key" }],
+      },
+    });
+    const answer = ["# Partial answer", footer].join("\n");
     const r = unwrapWorkReportEnvelope(answer, FENCE);
-    expect(r.deliverable).toBe(answer);
+    expect(r.workReport).toBeNull();
     expect(r.unverified?.reason).toBe("report_malformed");
+    expect(r.deliverable).toBe(answer);
+    expect(r.deliverable).toContain("Need the staging key");
   });
 
   it("instructed_fence: a contradictory footer is unverified AND retains the claim as evidence", () => {
     const contradictory = { ...completed, required_inputs: needsInput.required_inputs };
     const answer = ["# Plan", fenceEnvelope({ work_report: contradictory })].join("\n");
     const r = unwrapWorkReportEnvelope(answer, FENCE);
-    expect(r.deliverable).toBe("# Plan");
+    expect(r.deliverable).toBe(answer);
     expect(r.workReport).toBeNull();
     expect(r.contractViolation).toBeNull();
     expect(r.unverified).toEqual({

@@ -2265,9 +2265,12 @@ merge attempt, with a `council/membership.yaml` projection served on
 `ControlRunDetail.council` (requested/drafted/degraded/mergedBy + per-member
 role and status) and mirrored on the MCP run/read structured results so a host
 can machine-verify the roster without reading local artifacts. Degradation is
-disclosed, not silent. A nonempty draft whose otherwise valid WorkReport says
+disclosed, not silent. On a native WorkReport channel a nonempty draft whose
+otherwise valid WorkReport says
 `completed` with nonempty `required_inputs` may reach the merger as explicitly
-UNVERIFIED input, with its original report and failure preserved. Real harness,
+UNVERIFIED input, with its original report and failure preserved (on an
+instructed-footer route that attempt does not fail: the draft is an ordinary
+accepted input whose `work_state` is `unverified`). Real harness,
 required-web, cancellation and terminal context failures are not eligible for
 this retention path. The planner attempt stays failed and cannot become a
 successful draft merely because the same lane later merges. `drafted` counts
@@ -3749,8 +3752,8 @@ are one resolver (`resolveWorkReportEnvelope`) and one unwrap
 (`unwrapWorkReportEnvelope`, keyed on the envelope `channel`;
 `workReportEnvelope.ts`). The unified
 attempt finalizer (`attemptFinalize.ts`) removes the transport beside
-`finalizeStructuredOutput` — `answer.md` persists the deliverable, never the
-envelope/footer — and validates the model-authored
+`finalizeStructuredOutput` — `answer.md` persists the deliverable, never a
+valid envelope/footer — and validates the model-authored
 `WorkReport { state, required_inputs }`. On the two NATIVE channels
 (`constrained_json`, `side_tool`) a missing/malformed report is a typed
 `work_report_contract` failure (never a prose success): there the envelope is
@@ -3763,12 +3766,14 @@ any), a historical fence-only envelope with a non-string `output` — is a CLEAN
 outcome: the lifecycle succeeds, `work_state` is
 `{state: unverified, source: validated, unverified_reason}` (the typed reason
 rides attempt telemetry and the run's outcome facts), and the deliverable is
-the COMPLETE answer: a trailing fence that is the consumer's own JSON or code is
-never cut out; only a fence carrying a `work_report` key (the model's footer
-attempt) is trimmed, and a footer-only broken block keeps the whole text; the
-contradiction claim is retained as evidence (`reportProblem`) and a Council
-draft with it is an ordinary accepted draft. A valid `needs_input`/`incomplete`
-report still becomes a `work_state` veto on every channel. The canary
+the COMPLETE answer text with nothing cut: a trailing fence that is the
+consumer's own JSON or code stays, and so does a broken footer attempt, so a
+malformed `needs_input` claim cannot veto but remains readable in the answer.
+Only a VALID report is metadata and leaves the deliverable. The contradiction
+claim is also retained as evidence (`reportProblem`) and a Council draft with it
+is an ordinary accepted draft. A valid `needs_input`/`incomplete` report still
+becomes a `work_state` veto on every channel; on the instructed fence it also
+outranks an unusable historical `output` slot. The canary
 `[INV-116:work-report-contract]` pins the native-channel failure.
 
 Claude API-error results retain the originating attempt's vendor message and
