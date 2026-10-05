@@ -158,7 +158,10 @@ export class InRunContinuity {
     this.tryStarted = true;
     const nid = ev.payload?.["native_session_id"];
     if (typeof nid !== "string" || nid.length === 0) return null;
-    if (this.expectedSessionId && nid !== this.expectedSessionId) {
+    // Only an adapter with the `continuity` capability promises that a resume
+    // keeps the session id; on any other harness a new id after a resume is the
+    // vendor's own answer and is recorded as the session, as before.
+    if (this.expectedSessionId && nid !== this.expectedSessionId && this.deps.adapter.continuity) {
       this.tryIdentity = markers.sawAgentProgress
         ? "mismatch_after_possible_effects"
         : "mismatch_before_effects";

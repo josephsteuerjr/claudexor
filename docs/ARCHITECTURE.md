@@ -3991,8 +3991,10 @@ on `started` becomes the attempt's durable SESSION CAPSULE
 profile, the located history file and its sidecars, cwd, requested model;
 re-located through the adapter after the try settles), the typed limit that
 ended the try, this try's attested model, the identity of a resumed session
-(compared on `started`; codex compares the `thread/resume` reply before
-`turn/start`) and the adapter's typed rejection of carried state. "Acted" is a
+(compared on `started` for adapters with the `continuity` capability, whose
+resume keeps the id; codex compares the `thread/resume` reply before
+`turn/start`; on other harnesses a new id after a resume is recorded as the
+session) and the adapter's typed rejection of carried state. "Acted" is a
 sticky fact of the attempt (an accepted answer, agent progress, a file change
 or a diff in any try). An attempt that did not act keeps the rotation and
 transient rules above byte for byte. After progress: a typed vendor limit on an
