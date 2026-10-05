@@ -1654,7 +1654,7 @@ export class Orchestrator {
     // settles clean), so a schema run keeps its interaction channel — since
     // the daemon always arms one, the refusal was denying claude every
     // daemon/CLI structured-output run. The WorkReport side_tool envelope
-    // stays interactive-gated separately (attemptFinalize) as a deliberate
+    // stays interactive-gated separately (workReportEnvelope) as a deliberate
     // scope choice; the caller schema itself rides regardless.
     if (input.outputSchema !== undefined && input.outputSchema !== null) {
       const incapable = out.filter((lane) => !lane.supportsJsonSchemaOutput);
