@@ -50,6 +50,18 @@ export interface PersistedPatchCopy {
 
 const FILE_RECORD_START = /^(?:diff .+|Binary files .+ differ)$/gm;
 
+/** A match starts inside a line, but subsequent lines include their diff
+ * prefix. Keep those prefixes and line endings so hunk counts remain valid. */
+function redactPatchMatch(match: string): string {
+  return match
+    .split("\n")
+    .map(
+      (line, index) =>
+        `${index > 0 && /^[ +\-]/.test(line) ? line[0] : ""}[redacted]${line.endsWith("\r") ? "\r" : ""}`,
+    )
+    .join("\n");
+}
+
 /**
  * Build the saved copy of an exact candidate diff: withhold the payload of the
  * named binary files, replace every secret-like string, and count per file in
@@ -68,7 +80,7 @@ export function persistedPatchCopy(
   const files = new Map<string, SecretLikeFileFinding>();
   let unattributedMatches = 0;
   const hide = (text: string, path: string | null): string => {
-    const decision = sensitiveResourcePolicy.inspectContent(text, "redact");
+    const decision = sensitiveResourcePolicy.inspectContent(text, "redact", redactPatchMatch);
     if (decision.matches === 0) return text;
     if (path === null) {
       unattributedMatches += decision.matches;

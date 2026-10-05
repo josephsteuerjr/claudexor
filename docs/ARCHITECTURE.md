@@ -1352,7 +1352,8 @@ persistence classifier.
   never mutates the project.
 - **Saved copies hide the matches.** `attempts/<a>/patch.diff`,
   `final/patch.diff` and the reviewer packet `DIFF.patch` are written from
-  `persistedPatchCopy`: each match becomes `[redacted]`, the payload of a
+  `persistedPatchCopy`: each absorbed line of a match becomes `[redacted]`
+  with its diff prefix and line ending preserved so hunk counts stay valid; the payload of a
   binary file whose pre- or postimage holds (or cannot be proven free of)
   secret-like bytes is withheld, and the copy opens with a one-line notice.
   A copy with nothing to hide is byte-identical to the exact diff and carries

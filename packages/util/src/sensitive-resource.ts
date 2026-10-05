@@ -232,15 +232,16 @@ export class SensitiveResourcePolicy {
   inspectContent(
     text: string,
     handling: SensitiveContentHandling = "redact",
+    replaceMatch: (match: string) => string = () => this.redactionMarker,
   ): SensitiveContentDecision {
     let redacted = text;
     let matches = 0;
     const signatures = new Set<SensitiveContentSignature>();
     for (const rule of CONTENT_RULES) {
-      redacted = redacted.replace(rule.pattern, () => {
+      redacted = redacted.replace(rule.pattern, (match) => {
         matches += 1;
         signatures.add(rule.id);
-        return this.redactionMarker;
+        return replaceMatch(match);
       });
     }
     if (matches === 0) {

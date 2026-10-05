@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseUnifiedDiff } from "@claudexor/core";
 import { containsSecretLikeToken } from "@claudexor/util";
 
@@ -74,6 +78,49 @@ describe("persistedPatchCopy (V4C T8)", () => {
     expect(second.text).toBe(first.text);
     expect(second.files).toEqual([]);
     expect(second.unattributedMatches).toBe(0);
+  });
+
+  it("keeps a multiline key block's hunk counts and an applicable saved patch", () => {
+    const lines = ["# config", pemLine("BEGIN"), "QUJD", "REVG", pemLine("END"), "done"];
+    const diff = fileRecord("config.txt", lines);
+    const original = Buffer.from(diff);
+    const copy = persistedPatchCopy(diff, []);
+    const hunk = copy.text.slice(copy.text.indexOf("@@ -0,0 +1,6 @@\n")).split("\n");
+    const added = hunk.slice(1).filter((line) => line.startsWith("+"));
+    expect.soft(added).toHaveLength(lines.length);
+    expect.soft(added.slice(1, -1)).toEqual(Array(4).fill("+[redacted]"));
+    expect
+      .soft(copy.files)
+      .toEqual([{ path: "config.txt", matches: 1, kinds: ["private_key_block"] }]);
+    expect(containsSecretLikeToken(copy.text)).toBe(false);
+    expect(Buffer.from(diff).equals(original)).toBe(true);
+
+    const repo = mkdtempSync(join(tmpdir(), "persisted-patch-"));
+    try {
+      expect(spawnSync("git", ["init", "-q", repo]).status).toBe(0);
+      for (const input of [diff, copy.text]) {
+        const check = spawnSync("git", ["apply", "--check", "-"], {
+          cwd: repo,
+          input,
+          encoding: "utf8",
+        });
+        expect.soft(check.stderr).toBe("");
+        expect.soft(check.status).toBe(0);
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["-", " "])("keeps the %j prefix on every absorbed hunk line", (prefix) => {
+    const lines = [pemLine("BEGIN"), "QUJD", "REVG", pemLine("END")];
+    const diff =
+      "diff --git a/config.txt b/config.txt\n--- a/config.txt\n+++ b/config.txt\n" +
+      (prefix === "-" ? "@@ -1,4 +0,0 @@\n" : "@@ -1,4 +1,4 @@\n") +
+      lines.map((line) => `${prefix}${line}\n`).join("");
+    const copy = persistedPatchCopy(diff, []);
+    expect(copy.text.split("\n").slice(-5, -1)).toEqual(Array(4).fill(`${prefix}[redacted]`));
+    expect(containsSecretLikeToken(copy.text)).toBe(false);
   });
 
   it("catches a match that straddles two file records and counts it once", () => {
