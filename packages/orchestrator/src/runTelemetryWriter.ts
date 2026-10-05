@@ -150,10 +150,12 @@ export function writeRunTelemetryArtifact(args: {
           finalRecord ??
           records[0];
         const requestedModel = disclosing?.requested_model ?? null;
-        // The id the engine actually SENT: the processing receipt's final native
-        // id when preparation selected one (a fast twin, an effort-selected level
-        // variant), else the requested hint. Observation is judged against it.
-        const sentModel = disclosing?.processing?.submittedNative ?? requestedModel;
+        // Only model-id effort carriers put the sent model in submittedNative;
+        // other adapters use it for service tiers or flags such as fastMode.
+        const sentModel =
+          disclosing?.effort_resolution?.parameter === "--model"
+            ? (disclosing.processing?.submittedNative ?? requestedModel)
+            : requestedModel;
         const observedModel = disclosing?.observed_model ?? null;
         // The requested route is the RESOLVED per-harness preference of the
         // disclosing lane (run-level scalar → per-harness config → global),

@@ -14,6 +14,12 @@ import {
 import { createCodexAdapter, clearCodexEffortCache } from "../../harness-codex/src/index.js";
 import { readModelListEfforts } from "../../harness-codex/src/effort-probe.js";
 import { createClaudeAdapter } from "../../harness-claude/src/index.js";
+import {
+  legacyCodexProcessing,
+  prepareCodexProcessing,
+} from "../../harness-codex/src/processing.js";
+import { prepareClaudeProcessing } from "../../harness-claude/src/processing.js";
+import { prepareCursorProcessing } from "../../harness-cursor/src/processing.js";
 import { createAttemptTelemetry, observeAttemptTelemetry } from "./attemptTelemetry.js";
 import { writeRunTelemetryArtifact } from "./runTelemetryWriter.js";
 import effortFixture from "../../schema/fixtures/effort-resolution.json" with { type: "json" };
@@ -382,21 +388,17 @@ it("a model-id effort carrier: ONE prepared result feeds --model, the processing
 
 it("model_mismatch compares the observation with the SUBMITTED id, not the caller's hint", () => {
   const base = { type: "status", session_id: "mm", ts: new Date(0).toISOString() };
-  const processing = {
-    requested: null,
-    submitted: null,
-    submittedNative: "grok-4.7-xhigh",
-    observed: "unknown",
-    observedNative: [],
-    reason: null,
-    source: "fixture",
-  };
+  const prepared = prepareCursorProcessing(undefined, "grok-4.7-high", GROK_47, true, "max");
+  const processing = prepared.receipt;
+  const effort = HarnessEvent.parse({ ...base, effort_resolution: prepared.effort });
   const agreeing = [
+    effort,
     HarnessEvent.parse({ ...base, type: "started", observed_model: "grok-4.7-xhigh", processing }),
     HarnessEvent.parse({ ...base, type: "completed", processing }),
   ];
   expect(persist(agreeing, "cursor", "grok-4.7-high").auth_route?.model_mismatch).toBeNull();
   const drifting = [
+    effort,
     HarnessEvent.parse({ ...base, type: "started", observed_model: "grok-4.7-medium", processing }),
     HarnessEvent.parse({ ...base, type: "completed", processing }),
   ];
@@ -413,4 +415,67 @@ it("model_mismatch compares the observation with the SUBMITTED id, not the calle
     requested: "model-x",
     observed: "model-y",
   });
+  expect(persist(plain, "lane", "model-y").auth_route?.model_mismatch).toBeNull();
+  expect(persist(plain, "lane").auth_route?.model_mismatch).toBeNull();
+});
+
+it.each([
+  { name: "Codex Standard", harness: "codex", processing: prepareCodexProcessing("standard") },
+  {
+    name: "Codex priority",
+    harness: "codex",
+    processing: prepareCodexProcessing("fast", undefined, "priority"),
+  },
+  {
+    name: "Codex inherited default",
+    harness: "codex",
+    processing: legacyCodexProcessing("default"),
+  },
+  {
+    name: "Codex inherited priority",
+    harness: "codex",
+    processing: legacyCodexProcessing("priority"),
+  },
+  {
+    name: "Claude fastMode off",
+    harness: "claude",
+    processing: prepareClaudeProcessing("standard"),
+  },
+  { name: "Claude fastMode on", harness: "claude", processing: prepareClaudeProcessing("fast") },
+  {
+    name: "Claude inherited fastMode off",
+    harness: "claude",
+    processing: prepareClaudeProcessing(undefined, false),
+  },
+  {
+    name: "Claude inherited fastMode on",
+    harness: "claude",
+    processing: prepareClaudeProcessing(undefined, true),
+  },
+])("model_mismatch does not treat $name as a model id", ({ harness, processing }) => {
+  const model = harness === "codex" ? "gpt-6-astra" : "claude-fable-5-1";
+  const base = { session_id: "mm", ts: new Date(0).toISOString() };
+  // Both current flag-carrier evidence and historical attempts without it.
+  for (const parameter of [
+    undefined,
+    harness === "codex" ? "model_reasoning_effort" : "--effort",
+  ]) {
+    const events = [
+      HarnessEvent.parse({
+        ...base,
+        type: "started",
+        observed_model: model,
+        processing,
+        ...(parameter ? { effort_resolution: { ...effortFixture, parameter } } : {}),
+      }),
+      HarnessEvent.parse({ ...base, type: "completed", processing }),
+    ];
+    expect(persist(events, harness, model).auth_route?.model_mismatch).toBeNull();
+    // A service receipt cannot manufacture a model hint that was never known.
+    expect(persist(events, harness).auth_route?.model_mismatch).toBeNull();
+    expect(persist(events, harness, "requested-model").auth_route?.model_mismatch).toEqual({
+      requested: "requested-model",
+      observed: model,
+    });
+  }
 });
