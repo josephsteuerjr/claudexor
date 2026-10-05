@@ -1,7 +1,12 @@
 import { browserMcpCommand, type LiveMessageResult } from "@claudexor/core";
-import type { HarnessEvent, HarnessRunSpec, HarnessRequestRefusal } from "@claudexor/schema";
+import type {
+  EffortHint,
+  HarnessEvent,
+  HarnessRunSpec,
+  HarnessRequestRefusal,
+} from "@claudexor/schema";
 import { nowIso } from "@claudexor/util";
-import { CODEX_EFFORT_SNAPSHOT, codexEffortFor, type CodexEffortCatalog } from "./effort-probe.js";
+import { codexEffortFor } from "./effort-probe.js";
 import { parseCodexEvent, type CodexParseState } from "./parse.js";
 import { codexRateLimitEvents } from "./quota.js";
 import { CodexRpcError } from "./rpc-error.js";
@@ -309,7 +314,8 @@ function sandboxMode(access: HarnessRunSpec["access"]): string | null {
 
 export function codexAppServerThreadParams(
   spec: HarnessRunSpec,
-  effortCatalog: CodexEffortCatalog = CODEX_EFFORT_SNAPSHOT,
+  /** The run's ONE effort receipt (`submitted`); arg-shape callers resolve on the snapshot. */
+  effort: EffortHint | null = codexEffortFor(undefined, spec.model_hint, spec.effort_hint),
 ): JsonObject {
   const mcpServers: Record<string, JsonObject> = {};
   if (spec.browser && spec.external_context_policy !== "off") {
@@ -341,7 +347,6 @@ export function codexAppServerThreadParams(
     project_doc_fallback_filenames: ["CLAUDE.md"],
     ...(Object.keys(mcpServers).length ? { mcp_servers: mcpServers } : {}),
   };
-  const effort = codexEffortFor(effortCatalog, spec.model_hint, spec.effort_hint);
   if (effort) config["model_reasoning_effort"] = effort;
   if (spec.processing?.submittedNative) config["service_tier"] = spec.processing.submittedNative;
   const sandbox = sandboxMode(spec.access);

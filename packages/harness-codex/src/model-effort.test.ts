@@ -8,7 +8,13 @@ import {
 } from "@claudexor/schema";
 import { createCodexModelAdapter, parseCodexModelCatalog } from "./model.js";
 
-function fixture(levels: string[] | null = ["low", "max"], observed?: string) {
+const FULL_SIBLING = ["none", "low", "medium", "high", "xhigh", "max", "ultra"];
+
+function fixture(
+  levels: string[] | null = ["low", "max"],
+  observed?: string,
+  sibling: string[] = FULL_SIBLING,
+) {
   const dispatch = vi.fn(async () => {});
   const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
     if (init?.method !== "POST")
@@ -20,15 +26,7 @@ function fixture(levels: string[] | null = ["low", "max"], observed?: string) {
           },
           {
             slug: "sibling",
-            supported_reasoning_levels: [
-              "none",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max",
-              "ultra",
-            ].map((effort) => ({ effort })),
+            supported_reasoning_levels: sibling.map((effort) => ({ effort })),
           },
         ],
       });
@@ -103,6 +101,30 @@ it.each([
       effortResolution: { requested, submitted, resolution, source: "account_catalog" },
     });
     expect(result.appliedOptions.reasoningEffort).toBeUndefined();
+  },
+);
+
+it.each([
+  // No verified model lists the word, so the account's own order cannot rank it:
+  // the shared preference order places it onto a level the target really accepts.
+  ["minimal", ["low", "max"], FULL_SIBLING, "low", "floor"],
+  ["ultra", ["low", "high"], ["low", "medium", "high"], "high", "downward"],
+  ["none", ["low", "high"], ["low", "medium", "high"], "low", "floor"],
+] as const)(
+  "places %s by the shared preference order when no catalog model lists it",
+  async (requested, levels, sibling, submitted, resolution) => {
+    const f = fixture([...levels], undefined, [...sibling]);
+    const result = await f.adapter.invoke(
+      { ...f.request, options: { reasoningEffort: requested } },
+      f.context,
+    );
+    expect(result.outcome).toBe("completed");
+    const body = JSON.parse(await new Response(f.fetch.mock.calls[1]![1]!.body).text());
+    expect(body.reasoning.effort).toBe(submitted);
+    expect(result.effortResolution).toMatchObject({ requested, submitted, resolution });
+    expect(result.effortResolution?.reason).toContain("shared preference order");
+    // The session-Ultra projection note belongs to models that list `ultra`.
+    expect(result.effortResolution?.reason).not.toContain("do not execute");
   },
 );
 

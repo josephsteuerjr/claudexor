@@ -152,11 +152,11 @@ describe("the codex adapter under a stale model/list (the gate itself: modelGove
   });
 
   it.each([
-    ["xhigh", 'model_reasoning_effort="xhigh"'],
-    ["ultra", null],
+    ["xhigh", "exact"],
+    ["ultra", "downward"],
   ] as const)(
-    "resolves effort %s for a model the stale list lacks, and never drops one silently",
-    async (effort, expectedArg) => {
+    "resolves effort %s for a model the stale list lacks (%s), and never moves one silently",
+    async (effort, resolution) => {
       const args: string[] = [];
       const spec = HarnessRunSpec.parse({
         session_id: `astra-stale-${effort}`,
@@ -169,26 +169,32 @@ describe("the codex adapter under a stale model/list (the gate itself: modelGove
         auth_preference: "subscription",
       });
       const events: HarnessEvent[] = [];
-      const consume = async () => {
-        for await (const event of staleAdapter(args).run(spec)) events.push(event);
-      };
-      if (expectedArg) await consume();
-      else await expect(consume()).rejects.toThrow(/advertised ladder cannot place it/);
+      for await (const event of staleAdapter(args).run(spec)) events.push(event);
       const disclosed = events.find((event) => Array.isArray(event.payload?.["ignored_settings"]));
-      if (expectedArg) {
-        expect(args[args.indexOf("-m") + 1]).toBe("gpt-6-astra");
+      // Model absence remains advisory either way: the run reaches the vendor on
+      // astra, at the strongest level the stale ladders carry.
+      expect(args[args.indexOf("-m") + 1]).toBe("gpt-6-astra");
+      expect(args).toContain('model_reasoning_effort="xhigh"');
+      expect(events.find((event) => event.effort_resolution)?.effort_resolution).toMatchObject({
+        requested: effort,
+        submitted: "xhigh",
+        resolution,
+      });
+      if (resolution === "exact") {
         // A level the stale ladders DO carry rides through, and nothing is disclosed.
-        expect(args).toContain(expectedArg);
         expect(disclosed).toBeUndefined();
       } else {
-        // Model absence remains advisory; the unrankable separate effort refuses.
-        expect(spec.model_hint).toBe("gpt-6-astra");
-        expect(args).toEqual([]);
+        // No stale ladder lists `ultra`, so the vendor order cannot rank it; the
+        // shared preference order places it and the run resolves DOWNWARD onto
+        // xhigh, disclosed — not the refusal this used to be (owner decision
+        // 2026-10-05: one effort word works on every route).
         expect(disclosed?.effort_resolution).toMatchObject({
           requested: "ultra",
-          submitted: null,
-          resolution: "rejected",
+          submitted: "xhigh",
+          resolution: "downward",
         });
+        expect(disclosed?.text).toContain("clamped to xhigh");
+        expect(disclosed?.text).toContain("shared preference order");
         expect(disclosed?.payload?.["ignored_settings"]).toEqual([
           expect.stringContaining("effort=ultra"),
         ]);

@@ -19,6 +19,7 @@ import {
   type ConformanceReport,
   type CredentialProfile,
   type CredentialProfileStatus,
+  type EffortHint,
   type HarnessEvent,
   type HarnessManifest,
   type HarnessRunSpec,
@@ -26,7 +27,6 @@ import {
   HarnessManifest as HarnessManifestSchema,
 } from "@claudexor/schema";
 import {
-  CODEX_EFFORT_SNAPSHOT,
   CODEX_EFFORT_SNAPSHOT_VERIFIED_AGAINST,
   codexEffortFor,
   codexEffortsForEnv,
@@ -219,6 +219,8 @@ export function codexExecArgs(
     outputSchemaPath?: string | null;
     /** The account's advertised effort catalog; the snapshot by default. */
     effortCatalog?: CodexEffortCatalog;
+    /** The run's ONE effort receipt (`submitted`); resolved from the catalog when absent. */
+    effort?: EffortHint | null;
   } = {},
 ): string[] {
   // Codex.app's inherited `node_repl` MCP (its in-app-browser controller) can't
@@ -234,11 +236,10 @@ export function codexExecArgs(
   // Effort is resolved against what THIS MODEL advertises, not a harness-wide
   // ladder: gpt-5.6-sol takes `ultra`, gpt-5.4 stops at `xhigh`.
   const processingArgs = codexProcessingArgs(spec, opts.effortCatalog);
-  const effort = codexEffortFor(
-    opts.effortCatalog ?? CODEX_EFFORT_SNAPSHOT,
-    spec.model_hint,
-    spec.effort_hint,
-  );
+  const effort =
+    opts.effort === undefined
+      ? codexEffortFor(opts.effortCatalog, spec.model_hint, spec.effort_hint)
+      : opts.effort;
   if (spec.resume_session_id) {
     const args = [
       "exec",
@@ -752,11 +753,9 @@ async function* runCodex(
     }
     // Probed in THIS run's resolved env, so a credential profile or API-key route
     // gets its OWN account's catalog, not whichever one landed in the cache first.
-    // INV-105 on the RUN: version-gate snapshot-fallback trust (an installed
-    // codex outside the pinned version is never sent the snapshot's levels), and
-    // disclose a DROP/CLAMP on the same catalog the args resolve with — preflight
-    // passed this level against the DEFAULT account's manifest, but THIS env's
-    // catalog may drop it or clamp it onto the routed model's ceiling.
+    // INV-105 on the RUN: version-gate snapshot-fallback trust, then ONE result —
+    // the receipt recorded here is the level both arg builders send and the
+    // DROP/CLAMP disclosure describes (preflight only saw the DEFAULT account).
     const effort = await codexRunEffortResolution(spec, runtime, env, abortSignalFromSpec(spec));
     yield effort.event;
     throwIfEffortRejected(effort.resolution);
@@ -777,6 +776,7 @@ async function* runCodex(
           suppressNodeRepl,
           outputSchemaPath,
           effortCatalog: effort.catalog,
+          effort: effort.resolution.submitted,
         });
     // Route evidence: the auth mode this child ACTUALLY runs under, read from
     // the same auth.json codex loads (typed `auth_mode` field — chatgpt vs
@@ -810,7 +810,7 @@ async function* runCodex(
         spec,
         env,
         controller,
-        effortCatalog: effort.catalog,
+        effort: effort.resolution.submitted,
       });
       const decorated = (async function* (): AsyncGenerator<HarnessEvent> {
         for await (const event of native) yield decorate(event);
