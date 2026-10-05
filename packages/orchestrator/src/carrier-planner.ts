@@ -9,17 +9,32 @@
  * target account's store, or builds the evidence index — and returns the
  * first rung that works. Harness-specific mechanics stay behind the adapter's
  * `continuity` capability; the planner never reads vendor prose (INV-049).
+ *
+ * The ladder (owner answers 1B + 2A):
+ *   hop (target account ≠ source):  native_moved → (acted ? packet : fresh)
+ *   same account:                   native       → (acted ? packet : fresh)
+ *   packet preference (re-brief):   acted ? packet : fresh
+ * A native rung needs a capsule that no typed fact has rejected (identity
+ * mismatch, adapter rejection of carried state); `native_moved` also needs
+ * the adapter's `continuity`. `fresh` never follows `acted`: a partially
+ * acted attempt never replays its original prompt (INV-046 as amended).
  */
 import type { EnvMap, HarnessAdapter } from "@claudexor/core";
 import type { ContinuityCarrier, ResumableCause, SessionCapsule } from "@claudexor/schema";
-import type { EvidenceIndex, EvidenceIndexSources } from "./continuation-evidence.js";
+import {
+  buildEvidenceIndex,
+  type EvidenceIndex,
+  type EvidenceIndexSources,
+} from "./continuation-evidence.js";
+import { collectEvidenceIndexInput } from "./continuation-evidence-io.js";
 
 export type CarrierPreference = "auto" | "packet";
 
 /** Where a session lives now (source) or will run next (target). */
 export interface CarrierProfileRef {
   profileId: string | null;
-  /** The env the child sees on that account (the spec env). */
+  /** The env the child sees on that account (the spec env) PLUS the store
+   * locator key (`storeEnvFor`), so the adapter can resolve the store. */
   env: EnvMap;
   /** The registry row's `isolation_locator`; null = the harness default store. */
   storeLocator: string | null;
@@ -61,6 +76,9 @@ export interface CarrierIo {
   /** Sources of the evidence index (the run dir, the work order, admitted steering). */
   evidence: EvidenceIndexSources;
   targetCwd: string;
+  /** In-memory facts the loop already holds (the collector reads the rest from the run dir). */
+  retainedOutput?: string;
+  diffStat?: string | null;
 }
 
 export type CarrierPrepared =
@@ -74,14 +92,125 @@ export type CarrierPrepared =
   | { carrier: "fresh" };
 
 /** Pure: the ordered ladder of carriers for these facts. */
-export function decideCarrier(_facts: CarrierFacts): CarrierDecision {
-  throw new Error("decideCarrier is not wired yet (interfaces freeze)");
+export function decideCarrier(facts: CarrierFacts): CarrierDecision {
+  const hop = (facts.sourceProfile.profileId ?? null) !== (facts.targetProfile.profileId ?? null);
+  const floor: ContinuityCarrier = facts.acted ? "packet" : "fresh";
+  const base = { hop, effectiveModel: facts.effectiveModel };
+  if (facts.preference === "packet") {
+    return { ...base, ladder: [floor], reason: "packet_preference" };
+  }
+  const nativeUsable = facts.capsule !== null && !facts.nativeRejected;
+  if (!nativeUsable) {
+    return {
+      ...base,
+      ladder: [floor],
+      reason: facts.capsule === null ? "no_session" : "native_rejected",
+    };
+  }
+  if (hop) {
+    return facts.adapter.continuity
+      ? { ...base, ladder: ["native_moved", floor], reason: "hop_with_session" }
+      : { ...base, ladder: [floor], reason: "hop_move_unsupported" };
+  }
+  return { ...base, ladder: ["native", floor], reason: "same_account_session" };
 }
 
 /** I/O: walk the ladder — locate, move, or build the evidence index — and return the first rung that works. */
 export async function prepareCarrier(
-  _decision: CarrierDecision,
-  _io: CarrierIo,
+  decision: CarrierDecision,
+  io: CarrierIo,
 ): Promise<CarrierPrepared> {
-  throw new Error("prepareCarrier is not wired yet (interfaces freeze)");
+  const { facts } = io;
+  const continuity = facts.adapter.continuity;
+  for (const rung of decision.ladder) {
+    if (rung === "native" && facts.capsule) {
+      const located = await locateSafe(continuity, facts.capsule, facts.sourceProfile.env);
+      if (located === "miss") continue;
+      const capsule = located === "unverified" ? facts.capsule : located;
+      return {
+        carrier: "native",
+        resumeRef: {
+          nativeSessionId: capsule.nativeSessionId,
+          ...(capsule.file ? { path: capsule.file } : {}),
+        },
+        capsule,
+      };
+    }
+    if (rung === "native_moved" && facts.capsule && continuity) {
+      const source = await locateSafe(continuity, facts.capsule, facts.sourceProfile.env);
+      if (source === "miss" || source === "unverified") continue;
+      const moved = await moveSafe(continuity, source, facts, io.targetCwd);
+      if (!moved) continue;
+      // The holder is the file the TARGET resume looks at: re-locate there so
+      // the capsule names the new holder (copy → verify → publish; the adapter
+      // retires the source only after the copy verified).
+      const target = await locateSafe(
+        continuity,
+        { ...source, holderProfileId: facts.targetProfile.profileId, cwd: io.targetCwd },
+        facts.targetProfile.env,
+      );
+      const capsule: SessionCapsule =
+        target === "miss" || target === "unverified"
+          ? { ...source, holderProfileId: facts.targetProfile.profileId, cwd: io.targetCwd }
+          : target;
+      return {
+        carrier: "native_moved",
+        resumeRef: {
+          nativeSessionId: moved.nativeSessionId,
+          ...(capsule.file ? { path: capsule.file } : {}),
+        },
+        capsule,
+      };
+    }
+    if (rung === "packet") {
+      const input = collectEvidenceIndexInput(io.evidence, {
+        cause: facts.cause,
+        retainedOutput: io.retainedOutput ?? "",
+        diffStat: io.diffStat ?? null,
+      });
+      return { carrier: "packet", packet: buildEvidenceIndex(input) };
+    }
+    if (rung === "fresh") return { carrier: "fresh" };
+  }
+  return { carrier: facts.acted ? "packet" : "fresh" } as CarrierPrepared;
+}
+
+/** Locate through the adapter: the refreshed capsule, "miss", or "unverified"
+ * when the adapter has no `continuity` (resume by id, engine-side id check). */
+async function locateSafe(
+  continuity: HarnessAdapter["continuity"],
+  capsule: SessionCapsule,
+  env: EnvMap,
+): Promise<SessionCapsule | "miss" | "unverified"> {
+  if (!continuity) return "unverified";
+  try {
+    const found = await continuity.locate(
+      { nativeSessionId: capsule.nativeSessionId, cwd: capsule.cwd },
+      env,
+    );
+    if (!found.found) return "miss";
+    return { ...capsule, file: found.file, mtimeMs: found.mtimeMs, sidecars: found.sidecars };
+  } catch {
+    return "miss";
+  }
+}
+
+async function moveSafe(
+  continuity: NonNullable<HarnessAdapter["continuity"]>,
+  source: SessionCapsule,
+  facts: CarrierFacts,
+  targetCwd: string,
+): Promise<{ nativeSessionId: string } | null> {
+  if (!source.file) return null;
+  try {
+    const moved = await continuity.move(
+      { file: source.file, sidecars: source.sidecars, nativeSessionId: source.nativeSessionId },
+      facts.sourceProfile.env,
+      facts.targetProfile.env,
+      targetCwd,
+    );
+    return moved.ok ? moved.resumeRef : null;
+  } catch {
+    return null;
+  }
 }

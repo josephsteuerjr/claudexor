@@ -9,6 +9,7 @@ import {
   RunFailureCode,
   type ModeKind,
   type RunOutcomeFacts,
+  type RunResumable,
   type VendorFailureEvidence,
   HarnessRequestRefusal,
 } from "@claudexor/schema";
@@ -160,6 +161,8 @@ export function cancelledResult(
   /** A prepared result may already carry independent checks/review/work facts
    * when cancellation wins during the Delegate terminal barrier. */
   priorFacts?: RunOutcomeFacts,
+  /** The attempt's continuation facts (cause wall_clock/cancelled, carriers), when any. */
+  resumable?: RunResumable | null,
 ): OrchestratorResult {
   if (writeTelemetry) {
     try {
@@ -202,11 +205,13 @@ export function cancelledResult(
     "cancelled",
     cancelReasonFromSignalToken(cancelReason),
   );
+  if (resumable && store) store.writeYaml(join(runDir, "final", "resumable.yaml"), resumable);
   log.emit("run.failed", {
     lifecycle: "cancelled",
     facts: cancelFacts,
     reason: cancelFacts.reason,
     ...(cancelReason ? { cancel_reason: cancelReason } : {}),
+    ...(resumable ? { resumable } : {}),
   });
   return {
     runId,

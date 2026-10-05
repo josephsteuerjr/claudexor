@@ -64,7 +64,120 @@ export interface EvidenceIndex {
   bytes: number;
 }
 
+/** Per-section verbatim budget. */
+export const EVIDENCE_SECTION_BUDGET_BYTES = 8 * 1024;
+/** Whole-index budget; the tool index collapses to counts past it. */
+export const EVIDENCE_TOTAL_BUDGET_BYTES = 24 * 1024;
+/** Tool rows kept verbatim before the index collapses to counts. */
+export const EVIDENCE_TOOL_ROWS = 60;
+
+function bytes(text: string): number {
+  return Buffer.byteLength(text, "utf8");
+}
+
+/** Truncate to at most `maxBytes` UTF-8 bytes on a safe char boundary. */
+function bound(text: string, maxBytes: number): { text: string; cut: boolean } {
+  if (bytes(text) <= maxBytes) return { text, cut: false };
+  const buf = Buffer.from(text, "utf8").subarray(0, maxBytes);
+  for (let trim = 0; trim <= 3 && trim <= buf.length; trim += 1) {
+    try {
+      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(
+        trim === 0 ? buf : buf.subarray(0, buf.length - trim),
+      );
+      return { text: `${decoded}\n…[truncated]`, cut: true };
+    } catch {
+      /* prefix ended inside a scalar; back off */
+    }
+  }
+  return { text: `${buf.toString("utf8")}\n…[truncated]`, cut: true };
+}
+
+const CAUSE_LINE: Record<ResumableCause, string> = {
+  vendor_limit: "a usage limit on its account",
+  pool_exhausted: "every account's usage limit",
+  pinned_limit: "the pinned account's usage limit",
+  transport: "a process death",
+  context_exhausted: "context exhaustion",
+  wall_clock: "the wall-clock deadline",
+  cancelled: "a cancel",
+  host_restart: "a host restart",
+  input_required: "a request for input",
+  other: "an interruption",
+};
+
 /** Pure: render the bounded evidence index for a packet carrier. */
-export function buildEvidenceIndex(_input: EvidenceIndexInput): EvidenceIndex {
-  throw new Error("buildEvidenceIndex is not wired yet (interfaces freeze)");
+export function buildEvidenceIndex(input: EvidenceIndexInput): EvidenceIndex {
+  let summarized = false;
+  const section = (text: string): string => {
+    const b = bound(text.trim(), EVIDENCE_SECTION_BUDGET_BYTES);
+    summarized ||= b.cut;
+    return b.text;
+  };
+  const unresolved = input.toolCalls.filter((call) => !call.resolved);
+  const parts: string[] = [
+    "# Evidence index of the interrupted work",
+    "",
+    `The previous process stopped (${CAUSE_LINE[input.cause]}) before finishing. This index is mechanical evidence of what it was asked, told and did; it is not a summary. The workspace is as it was left.`,
+    "",
+    "## Original work order",
+    "",
+    section(input.workOrder) || "(empty)",
+    "",
+  ];
+  if (input.steering.length > 0) {
+    parts.push("## Messages sent while it ran", "");
+    for (const [index, message] of input.steering.entries()) {
+      const delivery =
+        message.delivery === "confirmed"
+          ? "delivered"
+          : "delivery uncertain — reconcile against the work, do not replay blindly";
+      parts.push(`### Message ${index + 1} (${delivery})`, "", section(message.text), "");
+    }
+  }
+  parts.push("## Retained assistant output", "");
+  parts.push(input.retainedOutput.trim() ? section(input.retainedOutput) : "(no output retained)");
+  parts.push("", "## Tool calls", "");
+  if (input.toolCalls.length === 0) {
+    parts.push("(none recorded)");
+  } else if (input.toolCalls.length > EVIDENCE_TOOL_ROWS) {
+    summarized = true;
+    parts.push(
+      `${input.toolCalls.length} tool calls recorded, ${unresolved.length} without a recorded result (cut off). The last ${EVIDENCE_TOOL_ROWS} follow:`,
+      "",
+      ...input.toolCalls.slice(-EVIDENCE_TOOL_ROWS).map(toolRow),
+    );
+  } else {
+    parts.push(...input.toolCalls.map(toolRow));
+  }
+  parts.push("", "## Changed files", "");
+  parts.push(input.diffStat && input.diffStat.trim() ? section(input.diffStat) : "(no diff stat)");
+  parts.push("", "## Full evidence", "");
+  const refs = [
+    input.artifacts.eventsLog && `- Event log: ${input.artifacts.eventsLog}`,
+    input.artifacts.attemptDir && `- Attempt artifacts: ${input.artifacts.attemptDir}`,
+    input.artifacts.patch && `- Patch so far: ${input.artifacts.patch}`,
+  ].filter((line): line is string => typeof line === "string");
+  parts.push(...(refs.length ? refs : ["(no artifact paths available)"]));
+  let markdown =
+    parts
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trimEnd() + "\n";
+  const total = bound(markdown, EVIDENCE_TOTAL_BUDGET_BYTES);
+  if (total.cut) {
+    summarized = true;
+    markdown = total.text + "\n";
+  }
+  return {
+    markdown,
+    summarized,
+    toolCalls: input.toolCalls.length,
+    unresolvedToolCalls: unresolved.length,
+    bytes: bytes(markdown),
+  };
+}
+
+function toolRow(call: EvidenceToolCall): string {
+  const target = call.target ? ` — ${call.target.replace(/\s+/g, " ").slice(0, 160)}` : "";
+  return `- ${call.name}${target} (${call.resolved ? "completed" : "unresolved: no result recorded"})`;
 }
