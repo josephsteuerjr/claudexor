@@ -161,6 +161,10 @@ async function withRotatePool<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const types = (o: Observed): string[] => o.events.map((e) => e.type);
+const continuedCarriers = (o: Observed): unknown[] =>
+  o.events
+    .filter((e) => e.type === "run.continuity")
+    .map((e) => (e.payload["receipt"] as { carrier?: unknown } | undefined)?.carrier);
 const started = (s: { session_id: string }, ts: string) => ({
   type: "started",
   session_id: s.session_id,
@@ -186,8 +190,11 @@ const completed = (s: { session_id: string }, ts: string, payload?: Record<strin
 });
 
 for (const lane of ["ask", "agent"] as const) {
-  describe(`vendor failure on the terminal record (${lane} lane)`, () => {
-    it("carries the vendor's typed failure, says nothing about a crash, and retries nothing", async () => {
+  // After progress a death is continued on the same account (owner 1B: no
+  // session id was reported, so each continuation is a packet re-brief),
+  // bounded by transient_retry.max_retries (default 2, real backoff delays).
+  describe(`vendor failure on the terminal record (${lane} lane)`, { timeout: 20_000 }, () => {
+    it("carries the vendor's typed failure, says nothing about a crash, and continues only on the same account", async () => {
       const o = await runLane(lane, function* (spec) {
         const ts = new Date().toISOString();
         yield started(spec, ts);
@@ -200,7 +207,8 @@ for (const lane of ["ask", "agent"] as const) {
         });
       });
       expect(o.lifecycle).toBe("failed");
-      expect(o.spawns).toHaveLength(1);
+      expect(o.spawns).toEqual([null, null, null]);
+      expect(continuedCarriers(o)).toEqual(["packet", "packet"]);
       expect(o.failure).toMatchObject({
         category: "harness_error",
         code: null,
@@ -237,7 +245,8 @@ for (const lane of ["ask", "agent"] as const) {
           },
         });
       });
-      expect(o.spawns).toHaveLength(1);
+      expect(o.spawns).toEqual([null, null, null]);
+      expect(continuedCarriers(o)).toEqual(["packet", "packet"]);
       expect(o.failure?.vendorFailure).toBeNull();
       expect(o.failure?.nextActions[0]).toBe(
         "The harness process crashed; open diagnostics for the exit detail",
