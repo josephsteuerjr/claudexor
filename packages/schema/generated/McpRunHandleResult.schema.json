@@ -1530,6 +1530,101 @@
           ],
           "description": "Typed post-terminal detail-read problem (the durable run handle survives); null when the detail read succeeded.",
           "default": null
+        },
+        "secretLike": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "totalMatches": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Strings hidden across patch and answer."
+                },
+                "answerMatches": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Strings hidden in the answer."
+                },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "description": "Changed file whose saved diff hides strings."
+                      },
+                      "matches": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Strings hidden in that file's diff."
+                      },
+                      "kinds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Content-rule ids that matched."
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "matches",
+                      "kinds"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "Changed files with hidden strings in the saved patch copy."
+                },
+                "binaryPaths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Binary files whose payload the saved patch omits."
+                },
+                "mediaWithheld": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Images that were not saved as produced outputs."
+                },
+                "persistedPatch": {
+                  "type": "string",
+                  "enum": [
+                    "exact",
+                    "redacted"
+                  ],
+                  "description": "Whether the saved final/patch.diff is byte-exact or a display-only redacted copy."
+                },
+                "exactPatchRecorded": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ],
+                  "description": "For a redacted copy: whether the private exact patch object was recorded (false = deferred Apply answers patch_exact_bytes_unavailable); null for an exact copy."
+                }
+              },
+              "required": [
+                "totalMatches",
+                "answerMatches",
+                "files",
+                "binaryPaths",
+                "mediaWithheld",
+                "persistedPatch",
+                "exactPatchRecorded"
+              ],
+              "additionalProperties": false,
+              "description": "What a run's saved copies hide: secret-like strings kept in the work, hidden on disk."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "INV-062 disclosure: secret-like strings kept in the work but hidden in saved copies (paths and counts only); null when nothing was hidden.",
+          "default": null
         }
       },
       "required": [

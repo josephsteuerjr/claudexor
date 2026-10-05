@@ -20,6 +20,8 @@ import {
   checkPatchReverse,
   deliver,
   deriveApplyEligibility,
+  EXACT_PATCH_UNAVAILABLE_MESSAGE,
+  PR_SECRET_LIKE_REFUSAL,
   validateApplyGate,
   verifyAndDeliver,
 } from "./index.js";
@@ -715,6 +717,181 @@ describe("authorized override unlocks the JIT final verify at apply (QA-032)", (
     const verdict = deriveApplyEligibility(noOverride);
     expect(verdict.requiredAction).not.toMatch(/run a review/i);
     expect(verdict.requiredAction).toMatch(/accept the risk/i);
+  });
+});
+
+describe("a redacted saved copy can never be applied (INV-062, V4C T3)", () => {
+  // Assembled at runtime so no secret-shaped literal lives in this file.
+  const secret = ["sk", "g".repeat(24)].join("-");
+  const exact = `diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+${secret}\n`;
+  const copy = `# Claudexor: saved copy\n${exact.replace(secret, "[redacted]")}`;
+  const approved = DecisionRecord.parse({
+    winner: "a01",
+    facts: makeOutcomeFacts("succeeded", { review: "approved" }),
+    final_verify: { attempted: true, applied_cleanly: true, gates_passed: true },
+  });
+  const blocked = DecisionRecord.parse({
+    winner: "a01",
+    facts: makeOutcomeFacts("succeeded", { review: "blocked", reason: "review_blocked" }),
+    final_verify: null,
+  });
+  // patch_sha256 is ALWAYS the digest of the exact patch.
+  const workProduct = {
+    kind: "patch",
+    meta: { patch_sha256: sha256(exact), persisted_patch: "redacted" },
+  } as never;
+  const base = {
+    state: "succeeded" as const,
+    workProduct,
+    originalRepoRoot: process.cwd(),
+    targetRepoRoot: process.cwd(),
+  };
+
+  it("the digest binding passes the exact patch and refuses the redacted copy", () => {
+    expect(validateApplyGate({ ...base, decision: approved, patch: exact })).toBeNull();
+    expect(validateApplyGate({ ...base, decision: approved, patch: copy })).toBe(
+      "patch artifact hash does not match the recorded work product",
+    );
+  });
+
+  it("checks integrity BEFORE the override-pending permission on a blocked run", () => {
+    // A decision that (wrongly) recorded the COPY's digest used to short-circuit
+    // to "deliverable" before the work-product digest was ever compared.
+    const overrideOnCopy = { action: "accept_risk", patch_sha256: sha256(copy) };
+    expect(
+      validateApplyGate({
+        ...base,
+        decision: blocked,
+        patch: copy,
+        operatorDecision: overrideOnCopy,
+      }),
+    ).toBe("patch artifact hash does not match the recorded work product");
+    expect(
+      deriveApplyEligibility({
+        ...base,
+        decision: blocked,
+        patch: copy,
+        operatorDecision: overrideOnCopy,
+      }).eligible,
+    ).toBe(false);
+    // The same override bound to the exact patch is still the JIT-verify unlock.
+    const overrideOnExact = { action: "accept_risk", patch_sha256: sha256(exact) };
+    expect(
+      validateApplyGate({
+        ...base,
+        decision: blocked,
+        patch: exact,
+        operatorDecision: overrideOnExact,
+      }),
+    ).toBeNull();
+    // Path confinement is part of the integrity checks the override cannot skip.
+    const escaping = "diff --git a/../outside b/../outside\n--- a/../outside\n+++ b/../outside\n";
+    expect(
+      validateApplyGate({
+        ...base,
+        workProduct: { kind: "patch", meta: { patch_sha256: sha256(escaping) } } as never,
+        decision: blocked,
+        patch: escaping,
+        operatorDecision: { action: "accept_risk", patch_sha256: sha256(escaping) },
+      }),
+    ).toMatch(/escapes the target repo/);
+  });
+
+  it("answers the one typed message when the exact bytes are unavailable", () => {
+    const verdict = validateApplyGate({
+      ...base,
+      decision: approved,
+      patch: copy,
+      exactPatchUnavailable: true,
+    });
+    expect(verdict).toBe(EXACT_PATCH_UNAVAILABLE_MESSAGE);
+    expect(verdict).toContain("patch_exact_bytes_unavailable");
+    expect(
+      deriveApplyEligibility({
+        ...base,
+        decision: approved,
+        patch: copy,
+        exactPatchUnavailable: true,
+      }).eligible,
+    ).toBe(false);
+  });
+});
+
+describe("'pr' never publishes a secret-like patch (INV-062, V4C T7)", () => {
+  const secret = ["sk", "p".repeat(24)].join("-");
+
+  async function repoWithRemote(newLine: string) {
+    const { repo } = await makePatchRepo();
+    const remote = reapMk(join(tmpdir(), "claudexor-delivery-pr-remote-"));
+    execFileSync("git", ["init", "--bare", remote], { stdio: "pipe" });
+    await git(repo, ["remote", "add", "origin", remote]);
+    const patch = `diff --git a/NEW.txt b/NEW.txt\nnew file mode 100644\n--- /dev/null\n+++ b/NEW.txt\n@@ -0,0 +1 @@\n+${newLine}\n`;
+    const refs = () =>
+      execFileSync("git", ["--git-dir", remote, "for-each-ref"], { encoding: "utf8" });
+    return { repo, patch, refs };
+  }
+
+  it.each([
+    { finding: "text", line: () => `token ${secret}`, secretLikeBinary: false },
+    { finding: "blob-only", line: () => "no text match here", secretLikeBinary: true },
+  ])(
+    "refuses a $finding finding before the fresh verify, any commit and any push",
+    async ({ line, secretLikeBinary }) => {
+      const { repo, patch, refs } = await repoWithRemote(line());
+      const head = (await git(repo, ["rev-parse", "HEAD"])).stdout.trim();
+      const branches = (await git(repo, ["branch", "--list"])).stdout;
+      const remoteBefore = refs();
+      let authorized = false;
+
+      const res = await verifyAndDeliver(
+        repo,
+        patch,
+        { mode: "pr", branch: "claudexor/never-published", message: "open pr", secretLikeBinary },
+        [],
+        () => {
+          authorized = true;
+          return null;
+        },
+      );
+
+      expect(res).toMatchObject({ mode: "pr", applied: false, refused: true, treeMutated: false });
+      expect(res.detail).toBe(PR_SECRET_LIKE_REFUSAL);
+      // Decided before the verifier and before the caller's authorization ran.
+      expect(res.finalVerify).toMatchObject({
+        attempted: false,
+        reason: "secret_like_patch_not_published",
+      });
+      expect(authorized).toBe(false);
+      expect((await git(repo, ["rev-parse", "HEAD"])).stdout.trim()).toBe(head);
+      expect((await git(repo, ["branch", "--list"])).stdout).toBe(branches);
+      expect(existsSync(join(repo, "NEW.txt"))).toBe(false);
+      expect(refs()).toBe(remoteBefore);
+    },
+  );
+
+  it.each(["apply", "branch", "commit"] as const)(
+    "allows the local '%s' delivery of the same secret-like patch",
+    async (mode) => {
+      const { repo, patch, refs } = await repoWithRemote(`token ${secret}`);
+      const remoteBefore = refs();
+      const res = await verifyAndDeliver(repo, patch, {
+        mode,
+        branch: "claudexor/local-only",
+        message: "local",
+      });
+      expect(res.applied).toBe(true);
+      expect(refs()).toBe(remoteBefore);
+    },
+  );
+
+  it("the plain deliver() entry refuses 'pr' for a secret-like patch too", async () => {
+    const { repo, patch, refs } = await repoWithRemote(`token ${secret}`);
+    const remoteBefore = refs();
+    const res = await deliver(repo, patch, { mode: "pr", message: "open pr" });
+    expect(res).toMatchObject({ mode: "pr", applied: false, treeMutated: false });
+    expect(res.detail).toBe(PR_SECRET_LIKE_REFUSAL);
+    expect(res.commit).toBeUndefined();
+    expect(refs()).toBe(remoteBefore);
   });
 });
 

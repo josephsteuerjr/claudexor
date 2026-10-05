@@ -16,6 +16,7 @@ import { unboundRunStartResponse } from "./run-start.js";
 import { OPERATION_CATALOG } from "./operation-catalog.js";
 import { eventsParseCountForTests, resetEventsParseCountForTests } from "./run-timeline.js";
 import {
+  existsSync,
   appendFileSync,
   mkdtempSync,
   mkdirSync,
@@ -28,7 +29,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
 import { execFileSync } from "node:child_process";
-import { sha256 } from "@claudexor/util";
+import { projectRuntimeDir, sha256 } from "@claudexor/util";
+import { createRevertAnchorFromPatchOrNull } from "@claudexor/workspace";
 import {
   requiredActionsFor,
   SCHEMA_VERSION,
@@ -1603,6 +1605,66 @@ describe("DaemonControlApiServer", () => {
       });
       expect(esc.status).toBe(404);
     });
+  });
+
+  it("withholds a served image whose bytes match the secret-like policy; safe media is served as before (INV-062)", async () => {
+    const { daemon, record } = fakeDaemon();
+    // Assembled at runtime so no secret-shaped literal lives in this file.
+    const secret = ["sk", "m".repeat(24)].join("-");
+    const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    // A synthetic token inside an image text chunk: nothing a text redactor sees.
+    const leaky = Buffer.concat([pngHeader, Buffer.from("tEXtComment\0"), Buffer.from(secret)]);
+    const artifacts = join(record.runDir as string, "artifacts");
+    mkdirSync(artifacts, { recursive: true });
+    writeFileSync(join(artifacts, "clean.png"), pngHeader);
+    writeFileSync(join(artifacts, "leaky.png"), leaky);
+    writeFileSync(join(artifacts, "leaky.bin"), leaky);
+    // The same bytes inside the run directory itself take the same funnel.
+    writeFileSync(join(record.runDir as string, "final", "leaky.png"), leaky);
+    const now = new Date().toISOString();
+    const services: DaemonControlApiOptions["services"] = {
+      listProjects: async () => ({
+        projects: [
+          {
+            schema_version: 2,
+            id: "prj-media",
+            root: record.runDir as string,
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+      }),
+    };
+    await withDaemonServer(
+      daemon,
+      async (base) => {
+        const get = (path: string) =>
+          apiFetch(`${base}${path}`, { headers: { authorization: `Bearer ${token}` } });
+        for (const path of [
+          "/runs/run-d1/produced/leaky.png",
+          "/runs/run-d1/produced/leaky.bin",
+          "/projects/prj-media/outputs/leaky.png",
+          "/runs/run-d1/artifacts/final/leaky.png",
+        ]) {
+          const refused = await get(path);
+          expect(refused.status, path).toBe(409);
+          const body = await refused.text();
+          expect(body).toContain("secret_like_content_withheld");
+          expect(body).not.toContain(secret);
+        }
+        for (const path of [
+          "/runs/run-d1/produced/clean.png",
+          "/projects/prj-media/outputs/clean.png",
+        ]) {
+          const served = await get(path);
+          expect(served.status, path).toBe(200);
+          expect(served.headers.get("content-type")).toBe("image/png");
+          expect(Buffer.from(await served.arrayBuffer()).equals(pngHeader)).toBe(true);
+        }
+      },
+      undefined,
+      services,
+    );
   });
 
   it("REFUSES to serve `.env`-class credential files (Ф2): typed 409, no bytes leaked, across fetch families", async () => {
@@ -7432,6 +7494,255 @@ describe("DaemonControlApiServer", () => {
     });
   });
 
+  describe("saved patch copies with hidden secret-like strings (INV-062, V4C T2)", () => {
+    // Assembled at runtime so no secret-shaped literal lives in this file.
+    const secret = ["sk", "x".repeat(24)].join("-");
+    const exactPatch = [
+      "diff --git a/x b/x",
+      "--- a/x",
+      "+++ b/x",
+      "@@ -1 +1 @@",
+      "-old",
+      `+token = ${secret}`,
+      "",
+    ].join("\n");
+    const savedCopy =
+      "# Claudexor: secret-like strings are replaced with [redacted] in this saved copy.\n" +
+      exactPatch.replace(secret, "[redacted]");
+    const authed = (extra: Record<string, string> = {}) => ({
+      authorization: `Bearer ${token}`,
+      ...extra,
+    });
+
+    /** Rewrite the fixture run into one whose saved patch is a redacted copy. */
+    function redactedRun(
+      record: DaemonRunRecord,
+      project: string,
+      options: {
+        exactObject?: "stored" | "missing" | "corrupt" | "unrecorded";
+        meta?: string;
+      } = {},
+    ): void {
+      const digest = sha256(exactPatch);
+      const state = options.exactObject ?? "stored";
+      writeFileSync(join(record.runDir as string, "final", "patch.diff"), savedCopy);
+      writeFileSync(
+        join(record.runDir as string, "final", "work_product.yaml"),
+        [
+          "id: wp-test",
+          "kind: patch",
+          "source_task_id: task-d1",
+          "meta:",
+          `  patch_sha256: ${digest}`,
+          "  persisted_patch: redacted",
+          `  exact_patch_object: ${state === "unrecorded" ? "null" : digest}`,
+          ...(options.meta ? [options.meta] : []),
+          "",
+        ].join("\n"),
+      );
+      __reapDirs.push(projectRuntimeDir(project));
+      if (state === "stored") {
+        expect(createRevertAnchorFromPatchOrNull(project, exactPatch)).toBe(digest);
+      } else if (state === "corrupt") {
+        const dir = join(projectRuntimeDir(project), "anchors", "objects");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, `${digest.slice("sha256:".length)}.patch`), savedCopy);
+      }
+    }
+
+    it("serves the redacted copy, yet Apply and apply/check use the exact private object", async () => {
+      await withAppliableProject(async (base, project, record) => {
+        redactedRun(record, project);
+
+        const served = await apiFetch(`${base}/runs/run-d1/artifacts/final/patch.diff`, {
+          headers: authed(),
+        });
+        expect(served.status).toBe(200);
+        const servedText = await served.text();
+        expect(servedText).toContain("+token = [redacted]");
+        expect(servedText).not.toContain(secret);
+
+        const detail = (await (
+          await apiFetch(`${base}/runs/run-d1`, { headers: authed() })
+        ).json()) as { applyEligibility: { eligible: boolean } };
+        expect(detail.applyEligibility.eligible).toBe(true);
+        expect(JSON.stringify(detail)).not.toContain(secret);
+
+        const check = await apiFetch(`${base}/runs/run-d1/apply/check`, {
+          method: "POST",
+          headers: authed(),
+          body: JSON.stringify({}),
+        });
+        expect(check.status).toBe(200);
+        expect(((await check.json()) as { ok: boolean }).ok).toBe(true);
+
+        const applied = await apiFetch(`${base}/runs/run-d1/apply`, {
+          method: "POST",
+          headers: authed(),
+          body: JSON.stringify({ mode: "apply" }),
+        });
+        expect(applied.status).toBe(200);
+        expect(((await applied.json()) as { applied: boolean }).applied).toBe(true);
+        // The project receives the EXACT token, never the literal "[redacted]".
+        expect(readFileSync(join(project, "x"), "utf8")).toBe(`token = ${secret}\n`);
+
+        // Idempotent replay of an already-applied run still resolves the exact bytes.
+        const replay = await apiFetch(`${base}/runs/run-d1/apply/check`, {
+          method: "POST",
+          headers: authed(),
+          body: JSON.stringify({}),
+        });
+        expect(replay.status).toBe(200);
+        expect(((await replay.json()) as { alreadyApplied?: boolean }).alreadyApplied).toBe(true);
+      });
+    });
+
+    it.each(["missing", "corrupt", "unrecorded"] as const)(
+      "answers 409 patch_exact_bytes_unavailable on every route when the exact object is %s, touching nothing",
+      async (exactObject) => {
+        await withAppliableProject(async (base, project, record) => {
+          redactedRun(record, project, { exactObject });
+          const expectUnavailable = async (response: Response) => {
+            expect(response.status).toBe(409);
+            const body = (await response.json()) as { code?: string; message?: string };
+            expect(body.code).toBe("patch_exact_bytes_unavailable");
+            expect(JSON.stringify(body)).not.toContain(secret);
+          };
+
+          await expectUnavailable(
+            await apiFetch(`${base}/runs/run-d1/apply/check`, {
+              method: "POST",
+              headers: authed(),
+              body: JSON.stringify({}),
+            }),
+          );
+          await expectUnavailable(
+            await apiFetch(`${base}/runs/run-d1/apply`, {
+              method: "POST",
+              headers: authed(),
+              body: JSON.stringify({ mode: "apply" }),
+            }),
+          );
+          await expectUnavailable(
+            await apiFetch(`${base}/runs/run-d1/decision`, {
+              method: "POST",
+              headers: authed({ "Idempotency-Key": `v4c-clean-${exactObject}` }),
+              body: JSON.stringify({ action: "accept_clean_patch" }),
+            }),
+          );
+          // The read projection says the same thing instead of advertising Apply.
+          const detail = (await (
+            await apiFetch(`${base}/runs/run-d1`, { headers: authed() })
+          ).json()) as { applyEligibility: { eligible: boolean; reason: string | null } };
+          expect(detail.applyEligibility.eligible).toBe(false);
+          expect(detail.applyEligibility.reason).toContain("patch_exact_bytes_unavailable");
+          // The redacted copy was never applied: the tree is byte-identical.
+          expect(readFileSync(join(project, "x"), "utf8")).toBe("old\n");
+          expect(execFileSync("git", ["status", "--porcelain"], { cwd: project }).toString()).toBe(
+            "",
+          );
+        });
+      },
+    );
+
+    it("binds accept_risk to the digest of the EXACT patch and then applies exact bytes", async () => {
+      await withAppliableProject(async (base, project, record) => {
+        redactedRun(record, project);
+
+        const decision = await apiFetch(`${base}/runs/run-d1/decision`, {
+          method: "POST",
+          headers: authed({ "Idempotency-Key": "v4c-accept-risk" }),
+          body: JSON.stringify({ action: "accept_risk" }),
+        });
+        expect(decision.status).toBe(200);
+        // The compatibility projection carries the exact digest, not the copy's.
+        const projection = readFileSync(
+          join(record.runDir as string, "arbitration", "operator_decision.yaml"),
+          "utf8",
+        );
+        expect(projection).toContain(sha256(exactPatch));
+        expect(projection).not.toContain(sha256(savedCopy));
+
+        const detail = (await (
+          await apiFetch(`${base}/runs/run-d1`, { headers: authed() })
+        ).json()) as { applyEligibility: { eligible: boolean } };
+        // The decision is VALID for this run: it unblocked Apply.
+        expect(detail.applyEligibility.eligible).toBe(true);
+
+        const applied = await apiFetch(`${base}/runs/run-d1/apply`, {
+          method: "POST",
+          headers: authed(),
+          body: JSON.stringify({ mode: "apply" }),
+        });
+        expect(applied.status).toBe(200);
+        expect(readFileSync(join(project, "x"), "utf8")).toBe(`token = ${secret}\n`);
+      }, "blocked");
+    });
+
+    it("cannot accept_risk a run whose exact bytes are unavailable", async () => {
+      await withAppliableProject(async (base, project, record) => {
+        redactedRun(record, project, { exactObject: "missing" });
+        const decision = await apiFetch(`${base}/runs/run-d1/decision`, {
+          method: "POST",
+          headers: authed({ "Idempotency-Key": "v4c-accept-risk-missing" }),
+          body: JSON.stringify({ action: "accept_risk" }),
+        });
+        expect(decision.status).toBe(409);
+        expect(((await decision.json()) as { code?: string }).code).toBe(
+          "patch_exact_bytes_unavailable",
+        );
+        expect(
+          existsSync(join(record.runDir as string, "arbitration", "operator_decision.yaml")),
+        ).toBe(false);
+      }, "blocked");
+    });
+
+    it.each([
+      { finding: "text", meta: undefined },
+      {
+        finding: "blob-only",
+        meta: "  secret_like:\n    files: []\n    binary_paths:\n      - assets/x.bin\n    media_withheld: []\n    answer_matches: 0\n    total_matches: 0",
+      },
+    ])(
+      "refuses 'pr' delivery for a $finding finding before any branch or push; 'commit' stays allowed",
+      async ({ finding, meta }) => {
+        await withAppliableProject(async (base, project, record) => {
+          if (finding === "text") {
+            redactedRun(record, project);
+          } else {
+            // An exact, text-clean saved patch whose disclosure names a binary.
+            const workProduct = join(record.runDir as string, "final", "work_product.yaml");
+            writeFileSync(workProduct, `${readFileSync(workProduct, "utf8")}${meta}\n`);
+          }
+          const branchesBefore = execFileSync("git", ["branch", "--list"], {
+            cwd: project,
+          }).toString();
+
+          const pr = await apiFetch(`${base}/runs/run-d1/apply`, {
+            method: "POST",
+            headers: authed(),
+            body: JSON.stringify({ mode: "pr", branch: "claudexor/v4c-pr" }),
+          });
+          expect(pr.status).toBe(409);
+          expect(JSON.stringify(await pr.json())).toContain("refusing 'pr' delivery");
+          expect(execFileSync("git", ["branch", "--list"], { cwd: project }).toString()).toBe(
+            branchesBefore,
+          );
+          expect(readFileSync(join(project, "x"), "utf8")).toBe("old\n");
+
+          // Local delivery of the same patch is allowed: the bytes are already here.
+          const commit = await apiFetch(`${base}/runs/run-d1/apply`, {
+            method: "POST",
+            headers: authed(),
+            body: JSON.stringify({ mode: "commit", message: "local" }),
+          });
+          expect(commit.status).toBe(200);
+          expect(((await commit.json()) as { applied: boolean }).applied).toBe(true);
+        });
+      },
+    );
+  });
+
   it("enforces contradictory canonical RunFacts through apply/check, decision, apply, and delivery overlay", async () => {
     await withAppliableProject(async (base, project) => {
       const check = await apiFetch(`${base}/runs/run-d1/apply/check`, {
@@ -10796,7 +11107,7 @@ describe("DaemonControlApiServer", () => {
     });
   });
 
-  it("redacts prompts in summaries and refuses secret-like patch artifacts", async () => {
+  it("redacts prompts in summaries; a raw secret-like patch artifact is neither served nor applyable", async () => {
     const { daemon, record } = fakeDaemon();
     const secret = "sk-" + "a".repeat(24);
     record.params = { prompt: `use ${secret}`, mode: "agent", routingGoal: "auto" };
@@ -10818,12 +11129,19 @@ describe("DaemonControlApiServer", () => {
       });
       expect(patch.status).toBe(409);
 
+      // V4C: there is no separate "secret-like token" apply refusal any more.
+      // A raw artifact that is not the recorded exact patch is refused by the
+      // apply gate's digest binding, like any other tampered patch file.
       const apply = await apiFetch(`${base}/runs/run-d1/apply/check`, {
         method: "POST",
         headers: { authorization: `Bearer ${token}` },
         body: "{}",
       });
       expect(apply.status).toBe(409);
+      const refusal = await apply.text();
+      expect(refusal).toContain("patch artifact hash does not match the recorded work product");
+      expect(refusal).not.toContain("secret-like token");
+      expect(refusal).not.toContain(secret);
     });
   });
 

@@ -10,6 +10,7 @@ import {
   projectDegradedRecoveryRunDetail,
   projectImmediateRunDetail,
   projectRecoveryRunDetail,
+  projectSecretLikeDisclosure,
 } from "./mcp-run-projections.js";
 import { CliError } from "./cli-error.js";
 import {
@@ -176,6 +177,68 @@ describe("MCP run detail projections", () => {
       attemptExecution,
     });
     expect(McpRunHandleResult.parse(projected).attemptExecution).toEqual(attemptExecution);
+  });
+
+  it("carries the secret-like disclosure as a typed fact that an answer-first run_result cannot drop (INV-062)", () => {
+    const secretLike = {
+      files: [{ path: "tests/redact.test.ts", matches: 2, kinds: ["openai_compatible_api_key"] }],
+      binary_paths: ["assets/x.bin"],
+      media_withheld: ["shots/a.png"],
+      answer_matches: 1,
+      total_matches: 3,
+    };
+    const detail = (meta: Record<string, unknown>) => ({
+      summary: { runId: "run-1", taskId: "task-1", state: "succeeded" },
+      runFacts: terminalReceipt,
+      // run_result answers with the primary output text, not the summary.md line.
+      finalSummary: "- Secret-like strings: 2 in 1 changed file(s)",
+      workProduct: { id: "wp-1", kind: "patch", meta },
+    });
+    const expected = {
+      totalMatches: 3,
+      answerMatches: 1,
+      files: secretLike.files,
+      binaryPaths: ["assets/x.bin"],
+      mediaWithheld: ["shots/a.png"],
+      persistedPatch: "redacted",
+      exactPatchRecorded: true,
+    };
+    for (const mode of ["__run_result", "__inspect"]) {
+      const projected = projectRecoveryRunDetail(
+        mode,
+        "run-1",
+        detail({
+          secret_like: secretLike,
+          persisted_patch: "redacted",
+          exact_patch_object: `sha256:${"0".repeat(64)}`,
+        }),
+      );
+      expect(McpRunHandleResult.parse(projected).secretLike).toEqual(expected);
+    }
+    // A redacted copy whose exact object could not be stored says so.
+    expect(
+      projectSecretLikeDisclosure(
+        detail({ secret_like: secretLike, persisted_patch: "redacted", exact_patch_object: null }),
+      ),
+    ).toMatchObject({ persistedPatch: "redacted", exactPatchRecorded: false });
+    // Media-only disclosure: the saved patch itself is exact.
+    expect(
+      projectSecretLikeDisclosure(
+        detail({ secret_like: { ...secretLike, files: [], binary_paths: [], total_matches: 0 } }),
+      ),
+    ).toMatchObject({ persistedPatch: "exact", exactPatchRecorded: null, totalMatches: 0 });
+    // Clean runs, missing work products and malformed records project null.
+    expect(projectSecretLikeDisclosure(detail({}))).toBeNull();
+    expect(projectSecretLikeDisclosure(null)).toBeNull();
+    expect(projectSecretLikeDisclosure(detail({ secret_like: { files: "nope" } }))).toBeNull();
+    expect(
+      McpRunHandleResult.parse(projectRecoveryRunDetail("__run_result", "run-1", detail({})))
+        .secretLike,
+    ).toBeNull();
+    expect(
+      McpRunHandleResult.parse(projectDegradedRecoveryRunDetail("run-1", new Error("x")))
+        .secretLike,
+    ).toBeNull();
   });
 
   it("validates lineage before active-state receipt short-circuit, then returns honest null", () => {
