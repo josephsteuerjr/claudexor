@@ -125,31 +125,40 @@ export function excludePlainDiffPathPrefix(text: string, relativeDir: string): s
 }
 
 /** `diff -ruN` carries no binary payload, so inspect each live binary
- * postimage directly. Oversized, non-regular, or unreadable bytes fail closed. */
-export function plainDiffBinarySecretLike(text: string, liveRoot: string): boolean {
+ * postimage directly and name the ones a persisted copy must disclose.
+ * Oversized, non-regular, or unreadable bytes are unprovable and are named too. */
+export function plainDiffFlaggedBinaries(text: string, liveRoot: string): string[] {
   const root = resolve(liveRoot);
+  const flagged: string[] = [];
   for (const file of parseUnifiedDiff(text).files) {
     if (!file.binaryStub || file.deleted || !file.newPath) continue;
     const source = resolve(root, file.newPath);
-    if (source !== root && !source.startsWith(root + sep)) return true;
+    if (source !== root && !source.startsWith(root + sep)) {
+      flagged.push(file.newPath);
+      continue;
+    }
     let fd: number;
     try {
       fd = openSync(source, constants.O_RDONLY | constants.O_NOFOLLOW);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      return true;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") flagged.push(file.newPath);
+      continue;
     }
     try {
       const stat = fstatSync(fd);
-      if (!stat.isFile() || stat.size > MAX_BINARY_SECRET_SCAN_BYTES) return true;
-      const bytes = readFileSync(fd);
-      if (bytes.length > MAX_BINARY_SECRET_SCAN_BYTES) return true;
-      if (containsSecretLikeToken(bytes.toString("latin1"))) return true;
+      const bytes =
+        stat.isFile() && stat.size <= MAX_BINARY_SECRET_SCAN_BYTES ? readFileSync(fd) : null;
+      if (
+        bytes === null ||
+        bytes.length > MAX_BINARY_SECRET_SCAN_BYTES ||
+        containsSecretLikeToken(bytes.toString("latin1"))
+      )
+        flagged.push(file.newPath);
     } catch {
-      return true;
+      flagged.push(file.newPath);
     } finally {
       closeSync(fd);
     }
   }
-  return false;
+  return flagged;
 }

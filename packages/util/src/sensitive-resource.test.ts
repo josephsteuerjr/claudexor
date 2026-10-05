@@ -54,8 +54,25 @@ describe("SensitiveResourcePolicy hostile corpus", () => {
       action: "allow",
       containsSensitiveContent: false,
       signatures: [],
+      matches: 0,
       text: "ordinary prose",
     });
+  });
+
+  it("counts every replaced match once and is idempotent on its own output (V4C T8)", () => {
+    // Fake tokens are assembled at runtime so no secret-shaped literal lives in the source.
+    const apiKey = ["sk", "a".repeat(24)].join("-");
+    const cursorKey = ["key", "b".repeat(24)].join("_");
+    const bearer = `Bearer ${apiKey}`;
+    const text = `one ${apiKey}\ntwo ${apiKey} three ${cursorKey}\nheader: ${bearer}`;
+    const first = sensitiveResourcePolicy.inspectContent(text, "redact");
+    // The bearer-wrapped key is consumed by the earlier API-key rule: one match, never two.
+    expect(first.matches).toBe(4);
+    expect([...first.signatures].sort()).toEqual(["cursor_api_key", "openai_compatible_api_key"]);
+    expect(first.text).not.toContain(apiKey);
+    expect(first.text).not.toContain(cursorKey);
+    const second = sensitiveResourcePolicy.inspectContent(first.text, "redact");
+    expect(second).toMatchObject({ action: "allow", matches: 0, text: first.text });
   });
 
   it("allows only contained, relocatable, non-sensitive symlink targets", () => {

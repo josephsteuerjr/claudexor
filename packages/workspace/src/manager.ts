@@ -10,7 +10,6 @@ import type {
 import { WorkspaceEnvelope as WorkspaceEnvelopeSchema } from "@claudexor/schema";
 import { runCaptureRaw, WorkspaceError } from "@claudexor/core";
 import {
-  containsSecretLikeToken,
   ensureDir,
   newId,
   nowIso,
@@ -27,7 +26,7 @@ import {
 import { processStartTime, readEnvelopeRecoveryRecord } from "./envelope-recovery.js";
 import {
   excludePlainDiffPathPrefix,
-  plainDiffBinarySecretLike,
+  plainDiffFlaggedBinaries,
   relativizePlainDiffHeaders,
   snapshotLegacyDirectoryBaseline,
 } from "./plain-diff.js";
@@ -50,6 +49,18 @@ import {
   worktreePrune,
   worktreeRemove,
 } from "./git.js";
+
+/** One candidate capture. `diff` is always the EXACT patch (apply, synthesis,
+ * digests); what a saved copy must hide is derived from it downstream. */
+export interface CapturedWorkspaceDiff {
+  diff: string;
+  /** Changed binaries whose bytes hold (or cannot be proven free of)
+   * secret-like content; a persisted copy withholds their payload. */
+  binarySecretPaths: string[];
+  /** The capture could not observe the candidate's changes at all (no legacy
+   * baseline, a failed `diff`): an honest capture refusal, never "no changes". */
+  captureIncomplete: boolean;
+}
 
 export interface CreateEnvelopeOptions {
   taskId: string;
@@ -319,21 +330,23 @@ export class WorkspaceManager {
     return ensureLaneHomeEnv(this.runtimeRoot, threadId, harnessId, profileId);
   }
 
-  async captureDiff(env: WorkspaceEnvelope): Promise<{
-    diff: string;
-    binarySecretLike: boolean;
-  }> {
+  async captureDiff(env: WorkspaceEnvelope): Promise<CapturedWorkspaceDiff> {
     if (env.workspace_kind === "directory")
       throw new WorkspaceError(
         "Directory results use captureFiles; a text diff is not their work product",
       );
+    const incomplete: CapturedWorkspaceDiff = {
+      diff: "",
+      binarySecretPaths: [],
+      captureIncomplete: true,
+    };
     if (env.policy_profile === "readonly") {
-      return { diff: "", binarySecretLike: false };
+      return { ...incomplete, captureIncomplete: false };
     }
     // In-place: there is no isolated worktree. Capture the candidate tree in a
-    // temporary object database so a secret refusal cannot leave its bytes as
-    // dangling objects in the user's repository. The exact per-turn base still
-    // folds prior dirty state out of this turn's diff.
+    // temporary object database so the capture itself never adds dangling
+    // objects to the user's repository. The exact per-turn base still folds
+    // prior dirty state out of this turn's diff.
     const artifactRelative = this.ownedArtifactRelativeDirectory(env);
     const artifactExcludes = artifactRelative ? [`:(exclude,top)${artifactRelative}`] : [];
     if (env.worktree_path === env.repo_root) {
@@ -343,13 +356,17 @@ export class WorkspaceManager {
           env.base_sha,
           artifactExcludes,
         );
-        return { diff: captured.patch, binarySecretLike: captured.binarySecretLike };
+        return {
+          diff: captured.patch,
+          binarySecretPaths: captured.binarySecretPaths,
+          captureIncomplete: false,
+        };
       }
       // Non-git fallback: diff the best-effort cpSync baseline against the live
-      // tree. Missing or failed capture is an uncaptured binary risk, never a
-      // safe no-change result.
+      // tree. Missing or failed capture is an INCOMPLETE capture, never a safe
+      // no-change result.
       const baseline = join(this.envelopeBase(env.task_id, env.attempt_id), "baseline");
-      if (!existsSync(baseline)) return { diff: "", binarySecretLike: true };
+      if (!existsSync(baseline)) return incomplete;
       try {
         const r = await runCaptureRaw(
           "diff",
@@ -370,9 +387,7 @@ export class WorkspaceManager {
           ],
           { timeoutMs: 120_000 },
         );
-        if (r.code !== 0 && r.code !== 1) {
-          return { diff: "", binarySecretLike: true };
-        }
+        if (r.code !== 0 && r.code !== 1) return incomplete;
         // Relativize the header paths to the git-style a/<rel> b/<rel> shape.
         // Downstream consumers (diffstat, protected-path/risk gating) match
         // REPO-RELATIVE globs like `test/**`; absolute `/…/repo/test/x`
@@ -387,15 +402,13 @@ export class WorkspaceManager {
             relativized.length > CAP
               ? relativized.slice(0, CAP) + "\n... [diff truncated]\n"
               : relativized,
-          // Inspect the complete captured text before projecting it into the
-          // bounded artifact. A token beyond the 200k display cap must still
-          // trip the secret fence.
-          binarySecretLike:
-            containsSecretLikeToken(relativized) ||
-            plainDiffBinarySecretLike(relativized, env.repo_root),
+          // Binary stubs are inspected over the COMPLETE captured text, before
+          // it is projected into the bounded artifact.
+          binarySecretPaths: plainDiffFlaggedBinaries(relativized, env.repo_root),
+          captureIncomplete: false,
         };
       } catch {
-        return { diff: "", binarySecretLike: true };
+        return incomplete;
       }
     }
     // Exclude the envelope-local generated CLAUDE.md bridge (INV-113) from the
@@ -421,7 +434,11 @@ export class WorkspaceManager {
       ...artifactExcludes,
       ...bridgeExcludes,
     ]);
-    return { diff: captured.patch, binarySecretLike: captured.binarySecretLike };
+    return {
+      diff: captured.patch,
+      binarySecretPaths: captured.binarySecretPaths,
+      captureIncomplete: false,
+    };
   }
 
   async diff(env: WorkspaceEnvelope): Promise<string> {

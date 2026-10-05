@@ -663,7 +663,7 @@ describe("WorkspaceManager", () => {
     expect(readFileSync(join(repo, "dirty.txt"), "utf8")).toBe("pre-existing uncommitted state\n");
   });
 
-  it("flags a secret-bearing binary postimage in a non-git in-place directory", async () => {
+  it("names a secret-bearing binary postimage in a non-git in-place directory", async () => {
     const dir = reapMk(join(tmpdir(), "claudexor-inplace-binary-"));
     writeFileSync(join(dir, "README.md"), "plain folder\n");
     const mgr = new WorkspaceManager(dir);
@@ -676,11 +676,14 @@ describe("WorkspaceManager", () => {
     const captured = await mgr.captureDiff(env);
 
     expect(captured.diff).toContain("Binary files");
-    expect(captured.binarySecretLike).toBe(true);
+    expect(captured.binarySecretPaths).toEqual(["LEAK.bin"]);
+    expect(captured.captureIncomplete).toBe(false);
+    // V4C: capture classifies, it never removes — the bytes stay in the folder.
+    expect(existsSync(join(dir, "LEAK.bin"))).toBe(true);
     await mgr.dispose(env);
   });
 
-  it("scans the full non-git text diff for secrets before projecting it to 200k", async () => {
+  it("keeps a token beyond the 200k projection out of the bounded non-git copy", async () => {
     const dir = reapMk(join(tmpdir(), "claudexor-inplace-long-secret-"));
     writeFileSync(join(dir, "README.md"), "plain folder\n");
     const mgr = new WorkspaceManager(dir);
@@ -692,11 +695,15 @@ describe("WorkspaceManager", () => {
 
     expect(captured.diff).toContain("[diff truncated]");
     expect(captured.diff).not.toContain(secret);
-    expect(captured.binarySecretLike).toBe(true);
+    // The bounded projection is the only text a saved copy is built from, so
+    // the capture is complete and names no binary; the live file is untouched.
+    expect(captured.binarySecretPaths).toEqual([]);
+    expect(captured.captureIncomplete).toBe(false);
+    expect(readFileSync(join(dir, "LONG.txt"), "utf8")).toContain(secret);
     await mgr.dispose(env);
   });
 
-  it("fails closed when non-git diff cannot read a binary postimage", async () => {
+  it("reports an incomplete capture when non-git diff cannot read a binary postimage", async () => {
     const dir = reapMk(join(tmpdir(), "claudexor-inplace-unreadable-"));
     writeFileSync(join(dir, "README.md"), "plain folder\n");
     const mgr = new WorkspaceManager(dir);
@@ -706,11 +713,38 @@ describe("WorkspaceManager", () => {
     chmodSync(leak, 0o000);
     try {
       const captured = await mgr.captureDiff(env);
-      expect(captured).toEqual({ diff: "", binarySecretLike: true });
+      expect(captured).toEqual({ diff: "", binarySecretPaths: [], captureIncomplete: true });
     } finally {
       chmodSync(leak, 0o600);
       await mgr.dispose(env);
     }
+  });
+
+  it("names git binaries whose pre- or postimage holds secret-like bytes, keeping the exact payload", async () => {
+    const repo = await initRepo();
+    const token = ["sk", "q".repeat(24)].join("-");
+    const withToken = Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(token)]);
+    writeFileSync(join(repo, "old-leak.bin"), withToken);
+    await git(repo, ["add", "old-leak.bin"]);
+    await git(repo, [
+      ...["-c", "user.email=t@t.dev", "-c", "user.name=Test"],
+      ...["commit", "-q", "-m", "binary with token-shaped bytes"],
+    ]);
+    const mgr = new WorkspaceManager(repo);
+    const env = await mgr.create({ taskId: "t-git-bin", attemptId: "a01", inPlace: true });
+    // Postimage carries the token; the preimage-only case is scrubbed here.
+    writeFileSync(join(repo, "new-leak.bin"), withToken);
+    writeFileSync(join(repo, "old-leak.bin"), Buffer.from([0, 9, 9, 9]));
+    writeFileSync(join(repo, "plain.bin"), Buffer.from([0, 7, 7, 7]));
+
+    const captured = await mgr.captureDiff(env);
+
+    expect(captured.captureIncomplete).toBe(false);
+    expect([...captured.binarySecretPaths].sort()).toEqual(["new-leak.bin", "old-leak.bin"]);
+    // The exact patch still carries every binary payload (it is what gets applied).
+    expect(captured.diff.match(/^GIT binary patch$/gm)?.length).toBe(3);
+    expect(readFileSync(join(repo, "new-leak.bin")).equals(withToken)).toBe(true);
+    await mgr.dispose(env);
   });
 
   it("in-place non-git: header relativization never rewrites hunk CONTENT that looks like a header (INV-041)", async () => {
