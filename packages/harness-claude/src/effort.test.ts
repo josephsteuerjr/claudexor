@@ -2,18 +2,24 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import type { HarnessEvent } from "@claudexor/schema";
 import { HarnessRunSpec } from "@claudexor/schema";
-import { normalizeEffort, resolveEffort } from "@claudexor/core";
+import { EffortPreferenceRejectedError, normalizeEffort, resolveEffort } from "@claudexor/core";
 import {
   CLAUDE_EFFORT_SNAPSHOT,
   CLAUDE_EFFORT_SNAPSHOT_VERIFIED_AGAINST,
   claudeAdvertisedEffortsForRun,
   claudeEffortClampedEvent,
   claudeEffortIgnoredEvent,
-  claudeEffortLadder,
+  claudeEffortLadders,
+  claudeEffortResolution,
+  claudeRunEffortResolution,
   claudeSnapshotTrustedForVersion,
   parseClaudeEffortHelp,
 } from "./effort-probe.js";
-import { createClaudeAdapter } from "./index.js";
+import { claudeArgsForSpec, createClaudeAdapter } from "./index.js";
+
+/** The run's receipt for a live-probed ladder, as the disclosure seams read it. */
+const receipt = (hint: string | null, advertised: readonly string[]) =>
+  claudeEffortResolution(hint, advertised, "live_probe");
 
 /** Real `claude --help` shape: the values wrap onto the next line. */
 const HELP_2_1_165 = [
@@ -121,7 +127,7 @@ describe("the claude ladder is a property of the INSTALLED binary", () => {
   it("uses recorded same-provider order to resolve xhigh downward when current help omits it", () => {
     const advertised = parseClaudeEffortHelp(HELP_2_1_89) ?? [];
     expect(advertised).not.toContain("xhigh");
-    expect(normalizeEffort("xhigh", advertised, claudeEffortLadder(advertised))).toBe("high");
+    expect(normalizeEffort("xhigh", advertised, claudeEffortLadders(advertised))).toBe("high");
     // Without that recorded order the missing value cannot be placed.
     expect(resolveEffort("xhigh", advertised).status).toBe("rejected");
   });
@@ -284,18 +290,23 @@ describe("the claude effort probe degrades gracefully", () => {
 describe("an effort dropped AFTER preflight is disclosed on the run (INV-105)", () => {
   it("claudeEffortIgnoredEvent yields the ignored-settings disclosure exactly when the flag is dropped", () => {
     const advertised = ["low", "medium", "high", "max"] as const; // a 2.1.89-shaped binary
+    const seam = (hint: string | null) => ({ session_id: "s1", effort_hint: hint });
     expect(
-      claudeEffortIgnoredEvent({ session_id: "s1", effort_hint: "xhigh" }, advertised),
+      claudeEffortIgnoredEvent(seam("xhigh"), advertised, receipt("xhigh", advertised)),
     ).toBeNull();
     expect(
-      claudeEffortClampedEvent({ session_id: "s1", effort_hint: "xhigh" }, advertised)?.text,
+      claudeEffortClampedEvent(seam("xhigh"), advertised, receipt("xhigh", advertised))?.text,
     ).toContain("high");
     expect(
-      claudeEffortIgnoredEvent({ session_id: "s1", effort_hint: "max" }, advertised),
+      claudeEffortIgnoredEvent(seam("max"), advertised, receipt("max", advertised)),
     ).toBeNull();
-    expect(
-      claudeEffortIgnoredEvent({ session_id: "s1", effort_hint: null }, advertised),
-    ).toBeNull();
+    expect(claudeEffortIgnoredEvent(seam(null), advertised, receipt(null, advertised))).toBeNull();
+    // A word neither Claude nor the shared order knows is dropped AND noted as such.
+    const typo = receipt("ulta", advertised);
+    expect(typo.resolution).toBe("rejected");
+    expect(claudeEffortIgnoredEvent(seam("ulta"), advertised, typo)?.text).toContain(
+      "outside the shared preference order",
+    );
   });
 
   it("the RUN discloses a downward substitution when the installed ladder has a known gap", async () => {
@@ -420,59 +431,214 @@ describe("an effort dropped AFTER preflight is disclosed on the run (INV-105)", 
 
 describe("an effort the resolution CLAMPED is disclosed too (INV-105) — the codex-symmetric seam", () => {
   const maxCapped = ["low", "medium", "high", "xhigh", "max"] as const; // 2.1.165-shaped binary
-  const ladderWithUltra = [...maxCapped, "ultra"] as const; // a rank order that places ultra above max
-
-  it("discloses `ultra` clamped onto `max` when a rank ladder places it above a max-capped binary", () => {
-    // The claude-shaped clamp: the binary advertises up to `max`, the rank
-    // ladder knows `ultra` sits above it, so resolution clamps ultra -> max —
-    // and the seam says so, naming both levels.
-    const clamped = claudeEffortClampedEvent(
-      { session_id: "s1", effort_hint: "ultra" },
-      maxCapped,
-      ladderWithUltra,
+  /** The REAL run seam over a live-probed max-capped binary: one receipt for everything. */
+  const runSeam = (hint: string | null) =>
+    claudeRunEffortResolution(
+      { session_id: "s1", effort_hint: hint },
+      {
+        probeEffortLevels: async () => ({ levels: [...maxCapped], live: true }),
+        detectVersion: async () => "2.1.165 (Claude Code)",
+      },
     );
-    expect(clamped?.type).toBe("status");
-    expect(clamped?.text).toContain("clamped");
-    expect(clamped?.payload?.["ignored_settings"]).toEqual([
+
+  it("discloses `ultra` clamped onto `max`: the shared order places it above a max-capped binary", async () => {
+    // The claude-shaped clamp: the binary advertises up to `max`, Claude's own
+    // order never lists `ultra`, the shared preference order places it above
+    // `max`, so the run resolves ultra -> max DOWNWARD — and the seam says so,
+    // naming both levels and the order that did the placing.
+    const run = await runSeam("ultra");
+    expect(run.resolution).toMatchObject({
+      requested: "ultra",
+      submitted: "max",
+      resolution: "downward",
+      source: "live_probe",
+      parameter: "--effort",
+    });
+    expect(run.resolution.reason).toContain("shared preference order");
+    const clamped = run.event;
+    expect(clamped.type).toBe("status");
+    expect(clamped.text).toContain("clamped");
+    expect(clamped.payload?.["ignored_settings"]).toEqual([
       expect.stringContaining("effort=ultra"),
     ]);
-    expect(clamped?.payload?.["ignored_settings"]).toEqual([expect.stringContaining("max")]);
-    // ...and the SAME inputs make the normalizer send exactly that level, so
-    // the disclosure and the flag cannot disagree.
-    expect(normalizeEffort("ultra", maxCapped, ladderWithUltra)).toBe("max");
+    expect(clamped.payload?.["ignored_settings"]).toEqual([expect.stringContaining("max")]);
+    expect(clamped.payload?.["ignored_settings"]).toEqual([
+      expect.stringContaining("shared preference order"),
+    ]);
+    // ...and the arg builder sends exactly the receipt's level, so the
+    // disclosure and the flag cannot disagree.
+    const spec = HarnessRunSpec.parse({
+      session_id: "s1",
+      intent: "implement",
+      prompt: "do it",
+      cwd: "/repo",
+      effort_hint: "ultra",
+    });
+    const args = claudeArgsForSpec(spec, false, false, run.resolution.submitted);
+    expect(args[args.indexOf("--effort") + 1]).toBe("max");
   });
 
-  it("keeps diagnostic seams exclusive for exact and unrankable requests", () => {
+  it("keeps diagnostic seams exclusive for exact, placed and unplaceable requests", async () => {
     // Advertised verbatim: neither seam fires.
+    const exact = await runSeam("max");
+    expect(exact.resolution.resolution).toBe("exact");
     expect(
-      claudeEffortClampedEvent({ session_id: "s1", effort_hint: "max" }, maxCapped),
+      claudeEffortClampedEvent(
+        { session_id: "s1", effort_hint: "max" },
+        maxCapped,
+        exact.resolution,
+      ),
     ).toBeNull();
     expect(
-      claudeEffortIgnoredEvent({ session_id: "s1", effort_hint: "max" }, maxCapped),
+      claudeEffortIgnoredEvent(
+        { session_id: "s1", effort_hint: "max" },
+        maxCapped,
+        exact.resolution,
+      ),
     ).toBeNull();
-    // No captured Claude order places ultra. The legacy diagnostic reports
-    // omission; the run gate emits a typed rejection and never starts native work.
+    // `ultra` is placed by the shared order: the CLAMP seam owns it, the drop
+    // seam stays silent, and the run gate emits no rejection.
+    const ultra = await runSeam("ultra");
+    expect(ultra.resolution.resolution).toBe("downward");
     expect(
-      claudeEffortClampedEvent({ session_id: "s1", effort_hint: "ultra" }, maxCapped),
+      claudeEffortClampedEvent(
+        { session_id: "s1", effort_hint: "ultra" },
+        maxCapped,
+        ultra.resolution,
+      )?.text,
+    ).toContain("clamped to max");
+    expect(
+      claudeEffortIgnoredEvent(
+        { session_id: "s1", effort_hint: "ultra" },
+        maxCapped,
+        ultra.resolution,
+      ),
+    ).toBeNull();
+    // A word neither order knows is still a typed rejection: the drop seam
+    // reports it and the run gate never starts native work.
+    const typo = await runSeam("ulta");
+    expect(typo.resolution.resolution).toBe("rejected");
+    expect(() => {
+      if (typo.resolution.resolution === "rejected")
+        throw new EffortPreferenceRejectedError(typo.resolution.reason ?? "");
+    }).toThrow(/cannot place/);
+    expect(
+      claudeEffortClampedEvent(
+        { session_id: "s1", effort_hint: "ulta" },
+        maxCapped,
+        typo.resolution,
+      ),
     ).toBeNull();
     expect(
-      claudeEffortIgnoredEvent({ session_id: "s1", effort_hint: "ultra" }, maxCapped)?.payload?.[
-        "ignored_settings"
-      ],
-    ).toEqual([expect.stringContaining("effort=ultra")]);
+      claudeEffortIgnoredEvent(
+        { session_id: "s1", effort_hint: "ulta" },
+        maxCapped,
+        typo.resolution,
+      )?.payload?.["ignored_settings"],
+    ).toEqual([expect.stringContaining("effort=ulta")]);
     // Nothing requested: nothing to disclose.
+    const none = await runSeam(null);
     expect(
-      claudeEffortClampedEvent({ session_id: "s1", effort_hint: null }, maxCapped, ladderWithUltra),
+      claudeEffortClampedEvent({ session_id: "s1", effort_hint: null }, maxCapped, none.resolution),
     ).toBeNull();
   });
 });
 
 it("describes effort preparation without claiming a dispatch or observed vendor use", () => {
   const spec = { session_id: "prepared", effort_hint: "medium" };
-  expect(claudeEffortClampedEvent(spec, ["low", "high"])?.text).toBe(
+  expect(
+    claudeEffortClampedEvent(spec, ["low", "high"], receipt("medium", ["low", "high"]))?.text,
+  ).toBe(
     "[effort] clamped: effort=medium (clamped to low: the requested level is not advertised by the installed claude CLI (it advertises: low, high), so preparation selected low, the resolved supported level)",
   );
-  expect(claudeEffortIgnoredEvent(spec, [])?.text).toContain(
+  expect(claudeEffortIgnoredEvent(spec, [], receipt("medium", []))?.text).toContain(
     "no effort flag is prepared; the vendor default is left unspecified",
   );
+});
+
+describe("the RUN adapts shared-order words onto the installed ladder and refuses only unknown words", () => {
+  const liveAdapter = (levels: readonly string[], capture: (args: string[]) => void) =>
+    createClaudeAdapter({
+      detectVersion: async () => "2.1.281 (Claude Code)",
+      probeReadonlyProfile: async () => ({ supported: true, missingFlags: [], detail: "ok" }),
+      probeAuthStatus: async () => ({
+        loggedIn: true,
+        authed: true,
+        authMethod: "claude.ai",
+        probeError: null,
+      }),
+      anthropicApiKey: () => null,
+      claudeOAuthToken: () => null,
+      probeEffortLevels: async () => ({ levels: [...levels], live: true }),
+      runCliHarness: async function* (options): AsyncGenerator<HarnessEvent> {
+        capture(options.args);
+        yield {
+          type: "completed",
+          session_id: options.spec.session_id,
+          ts: "2026-01-01T00:00:00.000Z",
+        };
+      },
+    });
+  const specFor = (hint: string) =>
+    HarnessRunSpec.parse({
+      session_id: `claude-shared-${hint}`,
+      intent: "implement",
+      prompt: "do it",
+      cwd: "/repo",
+      effort_hint: hint,
+      auth_preference: "auto",
+    });
+
+  it.each([
+    ["ultra", "max", "downward"],
+    ["none", "low", "floor"],
+    ["minimal", "low", "floor"],
+  ] as const)(
+    "%s on a max-capped binary starts with --effort %s (%s), receipt == argv",
+    async (hint, sent, resolution) => {
+      let cliArgs: string[] | undefined;
+      const adapter = liveAdapter(CLAUDE_EFFORT_SNAPSHOT, (args) => {
+        cliArgs = args;
+      });
+      const events: HarnessEvent[] = [];
+      for await (const ev of adapter.run(specFor(hint))) events.push(ev);
+      // The run STARTED (the 2026-10-04 incident was a typed refusal here).
+      expect(cliArgs).toBeDefined();
+      expect(cliArgs?.[cliArgs.indexOf("--effort") + 1]).toBe(sent);
+      const disclosed = events.find((ev) => Array.isArray(ev.payload?.["ignored_settings"]));
+      expect(disclosed?.effort_resolution).toMatchObject({
+        requested: hint,
+        submitted: sent,
+        resolution,
+        source: "live_probe",
+        parameter: "--effort",
+      });
+      expect(disclosed?.effort_resolution?.reason).toContain("shared preference order");
+      expect(disclosed?.payload?.["ignored_settings"]).toEqual([
+        expect.stringContaining(`effort=${hint}`),
+      ]);
+    },
+  );
+
+  it("a word outside both orders is still refused before spawn (knob route)", async () => {
+    let cliArgs: string[] | undefined;
+    const adapter = liveAdapter(CLAUDE_EFFORT_SNAPSHOT, (args) => {
+      cliArgs = args;
+    });
+    const events: HarnessEvent[] = [];
+    await expect(
+      (async () => {
+        for await (const ev of adapter.run(specFor("ulta"))) events.push(ev);
+      })(),
+    ).rejects.toThrow(EffortPreferenceRejectedError);
+    expect(cliArgs).toBeUndefined();
+    expect(events.at(-1)?.effort_resolution).toMatchObject({
+      requested: "ulta",
+      submitted: null,
+      resolution: "rejected",
+    });
+    expect(events.at(-1)?.effort_resolution?.reason).toContain(
+      "outside the shared preference order",
+    );
+  });
 });
