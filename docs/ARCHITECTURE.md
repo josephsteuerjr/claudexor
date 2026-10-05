@@ -1228,7 +1228,8 @@ limit needed and never narrowed by error-text matching; agent progress is the
 typed marker set (thinking/tool/file/patch/compaction — deliberately not
 `message`/`error`, so vendor failure prose can never block it), transient-
 retryable deaths stay with the same-profile retry machinery, and an observed
-mutation (workspace diff or any `file_change` event) blocks every branch.
+mutation (workspace diff or any `file_change` event) fences only the `fresh`
+carrier; native, moved and packet carriers continue the work after progress.
 Adapters keep a failed result's prose out of answer material entirely: a
 non-success terminal result rides a `status` event, never a `message`, and an
 errored attempt with no typed final has no deliverable (`acceptedTryOutput`) —
@@ -3980,8 +3981,9 @@ run winner. Context exhaustion keeps this thread-packet path; the in-run
 continuation ladder below handles account and transport stops and discloses
 its terminal through the same `resumable` block (cause `context_exhausted`).
 
-In-run continuation (the ladder inside one attempt): both the candidate loop and
-the read-only chain hand every settled try to ONE per-attempt planner
+In-run continuation (Agent and Ask only; the ladder inside one attempt): the
+candidate loop and the Ask read-only chain hand every settled try to ONE
+per-attempt planner
 (`packages/orchestrator/src/inrun-continuity.ts`, pure decision in
 `carrier-planner.ts`). The planner observes the stream — the native session id
 on `started` becomes the attempt's durable SESSION CAPSULE
@@ -4044,7 +4046,9 @@ Agent. An in-place or read-only execution root is `workspace: in_place`; an
 isolated envelope is `none` in this release. Limit fields belong only to the
 terminal limit cause and its try; pool exhaustion uses the pool's earliest typed
 reset. A mid-stream hard budget cap ends the attempt without preparing another
-try. Live plan checklists ride typed
+try. The separate Plan pipeline keeps today's behavior: it does not use this
+controller and does not emit these in-run `resumable` facts. Live plan checklists
+ride typed
 `HarnessEvent.plan_progress` (codex `todo_list` items; claude
 TaskCreate/TaskUpdate accumulation — TodoWrite kept for older CLIs), forwarded
 as last-wins `plan.progress` run events and projected on the run detail as
