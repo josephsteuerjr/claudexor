@@ -166,10 +166,8 @@ export const HarnessCapabilities = z
      * and the attempt finalizer demands a report only from `constrained` ones.
      * - `constrained`: a native schema-constrained transport carries it
      *   (codex --output-schema, claude StructuredOutput tool).
-     * - `validated`: no native flag; an instructed terminal metadata block is
-     *   requested and validated (the fenced WorkReport footer on cursor, agy,
-     *   acp). A missing or broken footer is a disclosed `unverified`
-     *   work_state, never a failure.
+     * - `validated`: no native flag; a requested fenced WorkReport footer is
+     *   validated, and a missing or broken one is disclosed, never a failure.
      * - `unsupported`: the route cannot carry a WorkReport; the work_state axis
      *   stays `unverified` (a disclosed absence, never a failure).
      */
