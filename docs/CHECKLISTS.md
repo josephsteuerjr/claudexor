@@ -254,7 +254,8 @@ pnpm test
 ## Security And Secrets
 
 - Raw secrets must not appear in jobs, task contracts, events, summaries,
-  artifacts, patches, PR text, docs, or logs.
+  served artifacts, persisted patch copies, PR text, docs, or logs; exact output
+  follows [INV-062 keep-and-mask](../CLAUDEXOR_BIBLE.md#6-secrets-never-become-artifacts).
 - Native/subscription routes should not inherit provider API-key env vars unless
   an API-key source is explicit.
 - A native login may pass only after fresh `native_session = available + passed`;
