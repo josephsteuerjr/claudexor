@@ -1,0 +1,182 @@
+{
+  "$ref": "#/definitions/EnvelopeCustody",
+  "definitions": {
+    "EnvelopeCustody": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number",
+          "const": 1
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "live",
+            "retained"
+          ]
+        },
+        "holder_run_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Run that holds the envelope."
+        },
+        "holder_run_dir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute run directory of the holder."
+        },
+        "envelope": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Envelope id."
+            },
+            "task_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Task the envelope belongs to."
+            },
+            "attempt_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Attempt the envelope belongs to."
+            },
+            "repo_root": {
+              "type": "string",
+              "description": "Absolute path of the source repository root."
+            },
+            "base_ref": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Git base ref; null for directory execution."
+            },
+            "base_sha": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null,
+              "description": "Resolved base commit SHA; null when not recorded."
+            },
+            "worktree_path": {
+              "type": "string",
+              "description": "Absolute actual execution directory, whether Git-backed or plain."
+            },
+            "branch_name": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Clone-local branch; null for directory execution."
+            },
+            "workspace_kind": {
+              "type": "string",
+              "enum": [
+                "git",
+                "directory"
+              ]
+            },
+            "scope_paths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "home_dir": {
+              "type": "string",
+              "description": "Scoped HOME directory for the harness process (kept outside the checkout)."
+            },
+            "harness_config_dirs": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "description": "Scoped per-harness config directories keyed by harness id (kept outside the checkout)."
+            },
+            "policy_profile": {
+              "type": "string",
+              "default": "workspace_write",
+              "description": "Access profile the envelope enforces."
+            },
+            "dirty_policy": {
+              "type": "string",
+              "enum": [
+                "refuse",
+                "snapshot"
+              ],
+              "description": "How a dirty working tree is handled when creating an envelope: snapshot captures the dirty state as the base SHA without touching the live tree; refuse fails loudly.",
+              "default": "refuse"
+            },
+            "created_at": {
+              "type": "string",
+              "minLength": 1,
+              "description": "When the envelope was created."
+            }
+          },
+          "required": [
+            "id",
+            "task_id",
+            "attempt_id",
+            "repo_root",
+            "base_ref",
+            "worktree_path",
+            "branch_name",
+            "home_dir",
+            "created_at"
+          ],
+          "additionalProperties": false,
+          "description": "The envelope exactly as created (adoption reuses it)."
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "vendor_limit",
+                "pool_exhausted",
+                "pinned_limit",
+                "transport",
+                "context_exhausted",
+                "wall_clock",
+                "cancelled",
+                "host_restart",
+                "input_required",
+                "other"
+              ],
+              "description": "Typed reason the previous process stopped: a vendor limit (next account eligible), the whole pool spent, a pinned account's limit, a transport death (crash, timeout, watchdog), context exhaustion, the wall-clock deadline, a cancel, a daemon/host restart, a model that asked for input, or another typed cause."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the holder stopped; null while live."
+        },
+        "retained_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When custody became retained; null while live."
+        }
+      },
+      "required": [
+        "version",
+        "state",
+        "holder_run_id",
+        "holder_run_dir",
+        "envelope",
+        "cause",
+        "retained_at"
+      ],
+      "additionalProperties": false,
+      "description": "Durable custody record of an isolated envelope (live or retained for continuation)."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

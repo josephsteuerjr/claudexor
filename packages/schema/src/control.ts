@@ -40,6 +40,8 @@ import { ControlAuthRoute } from "./control-auth-route.js";
 import { DelegatedChildRunIds, RunDelegationInfo } from "./delegation.js";
 import { HARNESS_INACTIVITY_TIMEOUT_DEFAULT_MS, InteractionTimeoutValue } from "./config.js";
 import { RuntimeConcurrencyState } from "./runtime-concurrency.js";
+import { RunContinuityReceipt, RunResumable } from "./run-continuity.js";
+import { ContinueCarrierPreference, ControlRetainedEnvelope } from "./run-continuation.js";
 import { ProcessingPreference } from "./processing.js";
 export { RunExecution } from "./control-run-execution.js";
 export { ControlTimelineEvent } from "./control-timeline.js";
@@ -236,6 +238,12 @@ export const ControlRunStartRequest = z
     ),
     retryOf: Id.optional().describe(
       "Server-owned Exact Retry lineage; direct POST /runs rejects it.",
+    ),
+    continueFrom: Id.optional().describe(
+      "Continue a terminal predecessor run owned by this daemon; one accepted successor per predecessor. Omitted mode, scope, execution, harness and model come from the predecessor; prompt is the continuation text and may be empty.",
+    ),
+    continueCarrier: ContinueCarrierPreference.optional().describe(
+      "Carrier preference for continueFrom; omitted = auto.",
     ),
     /** When set, this turn implements an approved plan (mode is forced to
      * agent); the plan is DELIVERED AS A FILE (planRef), never re-embedded
@@ -619,6 +627,21 @@ export const ControlRunSummary = z
       .describe(
         "Durable Delegate requested/effective/used receipt projected from engine telemetry; null when legacy telemetry has no receipt.",
       ),
+    continueFrom: Id.nullable()
+      .default(null)
+      .describe("Predecessor run this run continues (continueFrom); null for ordinary runs."),
+    resumable: RunResumable.nullable()
+      .default(null)
+      .describe(
+        "Terminal facts of unfinished work that continueFrom can continue; null when the work finished or the run is not terminal.",
+      ),
+    continuity: z
+      .array(RunContinuityReceipt)
+      .default([])
+      .describe("One receipt per continued try (carrier, cause, accounts, memory, model)."),
+    retainedEnvelope: ControlRetainedEnvelope.nullable()
+      .default(null)
+      .describe("Isolated envelope kept for continuation (disk use visible); null when none."),
     taskId: z.string().optional().describe("Task id, when allocated."),
     state: ControlRunState,
     runDir: z.string().optional().describe("On-disk run artifact directory."),

@@ -1,0 +1,63 @@
+{
+  "$ref": "#/definitions/ControlRetainedEnvelope",
+  "definitions": {
+    "ControlRetainedEnvelope": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "Absolute path of the kept working tree."
+        },
+        "bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Disk use of the kept envelope (tree + scoped home); null when not measured."
+        },
+        "retainedAt": {
+          "type": "string",
+          "description": "When the envelope was kept."
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "vendor_limit",
+                "pool_exhausted",
+                "pinned_limit",
+                "transport",
+                "context_exhausted",
+                "wall_clock",
+                "cancelled",
+                "host_restart",
+                "input_required",
+                "other"
+              ],
+              "description": "Typed reason the previous process stopped: a vendor limit (next account eligible), the whole pool spent, a pinned account's limit, a transport death (crash, timeout, watchdog), context exhaustion, the wall-clock deadline, a cancel, a daemon/host restart, a model that asked for input, or another typed cause."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the run stopped, when recorded."
+        }
+      },
+      "required": [
+        "root",
+        "bytes",
+        "retainedAt",
+        "cause"
+      ],
+      "additionalProperties": false,
+      "description": "An isolated envelope kept for continuation: continue it with continueFrom, or release it with the discard decision."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
