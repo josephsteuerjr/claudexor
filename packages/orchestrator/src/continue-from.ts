@@ -64,6 +64,9 @@ export interface ContinueFromSource {
 
 const WORK_ORDER_FILE = join("context", "work-order.md");
 
+const DIFFERENT_ROOT_NOTE =
+  "This process runs in a different working tree than the previous one: check which of its changes are present here before continuing.";
+
 /** What the predecessor left behind, read from its run directory. */
 interface PredecessorFacts {
   /** Attempt whose evidence the index reads (the one holding the session, else the final one). */
@@ -215,6 +218,11 @@ export async function openContinuity(
     diffStat: pred.diffStat,
   });
   const uncertainInput = uncertainInputFor(from.runDir, null);
+  const sameRoot = samePath(pred.root, deps.cwd);
+  // The notice says the workspace is as it was left; in another tree that is
+  // not known, so the child is told to check before relying on it.
+  const treeNote = sameRoot ? "" : DIFFERENT_ROOT_NOTE;
+  const withNote = (text: string) => [treeNote, text.trim()].filter(Boolean).join("\n\n");
   const native = prepared.carrier === "native" || prepared.carrier === "native_moved";
   let composed: HarnessRunSpec;
   if (prepared.carrier === "native" || prepared.carrier === "native_moved") {
@@ -226,8 +234,12 @@ export async function openContinuity(
       ...spec,
       resume_session_id: prepared.resumeRef.nativeSessionId,
       prompt: followUp
-        ? callerText.trim()
-        : continuationNotice({ cause: pred.cause, uncertainInput, callerText }),
+        ? withNote(callerText)
+        : continuationNotice({
+            cause: pred.cause,
+            uncertainInput,
+            callerText: withNote(callerText),
+          }),
     });
   } else {
     // `fresh` (the predecessor did not act) still needs the work order: the
@@ -247,7 +259,7 @@ export async function openContinuity(
       model_hint: spec.model_hint ?? facts.effectiveModel,
       prompt: packetContinuationPrompt({
         originalPrompt: spec.prompt,
-        notice: continuationNotice({ cause: pred.cause, uncertainInput, callerText: null }),
+        notice: continuationNotice({ cause: pred.cause, uncertainInput, callerText: withNote("") }),
         evidencePath,
         evidenceMarkdown: index.markdown,
       }),
@@ -261,7 +273,7 @@ export async function openContinuity(
     memory: native ? "full" : "partial",
     inputDelivery: uncertainInput === null ? "confirmed" : "uncertain",
     from: { runId: from.runId, attemptId: pred.attemptId },
-    workspace: samePath(pred.root, deps.cwd) ? "same_root" : "different_root",
+    workspace: sameRoot ? "same_root" : "different_root",
   };
   return {
     continuity: new InRunContinuity({ ...deps, workOrder, seed: { acted: pred.acted, continued } }),

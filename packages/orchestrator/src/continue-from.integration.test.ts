@@ -320,6 +320,7 @@ describe("continueFrom successor: first try", () => {
     expect(first.prompt).toContain("The previous process stopped (every account's usage limit)");
     expect(first.prompt).toContain("Also add tests");
     expect(first.prompt).not.toContain(WORK_ORDER);
+    expect(first.prompt).not.toContain("different working tree");
     expect(succ.receipts).toHaveLength(1);
     expect(succ.receipts[0]).toMatchObject({
       tryIndex: 0,
@@ -504,6 +505,9 @@ describe("continueFrom successor: kept isolated envelope", () => {
     });
     const { pred, succ } = await chain(f, { predecessor: { inPlace: false } });
     expect(succ.receipts[0]).toMatchObject({ carrier: "native", workspace: "different_root" });
+    const first = f.spawns.find((s) => s.phase === "successor")!;
+    expect(first.prompt).toContain("runs in a different working tree");
+    expect(first.prompt).toContain("Also add tests");
     // The predecessor's kept tree stays kept until its own disposition.
     expect(retainedEnvelopeOfRun(pred.result.runDir, pred.result.runId)).not.toBeNull();
   });
