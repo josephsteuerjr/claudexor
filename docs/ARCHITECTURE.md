@@ -503,16 +503,37 @@ ACCOUNT and every credential profile and API-key route runs under its own
 unchanged even when default-account discovery lacks it. Native effort adapters
 (Claude, Codex, the ACP client) resolve only after the account, model and
 harness are bound. Settings writes and reviewer admission preserve these
-preferences too. On an adapter without that carrier a settings WRITE keeps its
-typed validation (a refusal before anything is stored, never lost paid work),
-while a run or a review is never lost to it: a harness that declares no effort
-controls keeps the preference in the receipt as `omitted` and discloses it —
-an unknown word included, which is noted as outside the shared order rather
-than refused — and only a reviewer ladder that exists and cannot place the word
-still refuses an explicit panel entry or drops an automatic one with
-disclosure. Compound
-Cursor/Antigravity model ids are route identities and are never rewritten by
-effort resolution. Claude uses the installed binary's accepted list and its
+preferences too. On an adapter without any effort carrier a settings WRITE
+keeps its typed validation (a refusal before anything is stored, never lost
+paid work), while a run or a review is never lost to it: a harness that
+declares no effort controls keeps the preference in the receipt as `omitted`
+and discloses it — an unknown word included, which is noted as outside the
+shared order rather than refused — and only a reviewer ladder that exists and
+cannot place the word still refuses an explicit panel entry or drops an
+automatic one with disclosure. Cursor and Antigravity carry the level inside
+the compound model id and declare `--model` as their effort carrier: given an
+effort preference, `prepareProcessing` selects the listed variant of the
+requested model's family from the inventory of the account that will run (the
+family is the id with exactly one shared-order level token removed; `fast`,
+`thinking` and every other token stay in the key; a family exists only when
+that account lists two or more levels; the level is placed by the shared
+preference order alone, the vendor's list order being a menu, never a ladder),
+so `grok-4.7-high` + `max` runs the listed `grok-4.7-xhigh` and
+`gemini-3.8-flash-low` + `max` runs `gemini-3.8-flash-high`. Without a
+preference the id is sent as written. The requested id stays in
+`spec.model_hint` / `attempts[].requested_model`; the final id is the
+processing receipt's `submittedNative` (the `--model` argument, the native
+truth gate's second check and the telemetry `model_mismatch` baseline); the
+level receipt is that preparation's `EffortResolution` (`parameter: --model`,
+`source: account_catalog`, `submitted` = level token), recorded once by the
+engine's spawn gate or the reviewer dispatch — never a second `omitted`. An
+ambiguous id (two level tokens), a family-less id, an unknown word, an empty or
+unread account list (Antigravity: no pinned account; the static hint list never
+authorizes a rewrite) keep the id unchanged with an `omitted` receipt and a
+note; nothing refuses. The level choice never crosses fast/standard: the
+existing fast-pair and paid policy run after it on the selected id. A settings
+write accepts the preference for these routes like any flag carrier. Claude
+uses the installed binary's accepted list and its
 recorded same-provider vendor order for known gaps, and the shared preference
 order for a word neither lists; no ordering can authorize submitting a value
 absent from the current accepted list. Snapshot

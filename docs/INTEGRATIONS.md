@@ -51,7 +51,12 @@ may send any word of the shared preference order (`none`, `minimal`, `low`,
 order ranks every word it lists, the shared order only places one it does not,
 and the receipt reports `downward`, `floor` or `omitted` instead of a refusal.
 A word neither order knows is refused only on a route that has a native effort
-knob. The
+knob. On Cursor and Antigravity the level is a token of the model id, so the
+same word selects the listed variant of the requested model's family from the
+running account's inventory: read the requested id from the model hint, the
+final id from the processing receipt's `submittedNative`, and the level from
+the effort receipt (`parameter: --model`); an id that cannot be placed stays
+unchanged with an `omitted` receipt. The
 [effort contract](ARCHITECTURE.md#4-routing) specifies existing result/artifact
 locations, omission versus explicit `none`, and independent provider observation.
 Raw model clients discover `captureEffortEvidence` on the model-operation POST
