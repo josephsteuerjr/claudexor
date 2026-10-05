@@ -9118,8 +9118,13 @@ describe("Orchestrator", () => {
     expect(reviewYaml).toContain("gpt-5.5-xhigh-1M");
   });
 
-  it("rejects explicit reviewer panel effort hints unsupported by the harness", async () => {
+  it("keeps the review when an explicit panel names an effort for a harness with no effort controls", async () => {
+    // This used to fail the whole run at review preflight ("does not support
+    // requested effort"). The harness simply has no knob: the preference stays
+    // in the reviewer's receipt as omitted, the panel discloses it, and the
+    // review runs (owner decision 2026-10-05).
     const repo = await initRepo();
+    const seen: Array<string | null> = [];
     const reviewer: HarnessAdapter = {
       id: "rev-cursor",
       async discover() {
@@ -9142,8 +9147,17 @@ describe("Orchestrator", () => {
       async models() {
         return [{ id: "gemini-3.1-pro", label: null, context_window: null, routes: null }];
       },
-      async *run() {
-        throw new Error("reviewer should not run when effort validation fails");
+      async *run(spec) {
+        const ts = new Date().toISOString();
+        seen.push(spec.effort_hint);
+        yield {
+          type: "started",
+          session_id: spec.session_id,
+          ts,
+          observed_model: spec.model_hint ?? "rev-cursor-observed",
+        };
+        yield { type: "message", session_id: spec.session_id, ts, text: "[]\n" };
+        yield { type: "completed", session_id: spec.session_id, ts };
       },
     };
     const orch = new Orchestrator({
@@ -9161,9 +9175,14 @@ describe("Orchestrator", () => {
       harnesses: ["fake-impl"],
       n: 1,
     });
-    expect(legacyOutcome(effortRes)).toBe("failed");
-    expect(effortRes.summary).toContain(
-      "reviewer harness 'rev-cursor' does not support requested effort 'max' (harness declares no effort controls)",
+    expect(legacyOutcome(effortRes)).toBe("success");
+    // The reviewer ran, and the original preference reached its spec unchanged.
+    expect(seen).toEqual(["max"]);
+    const reviewYaml = readFileSync(join(effortRes.runDir, "reviews", "a01.yaml"), "utf8");
+    expect(reviewYaml).toContain("requested_effort: max");
+    const events = readFileSync(join(effortRes.runDir, "events.jsonl"), "utf8");
+    expect(events).toContain(
+      "reviewer effort omitted: reviewer harness 'rev-cursor' declares no effort controls",
     );
   });
 

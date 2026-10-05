@@ -150,6 +150,10 @@ export function writeRunTelemetryArtifact(args: {
           finalRecord ??
           records[0];
         const requestedModel = disclosing?.requested_model ?? null;
+        // The id the engine actually SENT: the processing receipt's final native
+        // id when preparation selected one (a fast twin, an effort-selected level
+        // variant), else the requested hint. Observation is judged against it.
+        const sentModel = disclosing?.processing?.submittedNative ?? requestedModel;
         const observedModel = disclosing?.observed_model ?? null;
         // The requested route is the RESOLVED per-harness preference of the
         // disclosing lane (run-level scalar → per-harness config → global),
@@ -171,8 +175,8 @@ export function writeRunTelemetryArtifact(args: {
           profile_id: disclosing?.profile_id ?? null,
           // Typed mismatch, only when BOTH sides are known and differ.
           model_mismatch:
-            requestedModel !== null && observedModel !== null && requestedModel !== observedModel
-              ? { requested: requestedModel, observed: observedModel }
+            sentModel !== null && observedModel !== null && sentModel !== observedModel
+              ? { requested: sentModel, observed: observedModel }
               : null,
         };
       })(),

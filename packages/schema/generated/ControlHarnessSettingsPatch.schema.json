@@ -33,7 +33,7 @@
               "minLength": 1,
               "maxLength": 32,
               "pattern": "^[a-z0-9]+(?:[_-][a-z0-9]+)*$",
-              "description": "Cross-harness reasoning-effort level as a lowercase slug (open vocabulary, mirroring the vendor contract); adapters advertise the levels they accept per model, ordered weakest to strongest by the vendor itself, and a shared normalizer passes advertised levels through, clamps inside the vendor order, and refuses levels the advertised ladder has never seen."
+              "description": "Cross-harness reasoning-effort level as a lowercase slug (open vocabulary, mirroring the vendor contract); adapters advertise the levels they accept per model, ordered weakest to strongest by the vendor itself, and a shared normalizer passes advertised levels through, clamps inside the vendor order, places a word the vendor order lacks by the shared preference order (none < minimal < low < medium < high < xhigh < max < ultra) onto an advertised level, and refuses words neither order places."
             },
             {
               "type": "null"

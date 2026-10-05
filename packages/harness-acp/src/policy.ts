@@ -2,8 +2,12 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { RequestPermissionRequest, RequestPermissionResponse } from "@agentclientprotocol/sdk";
-import { AccessProfileIncompatibleError } from "@claudexor/core";
-import type { AccessProfile, HarnessRunSpec } from "@claudexor/schema";
+import {
+  AccessProfileIncompatibleError,
+  effortLadders,
+  resolveEffortEvidence,
+} from "@claudexor/core";
+import type { AccessProfile, EffortResolution, HarnessRunSpec } from "@claudexor/schema";
 import type { AcpEntry } from "./entry.js";
 
 /** Resolve existing ancestors too: an edit of a new file under a symlink is an escape. */
@@ -94,10 +98,37 @@ export function decidePermission(
   return denyPermission();
 }
 
-export function acpArgs(entry: AcpEntry, spec: HarnessRunSpec): string[] {
+/**
+ * The ONE effort result of an ACP route: `--effort` carries its `submitted`, the
+ * run records it as the receipt. The entry's declared ladder is the vendor
+ * order and decides every word it lists; the shared preference order only
+ * places a word the entry does not list (`ultra` → `max`, `none` → `low`), which
+ * the receipt states. An entry declaring no levels has no knob: nothing is
+ * submitted and nothing is refused. Where the knob exists, a word neither order
+ * places is a typed pre-spawn refusal rather than a flag the vendor CLI dies on.
+ */
+export function acpEffortResolution(
+  entry: AcpEntry,
+  requested: string | null | undefined,
+): EffortResolution {
+  return resolveEffortEvidence(
+    requested,
+    entry.effortLevels,
+    effortLadders([entry.effortLevels]),
+    "adapter",
+    entry.effortLevels.length ? "--effort" : null,
+  );
+}
+
+export function acpArgs(
+  entry: AcpEntry,
+  spec: HarnessRunSpec,
+  /** The run's receipt value; arg-shape callers resolve through the same function. */
+  effort: string | null = acpEffortResolution(entry, spec.effort_hint).submitted,
+): string[] {
   const args = [...entry.flags];
   if (spec.model_hint) args.push("--model", spec.model_hint);
-  if (spec.effort_hint) args.push("--effort", spec.effort_hint);
+  if (effort) args.push("--effort", effort);
   const { allow, deny } = spec.tool_permission_policy;
   const defaults =
     spec.access === "readonly"

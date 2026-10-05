@@ -5,6 +5,7 @@ import type {
   ConformanceReport,
   CredentialProfile,
   CredentialProfileStatus,
+  EffortResolution,
   HarnessCapabilityProfile,
   HarnessEvent,
   HarnessManifest,
@@ -64,6 +65,12 @@ export interface PreparedHarnessProcessing {
   model: string | null;
   receipt: ProcessingReceipt;
   costBasis: ProcessingCostBasis;
+  /** Effort receipt of a model-id effort carrier (`effortParameter: "--model"`):
+   * produced by the SAME preparation that chose `model` and
+   * `receipt.submittedNative`, so the native id, the level token and the
+   * disclosure cannot disagree. Absent when the level is a separate flag the
+   * adapter resolves at spawn, or when the harness has no effort control. */
+  effort?: EffortResolution;
 }
 
 /**
@@ -99,7 +106,11 @@ export interface LiveMessageResult {
  */
 export interface HarnessAdapter {
   readonly id: string;
-  /** Separate native effort carrier; the adapter resolves it at the final route. */
+  /** Native effort carrier the adapter resolves at its final route: a separate
+   * flag (`--effort`, `model_reasoning_effort`), or `--model` when the level is
+   * a token of a compound model id and `prepareProcessing` selects the listed
+   * variant of the requested model's family (Cursor, Antigravity). Absent = no
+   * effort control; the engine records the preference as omitted. */
   readonly effortParameter?: string;
 
   /**

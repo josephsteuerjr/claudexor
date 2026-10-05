@@ -124,6 +124,8 @@ if (mode === "server") {
       }
       if (mode === "environment")
         write({ jsonrpc: "2.0", method: "fixture/environment", params: process.env });
+      if (mode === "argv")
+        write({ jsonrpc: "2.0", method: "fixture/argv", params: { argv: process.argv.slice(5) } });
       for (const line of lines.slice(2)) await sendRecord(line, message.id);
     }
   };

@@ -21,12 +21,11 @@ import { EffortHint } from "@claudexor/schema";
 import {
   harnessBinaryIdentity,
   harnessBinaryIdentityOnPath,
-  normalizeEffort,
-  effortRankLadder,
+  effortLadders,
   resolveEffortEvidence,
   effortResolutionEvent,
-  resolveEffort,
   runCapture,
+  type EffortLadders,
 } from "@claudexor/core";
 import { nowIso, redactSecrets } from "@claudexor/util";
 import { CLAUDE_VENDOR_CLI_VERSION } from "./vendor-cli-version.js";
@@ -46,10 +45,38 @@ export const CLAUDE_EFFORT_SNAPSHOT: readonly EffortHint[] = [
   "max",
 ];
 
-/** Historical vendor order may rank a preference; only the current verified
- * advertised list authorizes submitting a value. Never combine providers. */
-export function claudeEffortLadder(advertised: readonly EffortHint[]): readonly EffortHint[] {
-  return effortRankLadder([CLAUDE_EFFORT_SNAPSHOT, advertised]);
+/**
+ * The rank orders a Claude run may clamp along. Claude's own order (the recorded
+ * snapshot merged with the installed binary's live list) is tried first and
+ * decides every word it lists (`xhigh` on a 2.1.89 binary → `high`). The shared
+ * preference order places only a word Claude never listed (`ultra` → `max`,
+ * `none` → `low`); it is not a claim that the binary supports `ultra`, and only
+ * the current verified advertised list authorizes submitting a value.
+ */
+export function claudeEffortLadders(advertised: readonly EffortHint[]): EffortLadders {
+  return effortLadders([CLAUDE_EFFORT_SNAPSHOT, advertised]);
+}
+
+/**
+ * The ONE effort result of a Claude route: the receipt the run records, the
+ * value the arg builder sends (`submitted`) and the input of every disclosure
+ * event, so flag, receipt and disclosure can never disagree. Pure; the run seam
+ * below supplies the probed `advertised` list and its provenance.
+ */
+export function claudeEffortResolution(
+  effortHint: string | null | undefined,
+  advertised: readonly EffortHint[],
+  source: EffortResolution["source"],
+  unverifiable = false,
+): EffortResolution {
+  return resolveEffortEvidence(
+    effortHint,
+    advertised,
+    claudeEffortLadders(advertised),
+    source,
+    "--effort",
+    unverifiable,
+  );
 }
 
 /** Vendor CLI version `CLAUDE_EFFORT_SNAPSHOT` was captured from. Aliases the
@@ -130,15 +157,13 @@ export async function claudeRunEffortResolution(
       ? efforts.levels
       : claudeAdvertisedEffortsForRun(efforts, await deps.detectVersion(abortSignal, patchPath));
   const unverifiable = !efforts.live && advertised !== efforts.levels;
-  const resolution = resolveEffortEvidence(
+  const resolution = claudeEffortResolution(
     spec.effort_hint,
     advertised,
-    claudeEffortLadder(advertised),
     unverifiable ? "adapter" : efforts.live ? "live_probe" : "versioned_snapshot",
-    "--effort",
     unverifiable,
   );
-  const disclosure = claudeEffortDisclosureEvent(spec, advertised);
+  const disclosure = claudeEffortDisclosureEvent(spec, advertised, resolution);
   const event = {
     ...(["downward", "floor", "unverifiable"].includes(resolution.resolution) && disclosure
       ? disclosure
@@ -419,31 +444,32 @@ export async function probeClaudeEffortLevels(
 /**
  * The INV-105 disclosure for an effort the RUN itself could not honor, or null
  * when nothing was dropped. Preflight validates against the manifest ladder,
- * but the arg builder resolves against what the INSTALLED binary advertises at
- * run time (an older CLI's `--help` can be narrower than the discovered
- * manifest), and its normalizer answers "send no flag" — which without this
- * event was a silent vendor-default run. The payload rides the same
- * `ignored_settings` channel governance uses (QA-070 timeline warning).
+ * but the run resolves against what the INSTALLED binary advertises at run
+ * time (an older CLI's `--help` can be narrower than the discovered manifest),
+ * and the receipt answers "send no flag" — which without this event was a
+ * silent vendor-default run. Reads the SAME receipt the arg builder sends from,
+ * so the disclosure can never disagree with the flag. The payload rides the
+ * same `ignored_settings` channel governance uses (QA-070 timeline warning).
  */
 export function claudeEffortIgnoredEvent(
   spec: Pick<HarnessRunSpec, "session_id" | "effort_hint">,
   advertised: readonly EffortHint[],
+  resolution: EffortResolution,
 ): HarnessEvent | null {
-  if (!spec.effort_hint) return null;
-  if (normalizeEffort(spec.effort_hint, advertised, claudeEffortLadder(advertised)) !== null)
-    return null;
+  if (!spec.effort_hint || resolution.submitted !== null) return null;
   // An EMPTY advertised list is the version-gated snapshot distrust case
   // (`claudeAdvertisedEffortsForRun`): the installed binary's ladder could not
   // be read and the recorded snapshot belongs to a different CLI version, so
   // the honest statement is "unverifiable", not "not accepted".
   const detail =
-    advertised.length > 0
+    (advertised.length > 0
       ? `effort=${spec.effort_hint} (not accepted by the installed claude CLI; ` +
         `it advertises: ${advertised.join(", ")}; no effort flag is prepared; the vendor default is left unspecified)`
       : `effort=${spec.effort_hint} (could not be verified against the installed claude CLI: ` +
         "its effort ladder could not be read from --help, and the recorded snapshot was " +
         `captured from CLI ${CLAUDE_EFFORT_SNAPSHOT_VERIFIED_AGAINST}, a different version, ` +
-        "so no effort flag is prepared; the vendor default is left unspecified)";
+        "so no effort flag is prepared; the vendor default is left unspecified)") +
+    (resolution.reason ? `; ${resolution.reason}` : "");
   return {
     type: "status",
     session_id: spec.session_id,
@@ -454,40 +480,42 @@ export function claudeEffortIgnoredEvent(
 }
 
 /**
- * The INV-105 disclosure for an effort the resolution CLAMPED, or null when the
- * level rode through verbatim (or was dropped — `claudeEffortIgnoredEvent`'s
- * shape; the two are mutually exclusive: a drop sends no flag, a clamp sends a
- * different one). Mirrors the codex clamp seam so a moved level is disclosed
- * the same way on both adapters, and takes the SAME (advertised, ladder)
- * inputs the arg builder's normalizer takes so the disclosure can never
- * disagree with the flag actually sent.
- *
- */
-/**
  * The one INV-105 seam the run yields: the DROP disclosure or the CLAMP
  * disclosure, whichever applies (they are mutually exclusive by construction —
  * a drop sends no flag, a clamp sends a different one), or null when the
- * requested level rode through verbatim or nothing was requested.
+ * requested level rode through verbatim or nothing was requested. Both read the
+ * run's ONE receipt.
  */
 export function claudeEffortDisclosureEvent(
   spec: Pick<HarnessRunSpec, "session_id" | "effort_hint">,
   advertised: readonly EffortHint[],
+  resolution: EffortResolution,
 ): HarnessEvent | null {
-  return claudeEffortIgnoredEvent(spec, advertised) ?? claudeEffortClampedEvent(spec, advertised);
+  return (
+    claudeEffortIgnoredEvent(spec, advertised, resolution) ??
+    claudeEffortClampedEvent(spec, advertised, resolution)
+  );
 }
 
+/**
+ * The INV-105 disclosure for an effort the resolution CLAMPED (`downward` or
+ * `floor`), or null when the level rode through verbatim or was dropped.
+ * Mirrors the codex clamp seam so a moved level is disclosed the same way on
+ * both adapters; a placement by the shared preference order carries the
+ * receipt's reason so the timeline says which order moved it.
+ */
 export function claudeEffortClampedEvent(
   spec: Pick<HarnessRunSpec, "session_id" | "effort_hint">,
   advertised: readonly EffortHint[],
-  ladder: readonly EffortHint[] = claudeEffortLadder(advertised),
+  resolution: EffortResolution,
 ): HarnessEvent | null {
-  if (!spec.effort_hint) return null;
-  const check = resolveEffort(spec.effort_hint, advertised, ladder);
-  if (check.status !== "ok" || !check.clamped || check.effort === null) return null;
+  const sent = resolution.submitted;
+  if (!spec.effort_hint || sent === null || resolution.resolution === "exact") return null;
   const detail =
-    `effort=${spec.effort_hint} (clamped to ${check.effort}: the requested level is not ` +
+    `effort=${spec.effort_hint} (clamped to ${sent}: the requested level is not ` +
     `advertised by the installed claude CLI (it advertises: ${advertised.join(", ")}), ` +
-    `so preparation selected ${check.effort}, the resolved supported level)`;
+    `so preparation selected ${sent}, the resolved supported level)` +
+    (resolution.reason ? `; ${resolution.reason}` : "");
   return {
     type: "status",
     session_id: spec.session_id,

@@ -5120,10 +5120,11 @@ describe("DaemonControlApiServer", () => {
           prompt: "review it",
           mode: "agent",
           scope: { kind: "project", root: panelRoot },
-          // Shape refusal at the wire; a well-formed level such as `turbo` is
-          // refused by the reviewer effort gate against what the selected
-          // reviewer actually advertises (reviewerPanel.test.ts), never
-          // forwarded to be silently dropped by the adapter's normalizer.
+          // Shape refusal at the wire. A well-formed level such as `turbo` is
+          // judged later by the reviewer effort gate against what the selected
+          // reviewer actually advertises (reviewerPanel.test.ts): refused where
+          // a ladder exists and cannot place it, omitted WITH disclosure where
+          // the harness has no effort controls — never silently dropped.
           reviewerPanel: [{ harness: "cursor", effort: "TURBO BOOST" }],
         }),
       });

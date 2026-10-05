@@ -204,6 +204,23 @@ describe("assertSettingsPatchValid", () => {
     }
   });
 
+  it("saves any shared-order effort for a compound-id route (cursor, agy): the level selects the listed variant at run time", async () => {
+    // Neither adapter declares a separate ladder (`effort_levels: []`), yet both
+    // carry the level inside the model id (`effortParameter: "--model"`), so a
+    // write no longer refuses with `declares no effort ladder`; the running
+    // account's inventory decides the variant, and no vendor CLI is spawned here.
+    for (const harness of ["cursor", "agy"]) {
+      for (const effort of ["max", "low", "none"]) {
+        await expect(
+          assertSettingsPatchValid(
+            ControlSettingsUpdateRequest.parse({ harnesses: { [harness]: { effort } } }),
+            AUTO_NO_TIERS,
+          ),
+        ).resolves.toBeDefined();
+      }
+    }
+  });
+
   // Every patch shape preserves the preference for the final account/model.
   // Discovery may describe a different account; it cannot erase the request.
   it("shape 1: effort-only patch preserves a preference above the stored model ladder", async () => {

@@ -2,12 +2,12 @@ import {
   observeCredentialExecution,
   bindCredentialExecutionObserverFactory,
   type CredentialExecutionObserverFactory,
-  prepareHarnessProcessing,
   admitPreparedProcessing,
   stampCredentialProfileSelection,
   type HarnessAdapter,
   type PreparedHarnessProcessing,
 } from "@claudexor/core";
+import { prepareReviewerRunSpec, recordPreparedEffort } from "./reviewerPreparation.js";
 import { preflightEvidence, type DiffEvidence, writeDiffEvidence } from "@claudexor/context";
 import type {
   AuthPreference,
@@ -857,23 +857,9 @@ async function collectReviewerOutput(
 
   const consumeOnce = async (nativeTry: number): Promise<ReviewerOutput> => {
     if (isCancelled()) throw new Error("Reviewer cancelled before dispatch");
-    if (runSpec.processing_preference || reviewer.adapter.prepareProcessing) {
-      const prepared = await prepareHarnessProcessing(reviewer.adapter, {
-        preference: runSpec.processing_preference,
-        model: runSpec.model_hint,
-        effort: runSpec.effort_hint,
-        cwd: runSpec.cwd,
-        env: runSpec.env,
-        credentialProfile: runSpec.credential_profile,
-        authPreference: runSpec.auth_preference,
-        allowPaid: runSpec.processing_allow_paid,
-      });
-      runSpec = {
-        ...runSpec,
-        processing: prepared.receipt,
-        processing_cost_basis: prepared.costBasis,
-      };
-    }
+    const prepared = await prepareReviewerRunSpec(reviewer.adapter, runSpec);
+    runSpec = prepared.spec;
+    recordPreparedEffort(artifact, runSpec.session_id, prepared.effort, ignoredSettings);
     if (isCancelled()) throw new Error("Reviewer cancelled before dispatch");
     await admitPreparedProcessing(runSpec);
     const markPhysicalDispatchStarted = runSpec.extra["markPhysicalDispatchStarted"];
@@ -907,6 +893,8 @@ async function collectReviewerOutput(
           updateReviewerMetadata(artifact, { ignored_settings: [...ignoredSettings] });
         }
       }
+      if (ev.effort_resolution)
+        updateReviewerMetadata(artifact, { effort_resolution: ev.effort_resolution });
       if (ev.transient) sawTransient = true;
       if (ev.type === "error") {
         sawError = true;

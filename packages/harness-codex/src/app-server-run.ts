@@ -1,8 +1,7 @@
 import { spawnProcess, type ChildStdin, type SpawnOptions } from "@claudexor/core";
-import type { HarnessEvent, HarnessRunSpec } from "@claudexor/schema";
+import type { EffortHint, HarnessEvent, HarnessRunSpec } from "@claudexor/schema";
 import { CLAUDEXOR_VERSION, nowIso, redactSecrets } from "@claudexor/util";
 import { codexAppServerInput } from "./attachments.js";
-import type { CodexEffortCatalog } from "./effort-probe.js";
 import {
   asObject,
   CodexAppServerController,
@@ -34,7 +33,8 @@ export interface CodexAppServerRunInput {
   env: Record<string, string | null | undefined>;
   spawn?: typeof spawnProcess;
   controller?: CodexAppServerController;
-  effortCatalog?: CodexEffortCatalog;
+  /** The run's ONE effort receipt (`submitted`); resolved from the snapshot when absent. */
+  effort?: EffortHint | null;
   pollIntervalMs?: number;
   cancelDeadlineMs?: number;
   /** Bound on the vendor's `turn/steer` answer (default 30 s); see createCodexSteer. */
@@ -349,10 +349,10 @@ export async function* runCodexAppServer(
       input.spec.resume_session_id ? "thread/resume" : "thread/start",
       input.spec.resume_session_id
         ? {
-            ...codexAppServerThreadParams(input.spec, input.effortCatalog),
+            ...codexAppServerThreadParams(input.spec, input.effort),
             threadId: input.spec.resume_session_id,
           }
-        : codexAppServerThreadParams(input.spec, input.effortCatalog),
+        : codexAppServerThreadParams(input.spec, input.effort),
     );
     const thread = asObject(threadResult["thread"]);
     const threadId = thread?.["id"];

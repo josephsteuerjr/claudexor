@@ -1,4 +1,4 @@
-import { resolveEffort, effortRankLadder } from "@claudexor/core";
+import { resolveEffort, effortLadders } from "@claudexor/core";
 /**
  * Settings-write validation + patch merge — the daemon's POST /settings core.
  *
@@ -124,18 +124,26 @@ export function assertRoutingGoalTiersConsistent(goal: RoutingGoal, tiers: Quali
 }
 
 /**
- * Separate-knob support for a settings write. Native adapters defer vocabulary
- * resolution to dispatch; other adapters keep manifest validation under lock.
- * `null` means the harness has no adapter to ask.
+ * Effort-carrier support for a settings write. An adapter with an effort
+ * carrier (`effortParameter`: a separate flag, or `--model` where the level is
+ * a token of the compound model id and preparation selects the listed variant)
+ * defers vocabulary resolution to dispatch; other adapters keep manifest
+ * validation under lock. `null` means the harness has no adapter to ask.
  */
 export type PatchEffortCapabilities = ReadonlyMap<
   string,
   HarnessCapabilities | { effortParameter: string } | null
 >;
 
-/** Effort is a preference resolved at dispatch. A separate effort on a route
- * without a native knob still refuses; compound model ids are never rewritten.
- * Older adapters without a declaration retain validation against known order. */
+/** Effort is a preference resolved at dispatch. A route with an effort carrier
+ * accepts any word at WRITE time: a flag adapter resolves it against the final
+ * account's ladder, and a compound-id route (Cursor, Antigravity) selects the
+ * listed level variant of the model's family from the running account's
+ * inventory, omitting (never refusing) a word it cannot place. Only a route
+ * with no carrier at all still refuses here (a validation, never lost paid
+ * work). Adapters without a declaration retain validation against their
+ * ladder: its own order first, the shared preference order only for a word
+ * that ladder does not list. */
 export function assertHarnessEffortPairsValid(
   harnesses: GlobalConfigT["harnesses"],
   capabilities: PatchEffortCapabilities,
@@ -152,7 +160,7 @@ export function assertHarnessEffortPairsValid(
       resolveEffort(
         effort,
         ladder,
-        effortRankLadder([
+        effortLadders([
           caps!.effort_levels,
           ...Object.values(caps!.model_effort_levels).map((entry) => entry.levels),
         ]),

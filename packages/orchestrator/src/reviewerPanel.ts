@@ -4,8 +4,8 @@
  * enabled in settings, doctor-ok on the review route, readonly-review
  * capable — plus the model truth gate (INV-104: live inventory when the
  * adapter has `models()`, else manifest `known_models`; empty manifest truth
- * refuses) and the declared effort ladder. Violations throw typed
- * HarnessUnavailableError; the orchestrator turns them into review_preflight
+ * refuses) and the declared effort ladder (reviewerEffort.ts). Violations throw
+ * typed HarnessUnavailableError; the orchestrator turns them into review_preflight
  * failure ARTIFACTS after run-dir creation, before candidates spend money.
  *
  * The one thing the EXPLICIT gate does not decide is an absence its harness
@@ -23,26 +23,19 @@ import type {
   CredentialProfile,
   EffortHint,
   Intent,
-  ModelEffortCapability,
   ModelInventoryAbsence,
   ProviderFamily,
 } from "@claudexor/schema";
 import {
   ConformanceReport,
-  effortLevelsForModel,
   estimateEffectiveAuthRoute,
   knownModelIdsForRoute,
 } from "@claudexor/schema";
 import type { HarnessAdapter } from "@claudexor/core";
-import {
-  HarnessUnavailableError,
-  hasModelInventoryForRoute,
-  validateModel,
-  resolveEffort,
-  effortRankLadder,
-} from "@claudexor/core";
+import { HarnessUnavailableError, hasModelInventoryForRoute, validateModel } from "@claudexor/core";
 import { WorkspaceManager } from "@claudexor/workspace";
 import type { ReviewerSpec } from "@claudexor/review";
+import { reviewerEffortVerdict } from "./reviewerEffort.js";
 import { safeErrorMessage } from "./runSupport.js";
 
 const MODEL_INVENTORY_RETRY_DELAY_MS = 250;
@@ -65,61 +58,10 @@ export interface ReviewerPanelDeps {
     credentialProfileId: string | null;
     excludedProfileIds?: ReadonlySet<string>;
   }) => Promise<CredentialProfile | null>;
-  /** Disclosure sink for a knob the panel dropped instead of refusing (the
-   * auto panel's `reviewerEfforts` map). Optional: the drop itself never
-   * depends on a listener being wired. */
+  /** Disclosure sink for a knob the panel did not refuse: an effort a
+   * knob-less reviewer omits (either panel) or the auto panel dropped.
+   * Optional: neither outcome depends on a listener being wired. */
   onIgnoredSetting?: (detail: string) => void;
-}
-
-/**
- * The reviewer effort gate: a requested level must be one the SELECTED reviewer
- * actually advertises.
- *
- * ONE owner for both panel paths (INV-104's effort sibling). The wire type is an
- * open slug rather than an enum — a level is only meaningful per (harness,
- * model), so the boundary cannot know it — which means this manifest check IS
- * the guarantee that a typo or an unsupported level is refused instead of
- * travelling inward. Without it a reviewer effort dies silently: the adapter's
- * normalizer drops an unresolvable level to "send no flag", while the review
- * artifact still records `requested_effort`, so the run reads as though the
- * level had been honored.
- */
-function reviewerEffortRefusal(
-  harnessId: string,
-  requestedEffort: EffortHint | null,
-  capabilities: {
-    effort_levels: readonly EffortHint[];
-    model_effort_levels: Record<string, ModelEffortCapability>;
-  },
-  model: string | null,
-): string | null {
-  if (!requestedEffort) return null;
-  // Validate against the ladder of the model that will actually review: the
-  // model's own advertised list when the entry resolves one and the manifest
-  // recorded it, else the harness-wide merged ladder — which is then the only
-  // honest set, and the refusal says so.
-  const advertised = effortLevelsForModel(capabilities, model);
-  if (
-    advertised.length &&
-    resolveEffort(
-      requestedEffort,
-      advertised,
-      effortRankLadder([
-        capabilities.effort_levels,
-        ...Object.values(capabilities.model_effort_levels).map((entry) => entry.levels),
-      ]),
-    ).status === "ok"
-  )
-    return null;
-  const perModel =
-    model !== null && (capabilities.model_effort_levels[model]?.levels.length ?? 0) > 0;
-  const supported = advertised.join(", ");
-  const suffix = !supported
-    ? " (harness declares no effort controls)"
-    : perModel
-      ? ` (model '${model}' advertises: ${supported})`
-      : ` (harness-wide advertised ladder — no per-model ladder recorded${model ? ` for '${model}'` : ""}: ${supported})`;
-  return `reviewer harness '${harnessId}' does not support requested effort '${requestedEffort}'${suffix}`;
 }
 
 function credentialProfileAuthRoute(profile: CredentialProfile): "local_session" | "api_key" {
@@ -342,15 +284,18 @@ export async function resolveExplicitReviewerPanel(
         }
         const requestedEffort = entry.effort ?? null;
         // Native effort adapters resolve after the final account/model is bound.
-        const refusal = adapter.effortParameter
-          ? null
-          : reviewerEffortRefusal(
+        const effort = adapter.effortParameter
+          ? ({ kind: "kept" } as const)
+          : reviewerEffortVerdict(
               entry.harness,
               requestedEffort,
               manifest.capabilities,
               requestedModel,
             );
-        if (refusal) throw new HarnessUnavailableError(refusal);
+        if (effort.kind === "unplaceable") throw new HarnessUnavailableError(effort.message);
+        // No effort controls: the review still runs; the preference stays in the
+        // receipt as omitted and the panel says so.
+        if (effort.kind === "omitted") deps.onIgnoredSetting?.(effort.disclosure);
         specs.push({
           adapter,
           providerFamily: manifest.provider_family,
@@ -522,14 +467,16 @@ export async function resolveAutoReviewerPanel(
             continue familyLoop;
           }
         }
-        // Preserve native preferences through final-account resolution; adapters
-        // without a separate knob retain their existing conflict/drop behavior.
+        // Preserve native preferences through final-account resolution. A
+        // knob-less reviewer keeps the requested preference in its receipt
+        // (omitted, disclosed); only a word its ladder cannot place is dropped.
         let requestedEffort = overrides.reviewerEfforts?.[m.provider_family] ?? null;
-        const dropped = adapter.effortParameter
-          ? null
-          : reviewerEffortRefusal(adapter.id, requestedEffort, m.capabilities, requestedModel);
-        if (dropped) {
-          deps.onIgnoredSetting?.(`reviewer effort dropped: ${dropped}`);
+        const effort = adapter.effortParameter
+          ? ({ kind: "kept" } as const)
+          : reviewerEffortVerdict(adapter.id, requestedEffort, m.capabilities, requestedModel);
+        if (effort.kind === "omitted") deps.onIgnoredSetting?.(effort.disclosure);
+        if (effort.kind === "unplaceable") {
+          deps.onIgnoredSetting?.(`reviewer effort dropped: ${effort.message}`);
           requestedEffort = null;
         }
         seen.add(m.provider_family);

@@ -30,7 +30,7 @@
  * admit a model.
  */
 import { billingKnowledgeForAuthRoute } from "@claudexor/budget";
-import type { AuthVerification, PaidFallback } from "@claudexor/schema";
+import type { AuthVerification, EffortResolution, PaidFallback } from "@claudexor/schema";
 import type { HarnessAdapter } from "@claudexor/core";
 import {
   HarnessUnavailableError,
@@ -224,6 +224,7 @@ export async function* runModelGovernedRoute(
   spec: HarnessRunSpec,
 ): AsyncIterable<HarnessEvent> {
   let nativeModel: string | null = null;
+  let preparedEffort: EffortResolution | undefined;
   if (spec.processing_preference || routed.adapter.prepareProcessing) {
     const prepared = await prepareHarnessProcessing(routed.adapter, {
       preference: spec.processing_preference,
@@ -236,6 +237,7 @@ export async function* runModelGovernedRoute(
       allowPaid: spec.processing_allow_paid,
     });
     nativeModel = prepared.model;
+    preparedEffort = prepared.effort;
     spec = { ...spec, processing: prepared.receipt, processing_cost_basis: prepared.costBasis };
   }
   const model = spec.model_hint?.trim();
@@ -281,7 +283,13 @@ export async function* runModelGovernedRoute(
       text: unverified.join("; "),
     };
   }
-  if (!routed.adapter.effortParameter) {
+  // ONE effort receipt per spawn. A model-id carrier (Cursor, Antigravity)
+  // produced it in the same preparation that chose `processing.submittedNative`,
+  // so the id sent, the level and this disclosure cannot disagree; a route with
+  // no effort carrier at all records the preference as omitted here; a flag
+  // adapter (Claude, Codex, ACP) emits its own receipt at its final route.
+  if (preparedEffort) yield effortResolutionEvent(spec.session_id, preparedEffort);
+  else if (!routed.adapter.effortParameter) {
     yield effortResolutionEvent(
       spec.session_id,
       resolveEffortEvidence(spec.effort_hint, [], [], "adapter", null),
