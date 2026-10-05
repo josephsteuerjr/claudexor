@@ -250,6 +250,10 @@ export function createCursorAdapter(deps: Partial<CursorRuntimeDeps> = {}): Harn
     });
   return {
     id: "cursor",
+    // The level is a token of the compound model id: `prepareProcessing`
+    // selects the listed variant of the requested model's family from this
+    // account's inventory and returns the effort receipt with it.
+    effortParameter: "--model",
     capabilityProfile: CURSOR_CAPABILITY_PROFILE,
     ...cursorProcessingMethods((input) =>
       listCursorModelsFromReadyRoute(
@@ -301,7 +305,9 @@ export function createCursorAdapter(deps: Partial<CursorRuntimeDeps> = {}): Harn
           // while the preceding markdown remains the deliverable.
           work_report_transport: "validated",
           structured_output_channel: "final_message",
-          // cursor-agent exposes no reasoning-effort flag -> effort is not tunable.
+          // cursor-agent exposes no reasoning-effort flag: the level rides the
+          // model id, and `prepareProcessing` selects the listed variant of the
+          // requested model's family from the account's own inventory.
           effort_levels: [],
           // `--list-models` is a fail-soft menu (empty on failure, blind to routing
           // variants): presence only, so an unlisted model is forwarded (INV-104).
