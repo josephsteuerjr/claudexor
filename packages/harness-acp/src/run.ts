@@ -1,8 +1,10 @@
 import * as acp from "@agentclientprotocol/sdk";
 import {
   abortSignalFromSpec,
+  effortResolutionEvent,
   HarnessUnavailableError,
   promptWithInstructions,
+  throwIfEffortRejected,
 } from "@claudexor/core";
 import type { HarnessEvent, HarnessRunSpec } from "@claudexor/schema";
 import { CLAUDEXOR_VERSION, redactSecrets } from "@claudexor/util";
@@ -10,7 +12,7 @@ import { Channel } from "./channel.js";
 import type { AcpEntry } from "./entry.js";
 import { acpToken, prepareAcpEnv } from "./env.js";
 import { AcpEvents, AcpFailure } from "./events.js";
-import { acpArgs } from "./policy.js";
+import { acpArgs, acpEffortResolution } from "./policy.js";
 import { connectAcp, type AcpObservation } from "./transport.js";
 
 export const ACP_DISCLOSURE =
@@ -55,8 +57,12 @@ export function acpRunner(entry: AcpEntry) {
       if (active.has(spec.session_id))
         throw new HarnessUnavailableError("ACP session is already active");
       // Typed pre-spawn refusals throw like the check above, so the engine keeps
-      // their failure class instead of a generic acp_error event.
-      const args = acpArgs(entry, spec);
+      // their failure class instead of a generic acp_error event. Effort is
+      // resolved ONCE: the receipt recorded below is the `--effort` value sent.
+      const effort = acpEffortResolution(entry, spec.effort_hint);
+      if (effort.resolution === "rejected") yield effortResolutionEvent(spec.session_id, effort);
+      throwIfEffortRejected(effort);
+      const args = acpArgs(entry, spec, effort.submitted);
       const token = acpToken(entry, spec.credential_profile);
       active.set(spec.session_id, cancel);
       external?.addEventListener("abort", onAbort, { once: true });
@@ -81,6 +87,9 @@ export function acpRunner(entry: AcpEntry) {
               "ACP MCP injection is not supported in stage 1",
             );
           prepared = prepareAcpEnv(entry, token, spec.env);
+          // The adapter owns the receipt exactly when it owns a knob; a knob-less
+          // entry declares no effortParameter and the engine records `omitted`.
+          if (entry.effortLevels.length) await emit(effortResolutionEvent(spec.session_id, effort));
           await emit(
             events.event("started", {
               credential_route: "managed_api_key",

@@ -12,7 +12,8 @@ export function createAcpAdapter(entry: AcpEntry): HarnessAdapter {
   const profile = acpCapabilityProfile();
   return {
     id: entry.id,
-    effortParameter: "--effort",
+    // Only an entry that declares levels has a separate effort knob to resolve.
+    ...(entry.effortLevels.length ? { effortParameter: "--effort" } : {}),
     capabilityProfile: profile,
     ...acpProbes(entry, profile, runner),
     run: runner.run,
