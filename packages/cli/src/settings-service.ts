@@ -1,4 +1,4 @@
-import { resolveEffort, effortRankLadder } from "@claudexor/core";
+import { resolveEffort, effortLadders } from "@claudexor/core";
 /**
  * Settings-write validation + patch merge — the daemon's POST /settings core.
  *
@@ -134,8 +134,10 @@ export type PatchEffortCapabilities = ReadonlyMap<
 >;
 
 /** Effort is a preference resolved at dispatch. A separate effort on a route
- * without a native knob still refuses; compound model ids are never rewritten.
- * Older adapters without a declaration retain validation against known order. */
+ * without a native knob still refuses at WRITE time (a validation, never lost
+ * paid work); compound model ids are never rewritten. Older adapters without a
+ * declaration retain validation against their ladder: its own order first, the
+ * shared preference order only for a word that ladder does not list. */
 export function assertHarnessEffortPairsValid(
   harnesses: GlobalConfigT["harnesses"],
   capabilities: PatchEffortCapabilities,
@@ -152,7 +154,7 @@ export function assertHarnessEffortPairsValid(
       resolveEffort(
         effort,
         ladder,
-        effortRankLadder([
+        effortLadders([
           caps!.effort_levels,
           ...Object.values(caps!.model_effort_levels).map((entry) => entry.levels),
         ]),

@@ -14,7 +14,6 @@ import { createCodexAdapter, clearCodexEffortCache } from "../../harness-codex/s
 import { readModelListEfforts } from "../../harness-codex/src/effort-probe.js";
 import { createClaudeAdapter } from "../../harness-claude/src/index.js";
 import { createAttemptTelemetry, observeAttemptTelemetry } from "./attemptTelemetry.js";
-import { governRouteEffort } from "./effortGovernance.js";
 import { writeRunTelemetryArtifact } from "./runTelemetryWriter.js";
 import effortFixture from "../../schema/fixtures/effort-resolution.json" with { type: "json" };
 
@@ -86,17 +85,15 @@ it.each([{ requested: "future", submitted: "future", resolution: "exact" }, effo
         };
       },
     });
-    const original = governRouteEffort(expected.requested, {
-      id: "codex",
-      effortLevels: ["low", "high"],
-    });
+    // Preflight carries the preference to the route unchanged — discovery only
+    // describes the default account — so the spec holds exactly what was asked.
     const spec = HarnessRunSpec.parse({
       session_id: "session",
       intent: "explain",
       cwd: process.cwd(),
       prompt: "fixture",
       model_hint: "target",
-      effort_hint: original.effort,
+      effort_hint: expected.requested,
     });
     const events = [];
     for await (const event of adapter.run(spec)) events.push(event);

@@ -178,7 +178,6 @@ import {
   authModeForPreference,
   authRouteEvidenceFor,
 } from "./auth-route-classification.js";
-import { governRouteEffort } from "./effortGovernance.js";
 import { isFullAccess, RequestRequirementsResolver } from "./requestRequirements.js";
 import { DelegationBudgetAuthority } from "./delegationBudgetAuthority.js";
 import { activateDelegationParent } from "./delegation-parent-activation.js";
@@ -676,9 +675,6 @@ export interface RoutedAdapter {
   denyRequirement: RequestRequirementResolution;
   /** Per-lane Delegate requested/effective truth. */
   delegationRequirement: RequestRequirementResolution;
-  /** Harness-wide advertised effort ladder (empty = not tunable → the requested
-   * effort is DISCLOSED as ignored); the adapter re-resolves per model in its own env. */
-  effortLevels: readonly EffortHint[];
   /** Manifest model truth source (used when the adapter has no live models()). */
   knownModels: readonly KnownModelEntry[];
   modelInventory?: Pick<HarnessCapabilities, "model_inventory_routes" | "model_inventory_absence">;
@@ -879,7 +875,12 @@ export class Orchestrator {
   ): Promise<ReviewerSpec[]> {
     if (this.deps.reviewers) return this.deps.reviewers;
     if (this.deps.reviewerPanel && this.deps.reviewerPanel.length > 0) {
-      return this.resolveExplicitReviewerPanel(cwd, this.deps.reviewerPanel, runAuthPreference);
+      return this.resolveExplicitReviewerPanel(
+        cwd,
+        this.deps.reviewerPanel,
+        runAuthPreference,
+        onIgnoredSetting,
+      );
     }
     return resolveAutoReviewerPanel(
       {
@@ -911,7 +912,7 @@ export class Orchestrator {
   ): Promise<{ reviewers: ReviewerSpec[] } | { failed: OrchestratorResult }> {
     if (input.review === false) return { reviewers: [] };
     try {
-      // Auto-panel dropped knobs (reviewerEfforts) → ignored-settings channel (QA-070):
+      // Reviewer knobs a panel omitted or dropped → ignored-settings channel (QA-070):
       const warn = (d: string) => void log.emit("review.preflight", { ignored_settings: [d] });
       const config = this.config(input.repoRoot).global;
       const reviewers = await this.resolveReviewers(input.repoRoot, input.authPreference, warn);
@@ -968,6 +969,7 @@ export class Orchestrator {
     cwd: string,
     panel: ControlReviewerPanelEntry[],
     runAuthPreference?: AuthPreference,
+    onIgnoredSetting?: (detail: string) => void,
   ): Promise<ReviewerSpec[]> {
     return resolveExplicitReviewerPanel(
       {
@@ -976,6 +978,7 @@ export class Orchestrator {
         harnessSettings: this.config(cwd)?.global.harnesses ?? {},
         authPreferenceFor: (id) => this.authPreferenceForHarness(cwd, id, runAuthPreference),
         resolveReviewerProfile: reviewerProfileResolver(this.credentials, cwd),
+        onIgnoredSetting,
       },
       panel,
     );
@@ -1455,7 +1458,6 @@ export class Orchestrator {
             requiresFullAccess: manifest.capability_profile.mcp_injection_requires_full_access,
             fullAccess: isFullAccess(requiredAccess),
           }),
-          effortLevels: manifest.capabilities.effort_levels,
           knownModels: manifest.capabilities.known_models,
           modelInventory: manifest.capabilities,
           // A selected profile's credential_kind IS the route (round-18 #2);
@@ -2095,18 +2097,14 @@ export class Orchestrator {
     // no run-global model.
     const model =
       overrideModel ?? contract.routing_models[routed.adapter.id] ?? s?.defaultModel ?? null;
-    // Effort disclosure (INV-105) against the harness's advertised ladder. This
-    // gate only DISCLOSES an unplaceable level; the clamp belongs to the adapter,
-    // which resolves against the catalog for the profile env the child runs in
-    // (the manifest here is the DEFAULT account's — see effortGovernance.ts). The
-    // contract's FROZEN per-lane effort (QA-035) wins so Exact Retry replays it
-    // without re-reading settings; `effortHint`/settings apply only to an unfrozen lane.
-    const governed = governRouteEffort(
-      contract.routing_efforts[routed.adapter.id] ?? effortHint ?? s?.effort ?? null,
-      { id: routed.adapter.id, ...routed },
-    );
-    const effort = governed.effort;
-    if (governed.ignored) ignored.push(governed.ignored);
+    // The effort PREFERENCE travels to the route unchanged (INV-105): discovery
+    // describes the DEFAULT account, so only the final route may resolve it — a
+    // knob adapter against the catalog of the profile env its child runs in, the
+    // engine as `omitted` for a route without a knob — and that one resolution is
+    // what the receipt and the disclosure record. The contract's FROZEN per-lane
+    // effort (QA-035) wins so Exact Retry replays it without re-reading settings;
+    // `effortHint`/settings apply only to an unfrozen lane.
+    const effort = contract.routing_efforts[routed.adapter.id] ?? effortHint ?? s?.effort ?? null;
     return {
       model,
       effort,
