@@ -1,8 +1,11 @@
 /**
- * The reviewer effort gate, for adapters WITHOUT a native effort knob of their
+ * The reviewer effort gate, for adapters WITHOUT an effort carrier of their
  * own. (An adapter that declares `effortParameter` resolves the preference at
- * its final route — the account and model that actually run — and is never
- * judged here.) ONE owner for both panel paths, split out of reviewerPanel.ts.
+ * its final route — a flag against the account that actually runs, or, for a
+ * compound model id (Cursor, Antigravity), the listed level variant of the
+ * model's family selected by preparation — and is never judged here; its
+ * receipt lands in the reviewer artifact at dispatch.) ONE owner for both
+ * panel paths, split out of reviewerPanel.ts.
  *
  * The wire type is an open slug, not an enum — a level only means something per
  * (harness, model) — so the manifest is the only place a reviewer effort can be

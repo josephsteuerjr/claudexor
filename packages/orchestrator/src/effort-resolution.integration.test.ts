@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import {
+  HarnessModel,
   HarnessRunSpec,
   RunTelemetry,
   TaskContract,
@@ -17,12 +18,12 @@ import { createAttemptTelemetry, observeAttemptTelemetry } from "./attemptTeleme
 import { writeRunTelemetryArtifact } from "./runTelemetryWriter.js";
 import effortFixture from "../../schema/fixtures/effort-resolution.json" with { type: "json" };
 
-function persist(events: HarnessEvent[], harnessId: string) {
+function persist(events: HarnessEvent[], harnessId: string, requestedModel: string | null = null) {
   const root = mkdtempSync(join(tmpdir(), "effort-artifact-"));
   try {
     const store = new ArtifactStore(root, { claudexorDir: root });
     const paths = store.createRun("run");
-    const telemetry = createAttemptTelemetry("off", false);
+    const telemetry = createAttemptTelemetry("off", false, "off", [], requestedModel);
     for (const event of events) observeAttemptTelemetry(telemetry, event);
     writeRunTelemetryArtifact({
       store,
@@ -197,7 +198,7 @@ it.each([true, false])(
   },
 );
 
-it("records omission for a carrier-less route without rewriting its compound model", async () => {
+it("records omission for a route with no effort carrier at all, without rewriting its model", async () => {
   const { runModelGovernedRoute } = await import("./modelGovernance.js");
   const slug = "cursor-grok-4.6-xhigh";
   let observedSpec: HarnessRunSpec | undefined;
@@ -294,3 +295,122 @@ it.each([true, false])(
     clearCodexEffortCache();
   },
 );
+
+/** Frozen `cursor@valintine` slice: the grok-4.7 family, standard and fast. */
+const GROK_47 = [
+  "grok-4.7-low",
+  "grok-4.7-medium",
+  "grok-4.7-high",
+  "grok-4.7-xhigh",
+  "grok-4.7-low-fast",
+  "grok-4.7-medium-fast",
+  "grok-4.7-high-fast",
+  "grok-4.7-xhigh-fast",
+].map((id) => HarnessModel.parse({ id }));
+
+it("a model-id effort carrier: ONE prepared result feeds --model, the processing receipt and the effort receipt", async () => {
+  const { runModelGovernedRoute } = await import("./modelGovernance.js");
+  const { createCursorAdapter } = await import("../../harness-cursor/src/index.js");
+  let sent: string[] = [];
+  let observedSpec: HarnessRunSpec | undefined;
+  const adapter = createCursorAdapter({
+    cursorApiKey: () => "fixture-key",
+    smokeIsolatedApiKey: async () => ({ ok: true, detail: "fixture" }),
+    listCursorModels: async () => GROK_47,
+    runCliHarness: async function* (opts) {
+      sent = opts.args;
+      observedSpec = opts.spec;
+      // The vendor init frame, through the adapter's own parser (which stamps
+      // the processing receipt on every event), then the terminal frame.
+      yield* opts.parseEvent(
+        { type: "system", subtype: "init", model: "grok-4.7-xhigh" },
+        opts.spec.session_id,
+      ) ?? [];
+      yield { type: "completed", session_id: opts.spec.session_id, ts: new Date(0).toISOString() };
+    },
+  });
+  const spec = HarnessRunSpec.parse({
+    session_id: "cursor-effort",
+    intent: "explain",
+    cwd: process.cwd(),
+    prompt: "fixture",
+    auth_preference: "api_key",
+    model_hint: "grok-4.7-high",
+    effort_hint: "max",
+  });
+  const events: HarnessEvent[] = [];
+  for await (const event of runModelGovernedRoute(
+    {
+      adapter,
+      knownModels: [],
+      modelInventory: { model_inventory_absence: "advisory" },
+      authRouteEstimate: "api_key",
+      quotaAdmission: { profile: null },
+      settings: null,
+    },
+    spec,
+  ))
+    events.push(event);
+  // argv == processing.submittedNative == the prepared model; the caller's hint is untouched.
+  expect(sent[sent.indexOf("--model") + 1]).toBe("grok-4.7-xhigh");
+  expect(observedSpec?.model_hint).toBe("grok-4.7-high");
+  expect(observedSpec?.effort_hint).toBe("max");
+  expect(observedSpec?.processing?.submittedNative).toBe("grok-4.7-xhigh");
+  // Exactly ONE effort receipt, the preparation's own — no second engine `omitted`.
+  const receipts = events.filter((event) => event.effort_resolution);
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]?.effort_resolution).toMatchObject({
+    requested: "max",
+    submitted: "xhigh",
+    resolution: "downward",
+    parameter: "--model",
+    source: "account_catalog",
+    observed: null,
+  });
+  expect(receipts[0]?.payload?.["ignored_settings"]).toEqual([
+    expect.stringContaining("effort=max: downward; submitted=xhigh"),
+  ]);
+  const telemetry = persist(events, "cursor", "grok-4.7-high");
+  const attempt = telemetry.attempts[0];
+  // What Ouroboros reads: requested id, final id, level receipt, no false mismatch.
+  expect(attempt?.requested_model).toBe("grok-4.7-high");
+  expect(attempt?.processing?.submittedNative).toBe("grok-4.7-xhigh");
+  expect(attempt?.effort_resolution).toMatchObject({ requested: "max", submitted: "xhigh" });
+  expect(attempt?.observed_model).toBe("grok-4.7-xhigh");
+  expect(telemetry.auth_route?.model_mismatch).toBeNull();
+});
+
+it("model_mismatch compares the observation with the SUBMITTED id, not the caller's hint", () => {
+  const base = { type: "status", session_id: "mm", ts: new Date(0).toISOString() };
+  const processing = {
+    requested: null,
+    submitted: null,
+    submittedNative: "grok-4.7-xhigh",
+    observed: "unknown",
+    observedNative: [],
+    reason: null,
+    source: "fixture",
+  };
+  const agreeing = [
+    HarnessEvent.parse({ ...base, type: "started", observed_model: "grok-4.7-xhigh", processing }),
+    HarnessEvent.parse({ ...base, type: "completed", processing }),
+  ];
+  expect(persist(agreeing, "cursor", "grok-4.7-high").auth_route?.model_mismatch).toBeNull();
+  const drifting = [
+    HarnessEvent.parse({ ...base, type: "started", observed_model: "grok-4.7-medium", processing }),
+    HarnessEvent.parse({ ...base, type: "completed", processing }),
+  ];
+  expect(persist(drifting, "cursor", "grok-4.7-high").auth_route?.model_mismatch).toEqual({
+    requested: "grok-4.7-xhigh",
+    observed: "grok-4.7-medium",
+  });
+  // Without a processing receipt the requested hint is still the sent id.
+  const plain = [
+    HarnessEvent.parse({ ...base, type: "started", observed_model: "model-y" }),
+    HarnessEvent.parse({ ...base, type: "completed" }),
+  ];
+  expect(persist(plain, "lane", "model-x").auth_route?.model_mismatch).toEqual({
+    requested: "model-x",
+    observed: "model-y",
+  });
+});
