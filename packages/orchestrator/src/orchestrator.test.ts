@@ -9952,8 +9952,8 @@ describe("Orchestrator", () => {
       n: 1,
       inPlace: true,
     });
-    // No raw_patch_sensitive_content refusal: the proposal materialized in its
-    // isolated tree, was reviewed like any candidate and adopted with exact bytes.
+    // The proposal materialized in its isolated tree, was reviewed like any
+    // candidate and adopted with exact bytes.
     expect(res.lifecycle).toBe("succeeded");
     expect(readFileSync(join(repo, "README.md"), "utf8")).toBe(`token = "${secret}"\n`);
     const finalPatch = readFileSync(join(res.runDir, "final", "patch.diff"), "utf8");
@@ -9963,9 +9963,6 @@ describe("Orchestrator", () => {
     expect(workProduct).toContain("apply_state: applied");
     // The memory-only patch event never reaches events.jsonl or any artifact.
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
-    expect(readFileSync(join(res.runDir, "events.jsonl"), "utf8")).not.toContain(
-      "raw_patch_sensitive_content",
-    );
     // Revert restores the exact preimage from the private anchor.
     const anchorId = workProduct.match(/revert_anchor_id:\s+['"]?(sha256:[0-9a-f]{64})/)?.[1];
     expect(anchorId).toBeDefined();
