@@ -473,9 +473,12 @@ clamps to `xhigh` because a sibling Codex model lists it, with no shared-order
 claim). Placing a word declares neither that the vendor supports it nor that two
 vendors' levels of the same name are of equal quality: only a level the final
 route itself advertises is ever submitted, and the receipt's `reason` states
-that the shared order did the placing. The fallback is merged from the same RAW
-vendor lists (`effortLadders`), so lists that contradict each other, or the
-shared order, disable it instead of being masked. Adapters
+that the shared order did the placing. The fallback merges the shared words
+from the same RAW vendor lists (`effortLadders`), so contradictory orders among
+comparable words disable it instead of being masked. Extra vendor-only words
+do not disable placement onto the advertised/shared intersection: `ultra` on
+`low, medium, high, turbo` resolves downward to `high`, never to the unranked
+`turbo`; a floor uses the weakest comparable advertised level. Adapters
 discover what is really advertised at discovery time and fall back to a
 recorded snapshot (stamped vendor data, kept in its captured order) when a
 probe cannot answer, so a probe failure costs freshness, never the run; both
@@ -563,7 +566,8 @@ Runs record it as `attempts[].effort_resolution` in
 attempt retains the final native execution's receipt after account rotation.
 Codex model results obtain observation only from Responses' `reasoning.effort`;
 `appliedOptions` keeps its existing provider-echo meaning. Session adapters do
-not claim an observed value. Adaptation disclosures are status/log events and
+not claim an observed value. Adaptation disclosures, including an exact effort
+selection that changes a `--model` id, are status/log events and
 never injected assistant messages. These fields add no operation, generation,
 retry, account-selection or budget authority. A rejected final-route preference
 ends that attempt without account rotation, model/harness fallback or repair retry;
@@ -1354,7 +1358,8 @@ persistence classifier.
   never mutates the project.
 - **Saved copies hide the matches.** `attempts/<a>/patch.diff`,
   `final/patch.diff` and the reviewer packet `DIFF.patch` are written from
-  `persistedPatchCopy`: each match becomes `[redacted]`, the payload of a
+  `persistedPatchCopy`: each absorbed line of a match becomes `[redacted]`
+  with its diff prefix and line ending preserved so hunk counts stay valid; the payload of a
   binary file whose pre- or postimage holds (or cannot be proven free of)
   secret-like bytes is withheld, and the copy opens with a one-line notice.
   A copy with nothing to hide is byte-identical to the exact diff and carries
@@ -1369,7 +1374,9 @@ persistence classifier.
   `matches` and rule `kinds`, `binary_paths`, `media_withheld`,
   `answer_matches` (counted before the first redaction) and `total_matches`.
   `final/summary.md` adds one line, and the MCP read tools project the same
-  record as `secretLike`.
+  record as `secretLike`. Read-only Ask, Plan and their reducers use the same
+  pre-redaction answer counter: the selected final answer supplies the count,
+  or the sum of the retained scouts when deep-scan returns a raw bundle.
 - **Apply binds to the exact digest.** `meta.patch_sha256` is always the digest
   of the exact patch, so a redacted copy cannot pass the apply gate on any
   route. When the saved copy differs, meta records `persisted_patch: redacted`
@@ -3896,7 +3903,8 @@ contradictory report (completed with `required_inputs`, needs_input without
 any), a historical fence-only envelope with a non-string `output` — is a CLEAN
 outcome: the lifecycle succeeds, `work_state` is
 `{state: unverified, source: validated, unverified_reason}` (the typed reason
-rides attempt telemetry and the run's outcome facts), and the deliverable is
+rides attempt telemetry and the run's outcome facts, and the shared outcome
+banner renders `work state unverified: <reason>`), and the deliverable is
 the COMPLETE answer text with nothing cut: a trailing fence that is the
 consumer's own JSON or code stays, and so does a broken footer attempt, so a
 malformed `needs_input` claim cannot veto but remains readable in the answer.

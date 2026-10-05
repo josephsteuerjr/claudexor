@@ -161,6 +161,16 @@ describe("effort selects the listed variant of the same family (roast vectors)",
     expect(select(null, "grok-4.7").model).toBe("grok-4.7");
   });
 
+  it("an unlisted explicit id selects a listed family variant only with an effort preference", () => {
+    const model = "grok-4.7-ultra";
+    expect(CATALOG).not.toContain(model);
+    expect(select("max", model)).toMatchObject({
+      model: "grok-4.7-xhigh",
+      effort: { submitted: "xhigh", resolution: "downward", parameter: "--model" },
+    });
+    expect(select(null, model).model).toBe(model);
+  });
+
   it("a listed bare id (gpt-5.3-codex) keeps itself without effort and selects a sibling with one", () => {
     expect(select(null, "gpt-5.3-codex").model).toBe("gpt-5.3-codex");
     expect(select("xhigh", "gpt-5.3-codex")).toMatchObject({

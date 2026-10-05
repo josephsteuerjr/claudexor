@@ -40,7 +40,7 @@ export async function prepareReviewerRunSpec(
 /**
  * Record the prepared effort receipt exactly as a flag adapter's in-stream
  * receipt is recorded: the status event goes into the reviewer's normalized
- * stream, the receipt into `metadata.json`, and a downward/floor disclosure
+ * stream, the receipt into `metadata.json`, and an adaptation/model-change disclosure
  * into the reviewer's `ignored_settings`. Nothing is injected into the live
  * adapter stream, so first-event timing keeps meaning "the adapter spoke".
  */
@@ -49,9 +49,10 @@ export function recordPreparedEffort(
   sessionId: string,
   receipt: EffortResolution | undefined,
   ignoredSettings: Set<string>,
+  spec?: Pick<HarnessRunSpec, "model_hint" | "processing">,
 ): void {
   if (!receipt) return;
-  const event = effortResolutionEvent(sessionId, receipt);
+  const event = effortResolutionEvent(sessionId, receipt, spec);
   appendLine(artifact.eventsPath, JSON.stringify(redactValue(event)));
   const disclosures = event.payload?.["ignored_settings"];
   if (Array.isArray(disclosures))

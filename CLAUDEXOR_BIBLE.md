@@ -258,9 +258,10 @@ invariant or operator decision before proceeding.
   file bytes in a digest-bound manifest; a text diff is only a preview. Copied
   file results retain the selected baseline and complete output bytes for exact
   delivery, while direct effects disclose any unknown preimages. Captured diffs must round-trip:
-  what the engine records as the work product must `git apply` cleanly to
+  the exact patch object recorded as the work product must `git apply` cleanly to
   the base it was captured against (no silent corruption — CRLF, quoted
-  paths, binary — between capture and delivery). verify: workspace diff
+  paths, binary — between capture and delivery); persisted copies may be masked
+  under INV-062 and are display-only. verify: workspace diff
   tests incl. the CRLF and binary round-trip cases (byte-faithful raw
   capture; `git diff --binary`).
 - **INV-042** Reviews are trusted only when reviewer output is parseable,
@@ -645,8 +646,11 @@ invariant or operator decision before proceeding.
   and the CLI serves a bundled default list when its remote fetch times out;
   cursor: `--list-models` is a fail-soft menu blind to routing variants;
   agy: the account menu can omit newer models) means
-  presence still admits while absence decides nothing: the EXPLICIT model is
-  forwarded byte-identical, the vendor accepts or refuses it, and the consumer
+  presence still admits while absence decides nothing: on a model-id effort
+  carrier (Cursor, Antigravity), an effort preference selects the listed level
+  variant of the requested id's family from the running account's list (owner
+  decision 2026-10-05 «2. B»); otherwise the EXPLICIT model is forwarded
+  byte-identical. The vendor accepts or refuses it, and the consumer
   that admitted it says so once — the settings read-back carries `notes`, the
   readiness row carries the note in its detail, the per-spawn gate discloses a
   status event. Hint ids count as present. No list is ever substituted for
@@ -675,9 +679,13 @@ invariant or operator decision before proceeding.
   family stays disclosed as unknown and never borrows another family's limit.
 - **INV-105** Per-harness knobs a manifest does not support are disclosed as
   `ignored_settings` on `harness.started` — never silently dropped. This
-  covers max_turns, tool lists, and effort (an empty declared ladder); an
-  explicit MODEL reaches a route only where its truth source could not refuse
-  it (INV-104), and then the run says so: the per-spawn gate discloses the
+  covers max_turns, tool lists, and effort (an empty declared ladder), except
+  that on a model-id effort carrier (Cursor, Antigravity) an effort preference
+  selects the listed level variant of the requested id's family from the running
+  account's list (owner decision 2026-10-05 «2. B»); otherwise the setting is
+  recorded as before. An explicit MODEL reaches a route only where its truth
+  source could not refuse it (INV-104), and then the run says so: the per-spawn
+  gate discloses the
   unverified model, and the effort a model absent from the probed list resolves
   against the sibling ladders is sent verbatim, clamped-and-disclosed, or
   dropped-and-disclosed — never silently changed. verify: knob

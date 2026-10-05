@@ -859,7 +859,7 @@ async function collectReviewerOutput(
     if (isCancelled()) throw new Error("Reviewer cancelled before dispatch");
     const prepared = await prepareReviewerRunSpec(reviewer.adapter, runSpec);
     runSpec = prepared.spec;
-    recordPreparedEffort(artifact, runSpec.session_id, prepared.effort, ignoredSettings);
+    recordPreparedEffort(artifact, runSpec.session_id, prepared.effort, ignoredSettings, runSpec);
     if (isCancelled()) throw new Error("Reviewer cancelled before dispatch");
     await admitPreparedProcessing(runSpec);
     const markPhysicalDispatchStarted = runSpec.extra["markPhysicalDispatchStarted"];

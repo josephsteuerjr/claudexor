@@ -165,13 +165,33 @@ describe("contradictions never let the shared order invent a rank", () => {
     expect(resolveEffort("ultra", ["low", "medium"], ladders).status).toBe("rejected");
   });
 
-  it("a vendor-only word above the shared words leaves the shared fallback unavailable (disclosed limit)", () => {
-    const ladders = effortLadders([["low", "high", "ludicrous"]]);
-    expect(ladders.vendor).toEqual(["low", "high", "ludicrous"]);
-    expect(ladders.shared).toEqual([]);
-    expect(resolveEffort("ultra", ["low", "high", "ludicrous"], ladders).status).toBe("rejected");
-    expect(resolveEffort("ludicrous", ["low", "high", "ludicrous"], ladders)).toMatchObject({
-      effort: "ludicrous",
+  it.each([
+    ["low", "medium", "high", "turbo"],
+    ["turbo", "low", "medium", "high"],
+    ["low", "turbo", "medium", "high"],
+  ])("places unlisted preferences on comparable levels in %j", (...advertised) => {
+    const ladders = effortLadders([advertised]);
+    expect(ladders.vendor).toEqual(advertised);
+    expect(ladders.shared).toEqual(EFFORT_PREFERENCE_ORDER);
+    for (const [requested, submitted, resolution] of [
+      ["ultra", "high", "downward"],
+      ["none", "low", "floor"],
+      ["turbo", "turbo", "exact"],
+    ]) {
+      expect(
+        resolveEffortEvidence(requested, advertised, ladders, "live_probe", "--effort"),
+      ).toMatchObject({ requested, submitted, resolution });
+    }
+  });
+
+  it("keeps a contradictory vendor order for its own words despite an extra vendor level", () => {
+    const ladders = effortLadders([["low", "minimal", "medium", "turbo"]]);
+    expect(resolveEffort("minimal", ["low", "medium", "turbo"], ladders)).toMatchObject({
+      effort: "low",
+      placedBy: "vendor",
+    });
+    expect(resolveEffort("turbo", ["low", "medium", "turbo"], ladders)).toMatchObject({
+      effort: "turbo",
       clamped: false,
     });
   });
@@ -242,7 +262,11 @@ describe("combinatorial probe: every (route, word) pair keeps the invariants", (
         const [sent, want] = [check.ladder.indexOf(check.effort), check.ladder.indexOf(word)];
         expect(receipt.resolution).toBe(sent < want ? "downward" : "floor");
         if (receipt.resolution === "floor")
-          expect(route.advertised.every((level) => check.ladder.indexOf(level) > want)).toBe(true);
+          expect(
+            route.advertised
+              .filter((level) => check.ladder.includes(level))
+              .every((level) => check.ladder.indexOf(level) > want),
+          ).toBe(true);
       }
     }
     expect(shared).toBeGreaterThan(0);

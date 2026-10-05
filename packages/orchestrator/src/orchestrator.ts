@@ -165,7 +165,6 @@ import {
 import {
   acceptedTryOutput,
   AccessProfileIncompatibleError,
-  AnswerAssembly,
   CLAUDEXOR_BROWSER_ARTIFACT_SUBDIR,
   countsAsAgentProgress,
   HarnessUnavailableError,
@@ -6284,6 +6283,7 @@ export class Orchestrator {
       harnessId: string;
       status: "success" | "failed" | "blocked";
       report: string;
+      answerMatches?: number;
       error: string | null;
       telemetry: AttemptTelemetry;
       /** QA-019: this scout was refused BEFORE spawn by the budget gate — it
@@ -6534,7 +6534,7 @@ export class Orchestrator {
           readonlyWorkEnvelope,
         );
         const attemptEventsPath = join(paths.attemptsDir, attemptId, "events.jsonl");
-        const answer = new AnswerAssembly();
+        const answer = new secretDiff.CountedAnswerAssembly();
         const telemetry = createAttemptTelemetry(
           knobs.webPolicy,
           contract.external_context.web_required,
@@ -6639,7 +6639,7 @@ export class Orchestrator {
           // A3 per-try isolation (candidate-lane parity): neither a failed try's
           // output nor its progress markers leak into the next try's evidence.
           if (nativeTry > 0) {
-            answer = new AnswerAssembly();
+            answer = new secretDiff.CountedAnswerAssembly();
             telemetry.outputMarkers = newAttemptOutputMarkers();
           }
           const runSpec =
@@ -6724,7 +6724,7 @@ export class Orchestrator {
                 break;
               }
               // A TYPED final message wins verbatim over joined narration.
-              answer.observe(safeEv);
+              answer.observeCounted(ev, safeEv);
               if (safeEv.type === "error")
                 harnessError = safeEv.error
                   ? redactSecrets(safeEv.error)
@@ -6945,6 +6945,7 @@ export class Orchestrator {
         harnessId: adapter.id,
         status: scoutInterrupted ? "failed" : "success",
         report: report || "(no output)",
+        answerMatches: answer.secretLikeMatches(),
         error: scoutInterrupted ? "context capacity exhausted before the scout completed" : null,
         telemetry,
         ...(scoutInterrupted ? { interrupted: true } : {}),
@@ -7370,8 +7371,9 @@ export class Orchestrator {
     // whole decision + reducer spawn lives in deepScanReducer.ts (its owner).
     let deepScanSynthesis: DeepScanSynthesis | null = null;
     let reducedReport: string | null = null;
+    let answerMatches = succeeded.reduce((sum, a) => sum + (a.answerMatches ?? 0), 0);
     if (opts.deepScan) {
-      ({ deepScanSynthesis, reducedReport } = await resolveDeepScanSynthesis(
+      ({ deepScanSynthesis, reducedReport, answerMatches } = await resolveDeepScanSynthesis(
         this.deepScanReducerDeps(input, contract, log),
         {
           succeeded,
@@ -7477,9 +7479,10 @@ export class Orchestrator {
     const harnessLabel = attempts
       .map((a) => `${a.attemptId}:${a.harnessId}:${a.status}`)
       .join(", ");
+    const secretLike = secretDiff.answerSecretLikeFinding(answerMatches);
     store.writeText(
       join(paths.finalDir, "summary.md"),
-      `# Run ${runId} (${opts.mode})\n\n- Harnesses: ${harnessLabel}\n- Lifecycle: ${terminalFacts.lifecycle}${terminalFacts.reason ? ` (${terminalFacts.reason})` : ""}\n\n${report}\n`,
+      `# Run ${runId} (${opts.mode})\n\n- Harnesses: ${harnessLabel}\n- Lifecycle: ${terminalFacts.lifecycle}${terminalFacts.reason ? ` (${terminalFacts.reason})` : ""}${secretDiff.summaryDisclosure(secretLike)}\n\n${report}\n`,
     );
     const reportProducerAttemptId =
       opts.deepScan &&
@@ -7498,6 +7501,7 @@ export class Orchestrator {
         mode: opts.mode,
         intent: opts.intent,
         read_only: true,
+        ...(secretLike ? { secret_like: secretLike } : {}),
       },
     });
     log.emit("work_product.emitted", { kind: "report", winner: reportProducerAttemptId });
