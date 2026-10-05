@@ -2556,19 +2556,16 @@ export class Orchestrator {
             log?.emit("harness.event", harnessEventPayload(adapter.id, attemptId, safeEv), display);
             if (signal?.aborted) break;
             if (display) safeInvoke(onHarnessEvent, safeEv);
-            // In-place turns run in the live tree under the native environment, so
-            // the session they emit IS reachable for the next turn: record it. An
-            // ISOLATED envelope-born session lives in the scoped home that dispose()
-            // deletes, so observing it would poison the thread resume map with
-            // unreachable ids — skip it there.
-            if (inPlaceEnvelope) observeNativeSessionEvent(runInput, adapter.id, safeEv);
             observeAuthSwitch(log, adapter.id, attemptId, safeEv);
             observeAttemptTelemetry(telemetry, safeEv);
             const mismatch = continuity.observe(safeEv, runSpec, telemetry.outputMarkers);
             if (mismatch) {
               harnessErrored = true;
               errors.push(mismatch);
+              break;
             }
+            if (inPlaceEnvelope && continuity.mayPublishSession)
+              observeNativeSessionEvent(runInput, adapter.id, safeEv);
             // QA-024: the injected delegation belt's MCP server reported a
             // terminal startup failure. Disclose it ONCE while live; recoverable
             // exact tool-result failures are evaluated at attempt finalization.
@@ -6724,13 +6721,6 @@ export class Orchestrator {
             for await (const ev of watchedReport) {
               const safeEv = redactHarnessEvent(ev);
               if (safeEv.payload?.["buffered"] !== true) safeInvoke(input.onHarnessEvent, safeEv);
-              // A thread ASK turn IS a chat turn now (INV-034): its native
-              // session lives in the DURABLE per-lane home, so record it for the
-              // next lane turn's resume. The read-only fallback chain is
-              // sequential (never the parallel deep-scan swarm, which is
-              // excluded from `laneRun`), so recordSession's upsert keeps the
-              // latest lane session without a race.
-              if (laneRun) observeNativeSessionEvent(input, adapter.id, safeEv);
               observeAuthSwitch(log, adapter.id, attemptId, safeEv);
               log.emit(
                 "harness.event",
@@ -6741,7 +6731,12 @@ export class Orchestrator {
               if (input.signal?.aborted) break;
               observeAttemptTelemetry(telemetry, safeEv);
               const mismatch = continuity.observe(safeEv, runSpec, telemetry.outputMarkers);
-              if (mismatch) harnessError = mismatch;
+              if (mismatch) {
+                harnessError = mismatch;
+                break;
+              }
+              if (laneRun && continuity.mayPublishSession)
+                observeNativeSessionEvent(input, adapter.id, safeEv);
               emitPlanProgress((t, p) => log.emit(t, p), adapter.id, attemptId, safeEv);
               // read-only routes burn quota too (the orchestrate PLANNER is
               // the loudest) — same single owner as the agent loop.

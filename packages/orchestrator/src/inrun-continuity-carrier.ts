@@ -8,7 +8,6 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { acceptedTryOutput } from "@claudexor/core";
 import {
   HarnessRunSpec as HarnessRunSpecSchema,
   RunContinuityReceipt as RunContinuityReceiptSchema,
@@ -22,7 +21,7 @@ import {
 import { decideCarrier, prepareCarrier, type CarrierFacts } from "./carrier-planner.js";
 import { diffStatFromPatch, steeringFromRunLog } from "./continuation-evidence-io.js";
 import { continuationNotice, packetContinuationPrompt } from "./continuity-notice.js";
-import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-continuity.js";
+import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-continuity-types.js";
 import { routeListsModel } from "./modelGovernance.js";
 import {
   registryProfile,
@@ -39,6 +38,7 @@ export interface ContinuedTry {
   toProfileId: string | null;
   memory: RunContinuityReceipt["memory"];
   inputDelivery: RunContinuityReceipt["inputDelivery"];
+  summarized: boolean;
 }
 
 /** The typed limit that ended a try (A11 evidence quality). */
@@ -56,6 +56,7 @@ export interface ContinuedTryContext {
   /** Index of the try that just settled; the successor is `tryIndex + 1`. */
   tryIndex: number;
   uncertainInput: string | null;
+  retainedOutput: string;
 }
 
 export interface ComposedContinuedTry {
@@ -64,8 +65,6 @@ export interface ComposedContinuedTry {
   continued: ContinuedTry | null;
   /** The capsule after a native location/move (the new holder), or null when unchanged. */
   capsule: SessionCapsule | null;
-  /** The session was moved into another account's store (disclose on the thread). */
-  moved: { from: string | null; to: string | null } | null;
 }
 
 function profileRef(deps: InRunContinuityDeps, spec: HarnessRunSpec, profileId: string | null) {
@@ -109,7 +108,7 @@ export async function composeContinuedTry(
       steering: [],
     },
     targetCwd: base.cwd,
-    retainedOutput: acceptedTryOutput(facts.answer, facts.harnessErrored) || facts.answer.text(),
+    retainedOutput: ctx.retainedOutput,
     diffStat: facts.currentDiff ? diffStatFromPatch(facts.currentDiff) : null,
   });
   if (prepared.carrier === "fresh") {
@@ -117,7 +116,6 @@ export async function composeContinuedTry(
       verdict: { kind: "continue", spec: base, delayMs },
       continued: null,
       capsule: null,
-      moved: null,
     };
   }
   const notice = continuationNotice({
@@ -136,6 +134,7 @@ export async function composeContinuedTry(
   const modelHint = base.model_hint ?? (pinned ? attested : null);
   const continued: ContinuedTry = {
     carrier: prepared.carrier,
+    summarized: prepared.carrier === "packet" && prepared.packet.summarized,
     cause,
     fromProfileId: from,
     toProfileId: to,
@@ -158,7 +157,7 @@ export async function composeContinuedTry(
         evidenceMarkdown: prepared.packet.markdown,
       }),
     });
-    return { verdict: { kind: "continue", spec, delayMs }, continued, capsule: null, moved: null };
+    return { verdict: { kind: "continue", spec, delayMs }, continued, capsule: null };
   }
   writeSessionCapsule(deps.attemptDir, prepared.capsule);
   const spec = HarnessRunSpecSchema.parse({
@@ -171,12 +170,11 @@ export async function composeContinuedTry(
     verdict: { kind: "continue", spec, delayMs },
     continued,
     capsule: prepared.capsule,
-    moved: prepared.carrier === "native_moved" ? { from, to } : null,
   };
 }
 
 /** The predecessor's input that may not be in the vendor history: the last
- * try's prompt when it died before `started`, plus admitted-but-unconfirmed
+ * caller-authored work order if the first try died before `started`, plus unconfirmed
  * steering messages (`message.accepted` with no `message.delivered`). */
 export function uncertainInputFor(
   runDir: string,
@@ -187,42 +185,6 @@ export function uncertainInputFor(
   for (const message of steeringFromRunLog(runDir))
     if (message.delivery === "uncertain") parts.push(message.text.slice(0, 2048));
   return parts.length ? parts.join("\n\n") : null;
-}
-
-/** INV-137: a moved session on a thread lane is a disclosed lane switch that
- * resumes natively; its row is published only when the file survives dispose. */
-export function discloseMovedSession(
-  deps: InRunContinuityDeps,
-  capsule: SessionCapsule,
-  from: string | null,
-  to: string | null,
-  observedModel: string | null,
-): void {
-  const thread = deps.thread;
-  if (!thread) return;
-  const survives =
-    deps.inPlace ||
-    !capsule.file ||
-    !deps.isolatedHomeDir ||
-    !capsule.file.startsWith(deps.isolatedHomeDir);
-  if (survives)
-    thread.onSessionObserved?.(deps.adapter.id, capsule.nativeSessionId, observedModel, to);
-  deps.emit("session.continuity", {
-    thread_id: thread.threadId,
-    harness_id: deps.adapter.id,
-    kind: "native_resume",
-    packet_turns: 0,
-    summarized: false,
-    lane_switched_from: { harness: deps.adapter.id, profileId: from },
-    moved: true,
-  });
-  if (thread.turnId)
-    thread.onContinuityResolved?.(thread.turnId, {
-      kind: "native_resume",
-      packetTurns: 0,
-      summarized: false,
-      laneSwitchedFrom: { harness: deps.adapter.id, profileId: from },
-    });
 }
 
 /** The receipt of a continued try (per-try model attestation, never borrowed). */

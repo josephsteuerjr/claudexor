@@ -4012,9 +4012,15 @@ continue from where it stopped … a cut-off tool call may or may not have taken
 effect … finish with a self-contained final message") — the original prompt
 is never resent and `instructions` are untouched (Claude resends its recorded
 system prompt on resume); an input whose delivery is uncertain (a try that died
-before `started`, a steering message admitted but not echoed) rides the notice
+before its first `started`, a steering message admitted but not echoed) rides the notice
 as a reference to reconcile, never a blind replay. Pinned accounts, `fail` /
-`ask` policies and a spent pool end typed. Every continued try settles with a
+`ask` policies and a spent pool end typed. Thread session/checkpoint publication
+follows an accepted handshake; mismatched and packet-born sessions never replace
+the lane binding. A packet continuation updates the thread disclosure to `packet`,
+including a preceding lane switch. The next turn hydrates that lane through the
+existing thread packet. Retained assistant evidence spans all accepted tries;
+identity-mismatched tries contribute no assistant output, and their stream stops
+at the mismatch. Only begun continued tries settle with a
 `run.continuity` receipt (try index, carrier, cause, from/to profiles, memory
 full/partial/unknown, instructions as_sent/vendor_snapshot, re-ingested
 tokens, this try's observed model and mismatch, identity check, input
