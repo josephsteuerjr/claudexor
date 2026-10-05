@@ -473,9 +473,12 @@ clamps to `xhigh` because a sibling Codex model lists it, with no shared-order
 claim). Placing a word declares neither that the vendor supports it nor that two
 vendors' levels of the same name are of equal quality: only a level the final
 route itself advertises is ever submitted, and the receipt's `reason` states
-that the shared order did the placing. The fallback is merged from the same RAW
-vendor lists (`effortLadders`), so lists that contradict each other, or the
-shared order, disable it instead of being masked. Adapters
+that the shared order did the placing. The fallback merges the shared words
+from the same RAW vendor lists (`effortLadders`), so contradictory orders among
+comparable words disable it instead of being masked. Extra vendor-only words
+do not disable placement onto the advertised/shared intersection: `ultra` on
+`low, medium, high, turbo` resolves downward to `high`, never to the unranked
+`turbo`; a floor uses the weakest comparable advertised level. Adapters
 discover what is really advertised at discovery time and fall back to a
 recorded snapshot (stamped vendor data, kept in its captured order) when a
 probe cannot answer, so a probe failure costs freshness, never the run; both

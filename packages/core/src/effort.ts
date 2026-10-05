@@ -63,11 +63,11 @@ export function effortRankLadder(
 /**
  * The two rank orders one route may clamp along, both derived from the vendor's
  * RAW ordered lists. `vendor` is the route's own merged order and is tried
- * first. `shared` merges the SAME raw lists with `EFFORT_PREFERENCE_ORDER` and
- * is consulted only for a word the vendor order does not list; building it from
- * the raw lists (never from an already-collapsed `vendor`) means a vendor whose
- * lists contradict each other — or contradict the shared order — gets `[]` here
- * too, so the fallback can never invent a rank the vendor disputes.
+ * first. `shared` merges the comparable words of the SAME raw lists with
+ * `EFFORT_PREFERENCE_ORDER`, only for a word the vendor order does not list.
+ * Extra vendor words do not disable that placement. Using raw lists (never an
+ * already-collapsed `vendor`) preserves contradictions between comparable
+ * words: the fallback cannot invent a rank the vendor disputes.
  */
 export interface EffortLadders {
   vendor: readonly EffortHint[];
@@ -77,7 +77,10 @@ export interface EffortLadders {
 export function effortLadders(lists: ReadonlyArray<readonly EffortHint[]>): EffortLadders {
   return {
     vendor: effortRankLadder(lists),
-    shared: effortRankLadder([...lists, EFFORT_PREFERENCE_ORDER]),
+    shared: effortRankLadder([
+      ...lists.map((list) => list.filter((level) => EFFORT_PREFERENCE_ORDER.includes(level))),
+      EFFORT_PREFERENCE_ORDER,
+    ]),
   };
 }
 
@@ -166,7 +169,9 @@ export function resolveEffort(
     ["shared", ladders.shared],
   ] as const;
   for (const [placedBy, order] of orders) {
-    const placed = placeOnLadder(requested, advertised, order);
+    const comparable =
+      placedBy === "shared" ? advertised.filter((level) => order.includes(level)) : advertised;
+    const placed = placeOnLadder(requested, comparable, order);
     if (placed === null) continue;
     if (typeof placed !== "string") return placed;
     return { status: "ok", effort: placed, clamped: true, ladder: order, placedBy };
