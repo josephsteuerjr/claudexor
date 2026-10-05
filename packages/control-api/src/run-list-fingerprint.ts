@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import { sha256 } from "@claudexor/util";
+import { RETAINED_ENVELOPE_POINTER } from "@claudexor/workspace";
 import { safeArtifactPath } from "./artifact-paths.js";
 import type { DaemonRunRecord } from "./run-record.js";
 import { TERMINAL_STATES } from "./sse-shared.js";
@@ -40,6 +41,8 @@ export function summaryFingerprint(rec: DaemonRunRecord): string {
       ...identity,
       fileIdentity("final/delivery_state.yaml"),
       fileIdentity("tombstone.yaml"),
+      // A9 custody: retention, adoption and release move this pointer.
+      fileIdentity(RETAINED_ENVELOPE_POINTER),
     ].join("|");
   }
   return [

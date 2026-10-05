@@ -6,6 +6,8 @@ export * from "./raw-patch.js";
 export * from "./artifact-paths.js";
 export * from "./anchor-store.js";
 export * from "./manager.js";
+export * from "./envelope-custody.js";
+export * from "./retained-envelopes.js";
 export * from "./lanes.js";
 export * from "./thread-tree.js";
 export * from "./directory-workspace.js";

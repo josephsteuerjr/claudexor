@@ -37,6 +37,14 @@ export const EnvelopeCustody = z
     envelope: WorkspaceEnvelope.describe("The envelope exactly as created (adoption reuses it)."),
     cause: ResumableCause.nullable().describe("Why the holder stopped; null while live."),
     retained_at: z.string().nullable().describe("When custody became retained; null while live."),
+    bytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .nullable()
+      .describe(
+        "Disk use measured when retained (the kept envelope is not written to); null while live or unmeasured.",
+      ),
   })
   .strict()
   .describe("Durable custody record of an isolated envelope (live or retained for continuation).");

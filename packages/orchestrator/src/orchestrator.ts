@@ -56,6 +56,7 @@ import {
   type ScopedHarnessHome,
 } from "./delegatedHome.js";
 import * as AC from "./attemptUsageCost.js";
+import * as custody from "./continuation-custody.js";
 import {
   type CandidateRun,
   candidateRoster,
@@ -519,6 +520,8 @@ export interface RunInput {
   taskId?: string;
   /** Thread this run is a turn of (chat/session-first); recorded in events. */
   threadId?: string;
+  /** Continuation facts from the daemon: keep stopped work; adopt a predecessor's envelope. */
+  continuation?: custody.RunContinuation;
   /** Preferred auth route for harness attempts (subscription/api_key/auto). */
   authPreference?: "subscription" | "api_key" | "auto";
   /** Explicit credential profile for this turn (INV-135): resolved once per
@@ -3107,7 +3110,7 @@ export class Orchestrator {
     const reviewEnvelopes: WorkspaceEnvelope[] = [];
     const disposeReviewEnvelopes = async () => {
       const envelopes = reviewEnvelopes.splice(0);
-      for (const env of envelopes) await wsm.dispose(env);
+      for (const env of envelopes) await kept.settle(wsm, env, runsBySlot);
     };
     const candidateAccess = contract.access.effective_profile;
 
@@ -3123,6 +3126,7 @@ export class Orchestrator {
     let budgetDenial: BudgetDenial | null = null;
     let softWarned = false;
     const requestedSingleCandidate = adapters.length === 1;
+    const kept = custody.forRun(input, requestedSingleCandidate && mutatingRun, runId, paths, log);
     const slots: CandidateSlot[] = [];
     for (let i = 0; i < adapters.length; i++) {
       const routed = adapters[i] as RoutedAdapter;
@@ -3239,7 +3243,7 @@ export class Orchestrator {
           external_context_policy: knobs.webPolicy,
           ...(knobs.ignored.length > 0 ? { ignored_settings: knobs.ignored } : {}),
         });
-        envelope = await wsm.create({
+        envelope = await kept.envelope(wsm, {
           taskId,
           attemptId: slot.attemptId,
           baseRef: contract.repo.base_ref,
@@ -3545,7 +3549,7 @@ export class Orchestrator {
           ),
         };
       } finally {
-        if (envelope) await wsm.dispose(envelope); // no worktree leak even on create/run error
+        if (envelope) await kept.settle(wsm, envelope, runsBySlot); // no leak on create/run error
       }
     };
     await runParallelCandidates(slots, this.deps.runtimeConcurrencyCaps, runSlot);

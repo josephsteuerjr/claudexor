@@ -19,6 +19,7 @@ import {
   isTerminalLifecycle,
 } from "@claudexor/schema";
 import { readTextSafe, writeText } from "@claudexor/util";
+import { retainedEnvelopeOfRun } from "@claudexor/workspace";
 
 export interface RetentionPolicy {
   runsMaxAgeDays: number;
@@ -216,7 +217,9 @@ export async function runRetentionPass(
       // patch (or a review-blocked / checks-failed delivery) is work the
       // operator may still act on. The decision RECORDS themselves are
       // journal-durable and survive independently of the tree.
-      if (hasActionableWorkProduct(root)) {
+      // Stopped work kept for continueFrom (A9) is never cleaned automatically:
+      // its run tree holds the evidence a successor continues from.
+      if (hasActionableWorkProduct(root) || retainedEnvelopeOfRun(root, runId)) {
         kept.actionable += 1;
         continue;
       }
