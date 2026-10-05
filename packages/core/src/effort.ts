@@ -286,7 +286,14 @@ export function effortResolutionEvent(
     session_id: sessionId,
     ts: new Date().toISOString(),
     effort_resolution: receipt,
-    ...(detail ? { text: `[effort] ${detail}`, payload: { ignored_settings: [detail] } } : {}),
+    // An exact selection that changed the model id is information, not an
+    // adaptation: it never rides the ignored-settings (warning) channel.
+    ...(detail
+      ? {
+          text: `[effort] ${detail}`,
+          ...(receipt.resolution !== "exact" ? { payload: { ignored_settings: [detail] } } : {}),
+        }
+      : {}),
   };
 }
 

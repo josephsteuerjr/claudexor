@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseUnifiedDiff } from "@claudexor/core";
@@ -121,6 +121,67 @@ describe("persistedPatchCopy (V4C T8)", () => {
     const copy = persistedPatchCopy(diff, []);
     expect(copy.text.split("\n").slice(-5, -1)).toEqual(Array(4).fill(`${prefix}[redacted]`));
     expect(containsSecretLikeToken(copy.text)).toBe(false);
+  });
+
+  /** `git apply --numstat` of a patch: the structure git actually reads. */
+  const numstat = (patch: string): string => {
+    const run = spawnSync("git", ["apply", "--numstat", "--whitespace=nowarn", "-"], {
+      input: patch,
+      encoding: "utf8",
+    });
+    expect.soft(run.stderr).toBe("");
+    return run.stdout;
+  };
+  /** A real `git diff --no-index` between two file versions. */
+  const gitDiff = (before: string, after: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), "persisted-patch-diff-"));
+    try {
+      writeFileSync(join(dir, "old.txt"), before);
+      writeFileSync(join(dir, "new.txt"), after);
+      return spawnSync("git", ["diff", "--no-index", "--", "old.txt", "new.txt"], {
+        cwd: dir,
+        encoding: "utf8",
+      }).stdout;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it.each([
+    [
+      "a block that straddles two file records",
+      () =>
+        fileRecord("a.pem.txt", ["x", pemLine("BEGIN"), "QUJD"]) +
+        fileRecord("b.pem.txt", ["REVG", pemLine("END"), "y"]),
+    ],
+    [
+      "an old file that ends inside the block without a newline",
+      () =>
+        gitDiff(
+          `a\n${pemLine("BEGIN")}\nQUJD`,
+          `a\n${pemLine("BEGIN")}\nQUJD\nREVG\n${pemLine("END")}\n`,
+        ),
+    ],
+    [
+      "one block changed in two places (two hunks)",
+      () => {
+        const body = Array.from({ length: 12 }, (_, i) => `QUJD${i}`);
+        const changed = body.map((line, i) => (i === 1 || i === 10 ? `${line}x` : line));
+        const wrap = (lines: string[]): string =>
+          `${[pemLine("BEGIN"), ...lines, pemLine("END")].join("\n")}\n`;
+        return gitDiff(wrap(body), wrap(changed));
+      },
+    ],
+    [
+      "CRLF lines inside the block",
+      () => fileRecord("crlf.txt", [`${pemLine("BEGIN")}\r`, "QUJD\r", `${pemLine("END")}\r`]),
+    ],
+  ])("keeps every file record and hunk for %s", (_name, build) => {
+    const diff = build();
+    const copy = persistedPatchCopy(diff, []);
+    expect(containsSecretLikeToken(copy.text)).toBe(false);
+    expect(copy.text).not.toBe(diff);
+    expect(numstat(copy.text)).toBe(numstat(diff));
   });
 
   it("catches a match that straddles two file records and counts it once", () => {

@@ -46,16 +46,28 @@ export function captureRefusalNextActions(refusal: CaptureRefusal): string[] {
 export class CountedAnswerAssembly extends AnswerAssembly {
   private finalMatches: number | null = null;
   private partMatches = 0;
+  private lastPart: string | undefined;
 
   observeCounted(raw: HarnessEvent, safe: HarnessEvent): void {
     this.observe(safe);
-    if (raw.type !== "message" || !raw.text) return;
+    if (raw.type !== "message") return;
     const payload = raw.payload ?? {};
     if (payload["auth_switched"] === true || payload["delta"] === true) return;
     if (payload["buffered"] === true) return;
-    const matches = sensitiveResourcePolicy.inspectContent(raw.text, "redact").matches;
-    if (raw.final !== true) this.partMatches += matches;
-    else if (raw.text.trim().length > 0) this.finalMatches = matches;
+    const text = raw.text ?? "";
+    const count = (): number => sensitiveResourcePolicy.inspectContent(text, "redact").matches;
+    if (raw.final === true) {
+      // The same acceptance as AnswerAssembly: an empty display final counts
+      // only when it carries the machine envelope (and then shows nothing).
+      const envelope = typeof payload["work_report_envelope"] === "string";
+      if (text.trim().length > 0 || envelope) this.finalMatches = text.trim() ? count() : 0;
+      return;
+    }
+    // Narration repeats are shown once (pushUniqueText), so they count once.
+    const normalized = text.trim();
+    if (!normalized || normalized === this.lastPart) return;
+    this.lastPart = normalized;
+    this.partMatches += count();
   }
 
   secretLikeMatches(): number {

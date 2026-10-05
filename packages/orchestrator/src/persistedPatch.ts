@@ -50,14 +50,21 @@ export interface PersistedPatchCopy {
 
 const FILE_RECORD_START = /^(?:diff .+|Binary files .+ differ)$/gm;
 
+/** Lines that carry diff structure, never file content. Inside a multi-line
+ * match they stay verbatim, so every file record and hunk of the copy survives. */
+const DIFF_STRUCTURE_LINE =
+  /^(?:diff --git |@@ |\\ No newline at end of file|index [0-9a-f]+\.\.[0-9a-f]+|--- (?:a\/|\/dev\/null)|\+\+\+ (?:b\/|\/dev\/null)|(?:new|deleted) file mode |similarity index |rename (?:from|to) |(?:old|new) mode |Binary files )/;
+
 /** A match starts inside a line, but subsequent lines include their diff
- * prefix. Keep those prefixes and line endings so hunk counts remain valid. */
+ * prefix. Keep those prefixes, line endings and structure lines so hunk counts
+ * and file records remain valid. */
 function redactPatchMatch(match: string): string {
   return match
     .split("\n")
-    .map(
-      (line, index) =>
-        `${index > 0 && /^[ +\-]/.test(line) ? line[0] : ""}[redacted]${line.endsWith("\r") ? "\r" : ""}`,
+    .map((line, index) =>
+      index > 0 && DIFF_STRUCTURE_LINE.test(line)
+        ? line
+        : `${index > 0 && /^[ +\-]/.test(line) ? line[0] : ""}[redacted]${line.endsWith("\r") ? "\r" : ""}`,
     )
     .join("\n");
 }

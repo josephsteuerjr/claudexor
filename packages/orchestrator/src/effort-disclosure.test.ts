@@ -68,6 +68,8 @@ it.each(["grok-4.7-high", "grok-4.7-xhigh"])(
           expect.soft(event.text).toContain("[effort] effort=xhigh: exact; submitted=xhigh");
           expect.soft(event.text).toContain('selected the listed variant "grok-4.7-xhigh"');
           expect.soft(event.text).toContain('requested model "grok-4.7-high"');
+          // An exact selection is information, never an ignored-setting warning.
+          expect.soft(event.payload?.["ignored_settings"]).toBeUndefined();
         } else {
           expect(event.text).toBeUndefined();
         }

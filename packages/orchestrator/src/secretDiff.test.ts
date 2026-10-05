@@ -446,6 +446,44 @@ describe("answer match counting happens before the first redaction", () => {
   });
 });
 
+describe("answer match counting mirrors the assembly's selection", () => {
+  const message = (text: string, extra: Partial<HarnessEvent> = {}): HarnessEvent =>
+    ({ type: "message", session_id: "s", ts: "t", text, ...extra }) as HarnessEvent;
+  const clean = (raw: HarnessEvent, secret: string): HarnessEvent =>
+    ({ ...raw, text: raw.text?.split(secret).join("[redacted]") }) as HarnessEvent;
+
+  it("counts an empty enveloped final as the shown answer, and ignores an empty plain one", () => {
+    const secret = fakeKey("e");
+    const narration = message(`notes ${secret}`);
+    const enveloped = message("", {
+      final: true,
+      payload: { work_report_envelope: '{"work_report":{"state":"completed"},"output":""}' },
+    });
+    const answer = new CountedAnswerAssembly();
+    answer.observeCounted(narration, clean(narration, secret));
+    answer.observeCounted(enveloped, enveloped);
+    expect(answer.text()).toBe("");
+    expect(answer.secretLikeMatches()).toBe(0);
+
+    const plain = new CountedAnswerAssembly();
+    const emptyFinal = message("", { final: true });
+    plain.observeCounted(narration, clean(narration, secret));
+    plain.observeCounted(emptyFinal, emptyFinal);
+    expect(plain.text()).toBe("notes [redacted]");
+    expect(plain.secretLikeMatches()).toBe(1);
+  });
+
+  it("counts a repeated narration line once, as it is shown once", () => {
+    const secret = fakeKey("r");
+    const line = message(`step ${secret}`);
+    const answer = new CountedAnswerAssembly();
+    answer.observeCounted(line, clean(line, secret));
+    answer.observeCounted(line, clean(line, secret));
+    expect(answer.text()).toBe("step [redacted]");
+    expect(answer.secretLikeMatches()).toBe(1);
+  });
+});
+
 describe("summary disclosure line", () => {
   it("names files and counts, never a value, and is empty for a clean run", () => {
     expect(summaryDisclosure(undefined)).toBe("");

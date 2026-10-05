@@ -61,6 +61,8 @@ export async function* runCodexAppServer(
   let processFailure: Error | null = null;
   let processStopped = false;
   let nativeThreadId: string | null = input.spec.resume_session_id ?? null;
+  // Ownership binds a resumed root up front; cancellation RPCs wait for the reply.
+  let threadConfirmed = false;
   let activeTurnId: string | null = null;
   const ownedCommandItemIds = new Set<string>();
   const subagents = new CodexSubagentThreads();
@@ -68,7 +70,7 @@ export async function* runCodexAppServer(
   // teardown; the request/lifecycle/stop seams below are reached lazily.
   const cancellation = new CodexCancellation({
     spawned,
-    threadId: () => nativeThreadId,
+    threadId: () => (threadConfirmed ? nativeThreadId : null),
     activeTurnId: () => activeTurnId,
     request: (method, params) => request(method, params),
     readLifecycle: () => readLifecycle(),
@@ -361,6 +363,7 @@ export async function* runCodexAppServer(
     if (typeof threadId !== "string") throw new Error("Codex app-server omitted thread id");
     const rootWasUnknown = nativeThreadId === null;
     nativeThreadId = threadId;
+    threadConfirmed = true;
     // Nothing has consumed this queue yet. Classify startup state effects in
     // arrival order now that start named the root; resume was bound upfront.
     if (rootWasUnknown) notifications.forEach(observeOwnNotification);

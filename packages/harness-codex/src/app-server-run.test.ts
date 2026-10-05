@@ -2123,6 +2123,26 @@ describe("Codex app-server root-thread ownership (native sub-agents)", () => {
     ]);
   });
 
+  it("does not send cancellation RPCs to a resumed thread before its resume reply", async () => {
+    const controller = new CodexAppServerController();
+    let cancelled: Promise<void> | undefined;
+    const server = scriptedServer(
+      (request) => {
+        // The resume reply never arrives: the stop lands during the handshake.
+        if (request.method === "thread/resume") cancelled = controller.cancel();
+      },
+      () => ({ status: "idle" }),
+    );
+    const events = await collect(server.spawn, { resume_session_id: ROOT }, controller);
+    await cancelled;
+    const methods = server.writes.map((request) => request.method);
+    expect(methods).toContain("thread/resume");
+    expect(methods).not.toContain("thread/goal/get");
+    expect(methods).not.toContain("thread/read");
+    expect(methods).not.toContain("turn/interrupt");
+    expect(events.at(-1)).toMatchObject({ type: "completed", aborted: true });
+  });
+
   it.each([false, true])(
     "replays early root effects in order after start (turn completed=%s)",
     async (completed) => {
