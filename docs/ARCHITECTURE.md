@@ -451,8 +451,8 @@ Reasoning effort is an OPEN vocabulary, mirroring the vendors: codex types its
 own `ReasoningEffort` as any non-empty value the model advertises, and Claude
 Code's ladder belongs to the INSTALLED binary (2.1.89 stops at `max`; 2.1.165
 adds `xhigh`). So `EffortHint` is a bounded lowercase slug rather than an
-enum, and the ORDERING AUTHORITY is the vendor's own advertised sequence —
-there is no static rank table. Vendors return their levels already ordered
+enum, and the PRIMARY ORDERING AUTHORITY is the vendor's own advertised
+sequence. Vendors return their levels already ordered
 weakest→strongest (codex `app-server` `model/list` →
 `supportedReasoningEfforts` per model; the `--effort` line of `claude --help`),
 so a model's ladder is its own ordered list, a harness's ladder is the
@@ -461,7 +461,22 @@ positional merge of its models' lists (`mergeEffortLadders`; the Swift
 a level's rank is its position in that merged order — which is what lets a
 brand-new vendor level sort correctly with no code change. Should two models
 advertise contradictory or incomparable orders, the resolver refuses
-cross-model substitutions rather than treating display order as rank. Adapters
+cross-model substitutions rather than treating display order as rank.
+
+`EFFORT_PREFERENCE_ORDER` (`none < minimal < low < medium < high < xhigh < max <
+ultra`, the one row every Claudexor client speaks) is NOT a second rank table
+and never replaces the vendor's order. The resolver consults it only to PLACE a
+requested word that the route's own ladder does not list at all: `ultra` on a
+Claude binary that stops at `max` resolves downward to `max`, and `none` or
+`minimal` on a ladder that starts at `low` resolve to that known minimum. A word
+the vendor ladder does list is always ranked by the vendor (`ultra` on gpt-5.5
+clamps to `xhigh` because a sibling Codex model lists it, with no shared-order
+claim). Placing a word declares neither that the vendor supports it nor that two
+vendors' levels of the same name are of equal quality: only a level the final
+route itself advertises is ever submitted, and the receipt's `reason` states
+that the shared order did the placing. The fallback is merged from the same RAW
+vendor lists (`effortLadders`), so lists that contradict each other, or the
+shared order, disable it instead of being masked. Adapters
 discover what is really advertised at discovery time and fall back to a
 recorded snapshot (stamped vendor data, kept in its captured order) when a
 probe cannot answer, so a probe failure costs freshness, never the run; both
@@ -476,23 +491,37 @@ model on the native session surface. The shared normalizer passes an accepted le
 resolves a known unadvertised preference to the strongest supported level not
 above the request. Only when every supported level exceeds the request may the
 known minimum be used. Display tie-breaking between incomparable vendor chains
-is not rank evidence; unknown order never authorizes a guessed substitution. WHICH LAYER clamps is part
+is not rank evidence; unknown order never authorizes a guessed substitution.
+ONE resolution result per route feeds everything downstream: the arg builder
+sends the receipt's `submitted`, the disclosure event describes the same
+receipt, and `downward`/`floor` are judged on the order that actually chose the
+level — so the native flag and the recorded receipt cannot disagree. WHICH LAYER clamps is part
 of the contract: `discover()` probes the DEFAULT native harness home, so the
 manifest carries the default account's ladders, while codex advertises per
 ACCOUNT and every credential profile and API-key route runs under its own
-`CODEX_HOME`. Run preflight (`governRouteEffort`) therefore forwards the original
-preference even when default-account discovery lacks it. Native effort adapters
-resolve only after the account, model and harness are bound. Settings writes and
-reviewer admission preserve these preferences too; a separate effort on an
-adapter without that carrier retains its typed validation rule. Compound
+`CODEX_HOME`. Run preflight therefore forwards the original preference
+unchanged even when default-account discovery lacks it. Native effort adapters
+(Claude, Codex, the ACP client) resolve only after the account, model and
+harness are bound. Settings writes and reviewer admission preserve these
+preferences too. On an adapter without that carrier a settings WRITE keeps its
+typed validation (a refusal before anything is stored, never lost paid work),
+while a run or a review is never lost to it: a harness that declares no effort
+controls keeps the preference in the receipt as `omitted` and discloses it —
+an unknown word included, which is noted as outside the shared order rather
+than refused — and only a reviewer ladder that exists and cannot place the word
+still refuses an explicit panel entry or drops an automatic one with
+disclosure. Compound
 Cursor/Antigravity model ids are route identities and are never rewritten by
 effort resolution. Claude uses the installed binary's accepted list and its
-recorded same-provider vendor order for known gaps; historical ordering cannot
-authorize submitting a value absent from the current accepted list. Snapshot
+recorded same-provider vendor order for known gaps, and the shared preference
+order for a word neither lists; no ordering can authorize submitting a value
+absent from the current accepted list. Snapshot
 fallback authorizes values only on its recorded CLI version. An unverifiable
 knob uses the current vendor default with an explicit omission receipt; known
-absence and unknown capability remain distinct. An unrankable request against
-an available nonempty ladder refuses before generation. The CLI help, the MCP tool
+absence and unknown capability remain distinct. A request that neither order
+can place against an available nonempty ladder refuses before generation; the
+ACP client refuses it before spawn instead of forwarding a flag the vendor CLI
+would reject. The CLI help, the MCP tool
 schema and the macOS picker's ordering all derive from that single source. `doctor` validates each
 harness's CONFIGURED default model against the truth source, so a broken
 default (e.g. a model the CLI cannot run) is reported honestly instead of
@@ -528,6 +557,8 @@ The existing preference resolver chooses the strongest accepted generation effor
 not above the original request in that vendor order (currently `ultra` → `max`
 for Astra), with a downward receipt and no claim of native delegation. It does
 not copy the CLI's underlying per-agent effort or invent a replacement ladder.
+A word no verified catalog model lists is placed by the shared preference order
+exactly as on session routes, and the receipt says so.
 Both public catalog views project the internal order out, preserving their object
 shapes. Native session Ultra remains unchanged and is implemented by the CLI.
 

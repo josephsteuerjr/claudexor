@@ -45,7 +45,13 @@ or permit retrying an unknown outcome.
 
 Effort preferences resolve in the engine at the final model/account/harness.
 Embedding callers preserve the original request and consume the typed
-receipt; they do not duplicate adaptation or parse disclosure text. The
+receipt; they do not duplicate adaptation or parse disclosure text. A caller
+may send any word of the shared preference order (`none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, `max`, `ultra`) to any route: the route's own vendor
+order ranks every word it lists, the shared order only places one it does not,
+and the receipt reports `downward`, `floor` or `omitted` instead of a refusal.
+A word neither order knows is refused only on a route that has a native effort
+knob. The
 [effort contract](ARCHITECTURE.md#4-routing) specifies existing result/artifact
 locations, omission versus explicit `none`, and independent provider observation.
 Raw model clients discover `captureEffortEvidence` on the model-operation POST
@@ -916,7 +922,11 @@ client exported by `@agentclientprotocol/sdk` 1.5.1. Startup flags live in the
 vendor row and were checked against the [official CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference),
 not a locally installed Copilot binary. The client negotiates `initialize`,
 creates `session/new {cwd, mcpServers: []}`, then sends one `session/prompt`.
-`--model` and `--effort` preserve requested values. Readonly restricts
+`--model` preserves the requested value. `--effort` carries the level the
+shared effort resolver prepared against the vendor row's declared ladder: an
+advertised level verbatim, otherwise the strongest declared level not above the
+request (or the declared minimum), recorded as the attempt's effort receipt; a
+word no order can place is a typed refusal before spawn. Readonly restricts
 `--available-tools` to `view,glob,grep`; tool allow/deny lists narrow the
 selected profile. Copilot ignores `--excluded-tools` beside `--available-tools`,
 so a denied tool is removed from the allowlist itself; `--excluded-tools` is
