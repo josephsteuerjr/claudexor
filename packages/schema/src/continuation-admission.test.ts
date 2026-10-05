@@ -45,6 +45,15 @@ describe("continuationRefusal (INTERFACES §1 admission)", () => {
     }
   });
 
+  it("answers a still-queued job (no run bound yet) as live, not unknown", () => {
+    const records = [{ id: "job-q", state: "queued", params: {} }];
+    expect(continuationRefusal({ continueFrom: "job-q" }, records)).toMatchObject({
+      code: "predecessor_live",
+      status: 409,
+      context: { runId: "job-q", state: "queued" },
+    });
+  });
+
   it("refuses a live predecessor with its state", () => {
     for (const state of ["queued", "running"]) {
       const records = [{ id: "job-p", runId: "run-p", state, params: {} }];

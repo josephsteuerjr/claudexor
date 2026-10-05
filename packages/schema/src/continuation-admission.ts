@@ -126,6 +126,17 @@ export function continuationRefusal<R extends ContinuationRecord>(
     };
   }
   const predecessor = continuationPredecessor(from, records);
+  // A queued job has no run yet but will: it is live, not unknown.
+  if (predecessor && !isTerminalLifecycle(predecessor.state)) {
+    const runId = predecessor.runId ?? predecessor.id;
+    return {
+      code: "predecessor_live",
+      status: 409,
+      message: `run ${runId} is still ${predecessor.state}; it can be continued once it is terminal`,
+      requiredAction: "Wait for the run to finish or cancel it, then continue it.",
+      context: { runId, state: predecessor.state },
+    };
+  }
   if (!predecessor?.runId) {
     return {
       code: "predecessor_unknown",
@@ -142,15 +153,6 @@ export function continuationRefusal<R extends ContinuationRecord>(
       message: `run ${runId} is a thread turn`,
       requiredAction: THREAD_ACTION,
       context: { runId },
-    };
-  }
-  if (!isTerminalLifecycle(predecessor.state)) {
-    return {
-      code: "predecessor_live",
-      status: 409,
-      message: `run ${runId} is still ${predecessor.state}; it can be continued once it is terminal`,
-      requiredAction: "Wait for the run to finish or cancel it, then continue it.",
-      context: { runId, state: predecessor.state },
     };
   }
   const successor = successorOf(predecessor, records);
