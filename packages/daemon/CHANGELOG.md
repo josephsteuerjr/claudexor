@@ -1,5 +1,20 @@
 # @claudexor/daemon
 
+## 3.21.0
+
+### Patch Changes
+
+- a4ff572: Reconcile older quota refusals with newer account observations, preserve genuine credential rejections without duplicating poller state, and pace quota reads per affected account. Ordinary Accounts and account-catalog reads retain their first observation instead of repeatedly probing vendors. Discover Antigravity models for the selected account, forward explicitly requested unlisted models with disclosure, and preserve known quota-family applicability for new model IDs.
+- Updated dependencies [7c541ba]
+- Updated dependencies [f0ab916]
+- Updated dependencies [83bc0da]
+- Updated dependencies [9ccd45d]
+- Updated dependencies [a4ff572]
+  - @claudexor/core@3.21.0
+  - @claudexor/schema@3.21.0
+  - @claudexor/util@3.21.0
+  - @claudexor/journal@3.21.0
+
 ## 3.20.1
 
 ### Patch Changes
