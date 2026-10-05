@@ -377,7 +377,7 @@ export class InRunContinuity {
     const spec = HarnessRunSpecSchema.parse({
       ...facts.runSpec,
       session_id: this.deps.newSessionId(),
-      resume_session_id: null,
+      resume_session_id: facts.runSpec.resume_session_id ?? null,
       extra: { ...facts.runSpec.extra },
     });
     return { kind: "continue", spec, delayMs };
