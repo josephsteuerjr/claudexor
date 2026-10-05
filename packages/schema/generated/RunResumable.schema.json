@@ -1,0 +1,153 @@
+{
+  "$ref": "#/definitions/RunResumable",
+  "definitions": {
+    "RunResumable": {
+      "type": "object",
+      "properties": {
+        "cause": {
+          "type": "string",
+          "enum": [
+            "vendor_limit",
+            "pool_exhausted",
+            "pinned_limit",
+            "transport",
+            "context_exhausted",
+            "wall_clock",
+            "cancelled",
+            "host_restart",
+            "input_required",
+            "other"
+          ],
+          "description": "Typed reason the previous process stopped: a vendor limit (next account eligible), the whole pool spent, a pinned account's limit, a transport death (crash, timeout, watchdog), context exhaustion, the wall-clock deadline, a cancel, a daemon/host restart, a model that asked for input, or another typed cause."
+        },
+        "resetsAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When the spent vendor window reopens, only from a vendor signal; never fabricated."
+        },
+        "limitWindow": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The vendor's own name for the spent window (e.g. five_hour, seven_day_opus), when known."
+        },
+        "limitEvidence": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "window",
+                "unspecified"
+              ],
+              "description": "window: the vendor named the spent window (a reset instant or a constraint id); unspecified: a typed limit without a window — a bare backoff frame is transport, not a limit."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "window: the vendor named the spent window (a reset instant or a constraint id); unspecified: a typed limit without a window — a bare backoff frame is transport, not a limit."
+        },
+        "carriers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "native",
+              "native_moved",
+              "packet"
+            ],
+            "description": "A continuity representation still available for a stopped run."
+          },
+          "description": "Continuity representations still available (NOT quota readiness; readiness is described by the limit facts)."
+        },
+        "limitCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The typed vendor limit code that ended the work, when any."
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "harness": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Non-empty identifier string."
+                },
+                "nativeSessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "holderProfileId": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/RunResumable/properties/session/anyOf/0/properties/harness"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Non-empty identifier string."
+                }
+              },
+              "required": [
+                "harness",
+                "nativeSessionId",
+                "holderProfileId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The native session a continuation can resume, when one exists."
+        },
+        "workspace": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "in_place",
+                "retained_envelope",
+                "none"
+              ]
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "root"
+          ],
+          "additionalProperties": false,
+          "description": "Where the stopped work's tree is: the live root, a retained envelope, or gone."
+        }
+      },
+      "required": [
+        "cause",
+        "resetsAt",
+        "limitWindow",
+        "limitEvidence",
+        "carriers",
+        "limitCode",
+        "session",
+        "workspace"
+      ],
+      "additionalProperties": false,
+      "description": "Terminal facts of a stopped run that can be continued: cause, limit evidence, available carriers, the native session and the workspace."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

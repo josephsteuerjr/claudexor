@@ -187,10 +187,77 @@ export interface HarnessAdapter {
     profile: CredentialProfile,
     abortSignal?: AbortSignal,
   ): Promise<CredentialAccountProbeReceipt>;
+
+  /**
+   * Optional continuity capability: locate the native session's holder file,
+   * move it into another account's store, type the vendor's rejection of
+   * carried state. Absent = no `native_moved` carrier for this harness;
+   * same-account resume keeps using `resume_session_id`, guarded by the
+   * engine-side session-id comparison.
+   */
+  continuity?: HarnessContinuityCapability;
 }
 
 /** A registry of available adapters keyed by harness id. */
 export type AdapterRegistry = Map<string, HarnessAdapter>;
+
+/** Environment a harness child sees (the `HarnessRunSpec.env` shape, nullable values allowed). */
+export type EnvMap = Record<string, string | null | undefined>;
+
+/**
+ * The env key the engine sets on the EnvMap it hands to `continuity.locate` /
+ * `continuity.move`: the registry `isolation_locator` of the credential profile
+ * whose store holds (or will hold) the session. Absent = the harness's default
+ * native store. Each adapter maps it onto its own vendor variable with the same
+ * canonicalization its run route uses (claude `CLAUDE_CONFIG_DIR`, codex
+ * `CODEX_HOME`), so the engine never spells a vendor variable (INV-135).
+ */
+export const CONTINUITY_PROFILE_LOCATOR_ENV = "CLAUDEXOR_PROFILE_LOCATOR";
+
+/** A native session the adapter located: the concrete history file (the holder) plus sidecars. */
+export interface LocatedNativeSession {
+  found: true;
+  /** Absolute path of the history file that holds the session. */
+  file: string;
+  mtimeMs: number;
+  /** Absolute paths of sibling state a move must carry (claude `<sid>/`, codex rollout parts). */
+  sidecars: string[];
+}
+
+export type ContinuityLocateResult = LocatedNativeSession | { found: false };
+
+export type ContinuityMoveResult =
+  { ok: true; resumeRef: { nativeSessionId: string } } | { ok: false; reason: string };
+
+/**
+ * Optional per-adapter continuity capability (session carriers across
+ * processes and accounts). Harness-specific mechanics live HERE; the engine
+ * sees typed results only.
+ *
+ * `move` places the session where the TARGET resume looks (claude:
+ * `<target locator>/projects/<enc(targetCwd)>/<sid>.jsonl` + `<sid>/`; codex:
+ * the same relative `sessions/` path under the target `CODEX_HOME`, every
+ * part), so resume by id works and `HarnessRunSpec` needs no path field.
+ * Order: copy → verify destination → the engine publishes the new holder in
+ * the capsule → retire the source. A failed destination never destroys the
+ * only history. Never credentials: no `auth.json`, no claude credential files.
+ */
+export interface HarnessContinuityCapability {
+  locate(
+    ref: { nativeSessionId: string; cwd: string },
+    env: EnvMap,
+  ): Promise<ContinuityLocateResult>;
+  move(
+    located: { file: string; sidecars: string[]; nativeSessionId?: string },
+    fromEnv: EnvMap,
+    toEnv: EnvMap,
+    targetCwd: string,
+  ): Promise<ContinuityMoveResult>;
+  /** Adapter-internal typing of its vendor's own rejection of carried state
+   * (claude: an API 400 on a thinking signature; codex: `invalid_encrypted_content`).
+   * The orchestrator reads only this boolean, never the prose. */
+  rejectsCarriedState?(ev: HarnessEvent): boolean;
+}
 
 /**
  * Imperative answer channel for interactive harness sessions.
