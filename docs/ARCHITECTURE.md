@@ -115,15 +115,14 @@ Git-backed in-place lane already changed the live tree, the failure first emits 
 a revert anchor, then emits the failed terminal; this records unavoidable live
 bytes honestly without treating them as reviewed success. Direct directory
 effects instead use the [file-result contract](#directory-execution), with no
-unproved revert anchor. A secret-bearing
-in-place diff takes the INV-062 exception before any candidate artifact or Git
-post-snapshot: the engine attempts an exact checked reverse apply from the
-  transient diff after scanning immutable binary preimages/postimages and textual
-  patch bytes. Non-Git binary stubs are scanned from a bounded no-follow live
-  descriptor and fail closed. Git-backed in-place output remains `applied_review_blocked` plus
-manual cleanup even after a successful worktree rollback because vendor-written
-index/ref/object state cannot be disproved post hoc; the engine never persists
-the patch or anchor and never claims false revertability. In a mixed
+unproved revert anchor. Secret-like output takes no exception on this path:
+the live bytes stay where the harness wrote them, the WorkProduct and its revert
+anchor are recorded as for any other turn, and INV-062 hides the matches only in
+the persisted and served copies (see
+[Secret-like output: keep and mask](#secret-like-output-keep-and-mask)). The one
+remaining capture-time refusal is a capture that could not observe the changes
+at all; it is recorded as `capture_refused` with `applied_review_blocked` and no
+anchor, never as a rollback. In a mixed
 pool, a capable lane keeps the run `effective:true`, while any selected lane
 that continued before injection makes the run reason `partially_degraded` and
 keeps the prominent warning; per-lane requirement receipts preserve its cause.
@@ -1286,6 +1285,78 @@ wire-patchable as `profileLimitAction` on `GET/POST /v2/settings` (the app's
 tri-state auto-switch control: Off=`fail` / Auto / On=`rotate`); rotation
 order and headroom keep their stored values.
 
+### Secret-like output: keep and mask
+
+INV-062 separates two things that used to be one check. A secret-like value in
+an INPUT (prompt, run params, instructions) is still hard-blocked at every
+ingress. A secret-like string in agent OUTPUT is no longer a reason to roll
+back, discard or fail anything: the content policy
+(`sensitiveResourcePolicy`, one rule set for redaction and detection) is a
+persistence classifier.
+
+- **Exact bytes are untouched.** The changed files (in-place tree or candidate
+  envelope), the in-memory candidate diff, the patch a race adopts, the
+  synthesis input and every digest keep the bytes the agent wrote. The check
+  never mutates the project.
+- **Saved copies hide the matches.** `attempts/<a>/patch.diff`,
+  `final/patch.diff` and the reviewer packet `DIFF.patch` are written from
+  `persistedPatchCopy`: each match becomes `[redacted]`, the payload of a
+  binary file whose pre- or postimage holds (or cannot be proven free of)
+  secret-like bytes is withheld, and the copy opens with a one-line notice.
+  A copy with nothing to hide is byte-identical to the exact diff and carries
+  no notice. A reviewer workspace copy still omits files with secret-like
+  content; the reviewer judges the saved diff. Events, retained output, gate
+  tails, reviewer artifacts and the answer are redacted as before; the answer
+  is always kept.
+- **Images.** A raster that matches the policy, cannot be read or exceeds the
+  size cap is not copied into `produced/`; the run continues.
+- **Disclosure, never values.** `attempts/<a>/attempt.yaml` and
+  `final/work_product.yaml` meta carry `secret_like`: per-file `path`,
+  `matches` and rule `kinds`, `binary_paths`, `media_withheld`,
+  `answer_matches` (counted before the first redaction) and `total_matches`.
+  `final/summary.md` adds one line, and the MCP read tools project the same
+  record as `secretLike`.
+- **Apply binds to the exact digest.** `meta.patch_sha256` is always the digest
+  of the exact patch, so a redacted copy cannot pass the apply gate on any
+  route. When the saved copy differs, meta records `persisted_patch: redacted`
+  and `exact_patch_object` (the digest), and the exact bytes are stored in the
+  private per-project object store that also holds revert anchors
+  (`<project runtime>/anchors/objects`, mode 0600, never listed or served). One
+  resolver serves deferred Apply, apply/check, `accept_clean_patch`, the
+  `accept_risk` digest binding, thread contribution checks and RunFacts
+  eligibility. A missing, unrecorded or corrupt object answers the typed 409
+  `patch_exact_bytes_unavailable` before any tree is touched. The gate checks
+  work-product integrity before the override-pending permission. An isolated
+  candidate's object is written while its envelope still exists; if that write
+  fails the envelope is kept rather than deleted.
+- **Leaving the machine.** Local `apply`, `branch` and `commit` are allowed.
+  `pr` is refused by `verifyAndDeliver` for a text match or a recorded blob-only
+  binary finding, before the fresh verifier, the caller's authorization and
+  any push.
+- **Served files.** Text artifacts are redacted when served. Media and other
+  binaries from run artifacts, `/v2/projects/:id/outputs` and
+  `/v2/runs/:id/produced` pass the same content policy; a matching file answers
+  409 `secret_like_content_withheld`. A raw patch artifact that still matches
+  answers 409 as before.
+- **Raw API.** A raw patch proposal with secret-like content is no longer
+  refused early; scope, preimage and digest evidence are enforced unchanged and
+  the proposal reaches saved artifacts only through the same capture.
+- **Capture refusal.** A capture that cannot observe the changes (a thrown
+  capture, a non-Git folder without a baseline, a `diff` that cannot read a
+  file) remains a refusal under its own name: `capture_refusal` on the attempt,
+  phase `workspace`, `manual_cleanup` for live effects, nothing rolled back.
+
+Deliberate limits. A real secret an agent wrote stays in the tree or is applied
+exactly: the agent already had a shell there, and the disclosure names the
+files. The exact object and the post-turn snapshot hold the same bytes as the
+tree; the object store has no garbage collection, so the object of an isolated
+candidate that later loses its race stays there unreferenced. Applying `final/patch.diff` outside Claudexor applies `[redacted]`; the
+notice says so. Directory results still fail closed on their content scan
+(their manifest has no per-file `withheld` form). A token split across two
+events is redacted per event, vendor session transcripts are outside this
+boundary, and a host that keeps its own exact patch copy of a delegated child
+owns that copy.
+
 ## 6. Main Execution Paths
 
 Every public CLI mode (`ask`, `plan`, `agent`) and the
@@ -1536,9 +1607,12 @@ reviews/revalidates findings when requested, optionally synthesizes a new checke
 and arbitrates. Best-of requests review; ordinary Single and `--create` do not
 unless explicitly enabled. `--create` runs the same envelope pipeline with the
 create-from-scratch intent (the CLI verb `claudexor create` maps here).
-An isolated candidate refused by the secret fence is excluded when another
-safe working candidate survives; an all-refused race, an in-place cleanup
-receipt, or an injected Delegate-belt failure remains terminal for the race.
+A candidate whose patch holds secret-like strings is an ordinary working
+candidate: it is gated, reviewed on its saved copy and arbitrated like any other
+(INV-062). A candidate whose changes could not be captured is excluded when
+another working candidate survives; an all-uncaptured race, an uncaptured
+in-place candidate, or an injected Delegate-belt failure remains terminal for
+the race.
 
 ### Agent --attempts / --until-clean
 
@@ -3204,8 +3278,12 @@ fence (Bible INV-113); an unlisted mutation path is a release blocker:
    defers only a missing per-run final verifier, because turns may already be
    adopted into the isolated thread workspace. Review intent, independent
    checks, work completion, patch hashes and original-root binding still gate
-   every contribution. A secret-like-token scan refuses the patch; delivery
-   reuses `verifyAndDeliver` with a fresh
+   every contribution. Secret-like content is not a refusal: the thread
+   delivers its live worktree capture, so `apply`, `branch` and `commit` carry
+   the exact bytes the agent wrote; only `pr` refuses, inside
+   `verifyAndDeliver`, for a text match or a blob-only binary finding, before
+   the fresh verifier and any push (INV-062). Delivery reuses
+   `verifyAndDeliver` with a fresh
    verifier and exact target preimage. Success advances the persistent thread
    branch and watermark with journaled thread state.
 5. **Automatic git init** — a NON-GIT project folder is initialized before a
@@ -3255,14 +3333,13 @@ fence (Bible INV-113); an unlisted mutation path is a release blocker:
    admission is determined independently by the semantic run-shape predicate
    above. A bridge failure never fails the run (it is a convenience, not a
    precondition).
-8. **Secret-diff quarantine rollback** — when an in-place candidate contains
-   secret-like bytes, the orchestrator reverse-applies only that candidate's
-   transient patch. The workspace rollback verifies the exact postimage before
-   mutation and refuses if concurrent/user bytes diverged; Git object writes
-   use the isolated scratch object database. A refusal or unproven scratch
-   cleanup becomes a typed manual-cleanup receipt, never a broader reset. This
-   path does not yet take the repository mutation lease; that hardening remains
-   a separately owned follow-up rather than an undocumented mutation.
+8. **No secret-diff rollback** — the engine performs no mutation on behalf of
+   the secret-like check. The reverse apply that used to remove an in-place
+   candidate's bytes (and ran without the repository mutation lease) is gone:
+   secret-like output is kept and only its saved and served copies are masked
+   (see [Secret-like output: keep and mask](#secret-like-output-keep-and-mask)).
+   The only extra write is the private exact patch object beside the revert
+   anchors, outside the project tree and the run directory.
 9. **In-place browser artifact cleanup** — when Browser is effective, workspace
    prep lazily creates one unique `.claudexor-artifacts/<envelope-id>` child and
    persists an envelope-id-bound ownership marker outside the live tree. Only
@@ -4657,11 +4734,12 @@ code touching one of these areas must honor it or change it explicitly here.
   cannot be classified — is refused with the typed `git_boundary_root_refused`
   error before any mutation instead of being initialized (INV-075 exception);
   ordinary non-git roots keep the announced auto-init only for Git-backed shapes.
-  If exact capture or reversal cannot be proven for a legacy in-place patch run,
-  Claudexor fails closed with a sanitized `manual_cleanup` receipt; it never
-  substitutes an empty diff and asks reviewers to trust the live tree.
-  Presentation remains capped at 200 kB only after the full text diff has crossed
-  the secret fence.
+  If the capture cannot observe a legacy in-place patch run's changes (no copied
+  baseline, a failed `diff`), Claudexor records a capture refusal: a sanitized
+  `manual_cleanup` receipt in phase `workspace`, with nothing rolled back; it
+  never substitutes an empty diff and asks reviewers to trust the live tree.
+  The non-Git text diff is bounded to 200 kB, and the saved copy and its match
+  counts are built from that bounded projection.
 - Isolated-thread worktrees are pinned by persistent `claudexor/thread-*`
   branches. Journal SHA is a checked cache; successful apply advances the
   branch, and explicit trash/restore/purge owns its retention lifecycle.
