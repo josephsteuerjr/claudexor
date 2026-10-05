@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import { EventLog } from "@claudexor/event-log";
+import { projectRuntimeDir, sha256 } from "@claudexor/util";
+import { readRevertAnchor } from "@claudexor/workspace";
 import type { CandidateRun } from "./candidateEvidence.js";
 import { createAttemptTelemetry } from "./attemptTelemetry.js";
 import { persistFailedInPlaceWorkProduct } from "./delegationFailure.js";
@@ -13,13 +15,13 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("secret-refused in-place receipt", () => {
+describe("uncaptured in-place receipt", () => {
   it("records manual cleanup without a patch, anchor, or false revertability", async () => {
-    const repo = mkdtempSync(join(tmpdir(), "claudexor-secret-receipt-"));
+    const repo = mkdtempSync(join(tmpdir(), "claudexor-capture-receipt-"));
     dirs.push(repo);
     const store = new ArtifactStore(repo, { claudexorDir: join(repo, "runtime") });
-    const paths = store.createRun("run-secret-refusal");
-    const log = new EventLog(paths.eventsPath, "run-secret-refusal", "task-secret-refusal");
+    const paths = store.createRun("run-capture-refusal");
+    const log = new EventLog(paths.eventsPath, "run-capture-refusal", "task-capture-refusal");
     const run = {
       attemptId: "a01",
       harnessId: "claude",
@@ -29,11 +31,11 @@ describe("secret-refused in-place receipt", () => {
       cost: 0,
       errored: true,
       costEstimated: false,
-      errors: ["candidate output could not be proven secret-safe; refusing artifact persistence"],
+      errors: ["candidate output could not be captured as a complete patch"],
       telemetry: createAttemptTelemetry("auto", false),
-      secretDiffRefusal: {
+      captureRefusal: {
         disposition: "manual_cleanup",
-        detail: "postimage diverged; manual cleanup required",
+        detail: "candidate output could not be captured as a complete patch",
       },
     } satisfies CandidateRun;
 
@@ -45,17 +47,69 @@ describe("secret-refused in-place receipt", () => {
       paths,
       execRoot: repo,
       preTurnSha: "a".repeat(40),
-      taskId: "task-secret-refusal",
+      taskId: "task-capture-refusal",
       mode: "agent",
       kind: "patch",
     });
 
     const receipt = readFileSync(join(paths.finalDir, "work_product.yaml"), "utf8");
-    expect(receipt).toContain("secret_recovery: manual_cleanup");
+    expect(receipt).toContain("capture_refused: true");
+    expect(receipt).toContain("capture_recovery: manual_cleanup");
+    expect(receipt).not.toContain("secret_");
     expect(receipt).toContain("adopted: true");
     expect(receipt).toContain("apply_state: applied_review_blocked");
     expect(receipt).toContain("revert_anchor_id: null");
     expect(existsSync(join(paths.finalDir, "patch.diff"))).toBe(false);
     expect(readFileSync(paths.eventsPath, "utf8")).toContain('"manual_cleanup_required":true');
+  });
+
+  it("publishes a failed live candidate's secret-like patch as a redacted copy, never a refusal", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "claudexor-failed-live-secretlike-"));
+    dirs.push(repo, projectRuntimeDir(repo));
+    const store = new ArtifactStore(repo, { claudexorDir: join(repo, "runtime") });
+    const paths = store.createRun("run-failed-live");
+    const log = new EventLog(paths.eventsPath, "run-failed-live", "task-failed-live");
+    // Assembled at runtime so no secret-shaped literal lives in this file.
+    const token = ["sk", "w".repeat(24)].join("-");
+    const diff =
+      "diff --git a/LEAK.txt b/LEAK.txt\nnew file mode 100644\n--- /dev/null\n+++ b/LEAK.txt\n" +
+      `@@ -0,0 +1 @@\n+${token}\n`;
+    const run = {
+      attemptId: "a01",
+      harnessId: "claude",
+      label: "Candidate A",
+      diff,
+      gates: [],
+      cost: 0,
+      errored: true,
+      costEstimated: false,
+      errors: ["delegation belt tool failed after injection"],
+      telemetry: createAttemptTelemetry("auto", false),
+    } satisfies CandidateRun;
+
+    await persistFailedInPlaceWorkProduct({
+      live: true,
+      run,
+      store,
+      log,
+      paths,
+      execRoot: repo,
+      preTurnSha: null,
+      postTurnSha: null,
+      taskId: "task-failed-live",
+      mode: "agent",
+      kind: "patch",
+    });
+
+    const saved = readFileSync(join(paths.finalDir, "patch.diff"), "utf8");
+    expect(saved).not.toContain(token);
+    expect(saved).toContain("+[redacted]");
+    const receipt = readFileSync(join(paths.finalDir, "work_product.yaml"), "utf8");
+    expect(receipt).not.toContain(token);
+    expect(receipt).toContain("persisted_patch: redacted");
+    expect(receipt).toContain(`patch_sha256: ${sha256(diff)}`);
+    expect(receipt).toContain(`exact_patch_object: ${sha256(diff)}`);
+    expect(receipt).toContain("apply_state: applied_review_blocked");
+    expect(readRevertAnchor(repo, sha256(diff))).toBe(diff);
   });
 });

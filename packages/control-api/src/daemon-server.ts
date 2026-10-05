@@ -1,5 +1,6 @@
 import { recoverInterruptedOutput } from "./retained-output.js";
 import { recordedExecutionRoot } from "./run-delivery-state.js";
+import * as exactPatch from "./run-exact-patch.js";
 import {
   readTextArtifact,
   readRawTextArtifact,
@@ -215,7 +216,6 @@ import { resolveControlProtocol, type ControlServingMode } from "./control-proto
 import { readControlRequestBody } from "./request-body.js";
 import {
   assertNoInlineSecretValues,
-  containsSecretLikeToken,
   errorCode,
   noProjectRepoRoot,
   redactSecrets,
@@ -1253,15 +1253,15 @@ export class DaemonControlApiServer {
             return this.requestError(res, error);
           }
         }
-        const patch = readPatch(rec);
-        if (patch === null) return this.json(res, 404, { error: "no patch artifact for this run" });
-        if (containsSecretLikeToken(patch))
-          return this.json(res, 409, { error: "patch contains secret-like token; refusing apply" });
-        const repoRoot = applyTargetRoot(body.target ?? { kind: "original_project" }, rec);
-        if (!repoRoot) return this.json(res, 400, { error: "project root is required for apply" });
-        const absoluteRepoError = runStart.validateAbsoluteRepoRoot(repoRoot);
-        if (absoluteRepoError) return this.json(res, 400, { error: absoluteRepoError });
         try {
+          const patch = readPatch(rec); // typed 409 when the exact bytes are unavailable
+          if (patch === null)
+            return this.json(res, 404, { error: "no patch artifact for this run" });
+          const repoRoot = applyTargetRoot(body.target ?? { kind: "original_project" }, rec);
+          if (!repoRoot)
+            return this.json(res, 400, { error: "project root is required for apply" });
+          const absoluteRepoError = runStart.validateAbsoluteRepoRoot(repoRoot);
+          if (absoluteRepoError) return this.json(res, 400, { error: absoluteRepoError });
           const response = await this.chainRunMutation(rec, () =>
             runIdempotentDelivery(this.opts.services, {
               params: rec.params,
@@ -1277,7 +1277,10 @@ export class DaemonControlApiServer {
                 const delivered = await verifyAndDeliver(
                   repoRoot,
                   patch,
-                  { mode: body.applyMode ?? "apply" },
+                  {
+                    mode: body.applyMode ?? "apply",
+                    secretLikeBinary: exactPatch.runPatchHasSecretLikeBinary(rec),
+                  },
                   gateSpecsForRun(rec),
                   (freshVerify) =>
                     applyGateError(
@@ -2077,8 +2080,10 @@ export class DaemonControlApiServer {
   private validOperatorDecisionFor(rec: DaemonRunRecord): ControlOperatorDecisionRecord | null {
     const decision = this.operatorDecisionFor(rec);
     if (!decision) return null;
-    const patch = readTextArtifact(rec, "final/patch.diff", false);
-    return patch !== null && decision.patchSha256 === sha256(patch) ? decision : null;
+    // INV-062: the decision binds to the EXACT patch, never to a redacted copy.
+    return decision.patchSha256 === exactPatch.runPatchDigest(rec, runRepoRoot(rec))
+      ? decision
+      : null;
   }
 
   /** The RISK-OVERRIDABLE needs-decision signal: a terminal run whose review is
@@ -2867,7 +2872,7 @@ function budgetSnapshot(
 }
 
 function readPatch(rec: DaemonRunRecord): string | null {
-  return readRawTextArtifact(rec, "final/patch.diff");
+  return exactPatch.readExactRunPatch(rec, runRepoRoot(rec));
 }
 
 function runRepoRoot(rec: DaemonRunRecord): string | null {
@@ -2990,12 +2995,15 @@ function applyEligibilityFor(
   rec: DaemonRunRecord,
   operatorDecision: ControlOperatorDecisionRecord | null,
 ): ApplyEligibility | null {
-  const patch = readPatch(rec);
+  const root = runRepoRoot(rec);
+  const { patch, unavailable } = exactPatch.resolveRunPatch(rec, root);
   const files = readFilesWorkProduct(rec);
   if (!files && (patch === null || patch.trim() === "")) return null;
-  const root = runRepoRoot(rec);
   if (!root) return null;
-  return deriveApplyEligibility(applyGateInputFor(rec, patch ?? "", root, operatorDecision));
+  return deriveApplyEligibility({
+    ...applyGateInputFor(rec, patch ?? "", root, operatorDecision),
+    exactPatchUnavailable: unavailable,
+  });
 }
 
 /** Compatibility projection for artifact-only CLI reads; the journal record is authority. */

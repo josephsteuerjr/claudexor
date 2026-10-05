@@ -8,7 +8,7 @@ import { publishUnverifiedGitCandidate } from "./candidateWorkProduct.js";
 import type { AttemptTelemetry } from "./attemptTelemetry.js";
 import type { CandidateRun } from "./candidateEvidence.js";
 import { delegationBeltToolFailure, delegationBeltUnavailable } from "./delegationToolEvidence.js";
-import { secretDiffNextActions } from "./secretDiff.js";
+import { captureRefusalNextActions } from "./secretDiff.js";
 
 export type DelegationFailureKind = "startup" | "runtime";
 
@@ -30,21 +30,18 @@ export function delegationFailureError(t: AttemptTelemetry): string | null {
       : null;
 }
 
-export function candidateFailureKind(
-  run: CandidateRun,
-): DelegationFailureKind | "artifact_security" | null {
-  return (
-    delegationFailureKind(run.telemetry) ?? (run.secretDiffRefusal ? "artifact_security" : null)
-  );
+export function candidateFailureKind(run: CandidateRun): DelegationFailureKind | "capture" | null {
+  return delegationFailureKind(run.telemetry) ?? (run.captureRefusal ? "capture" : null);
 }
 
 /** Race-level precedence: an unrecovered injected-belt failure dominates all
- * siblings; a safely discarded isolated secret candidate is merely ineligible,
- * while an in-place refusal remains terminal because cleanup may be required. */
+ * siblings; an uncaptured isolated candidate is merely ineligible (its bytes
+ * died with the envelope), while an uncaptured in-place candidate remains
+ * terminal because its live effects need direct inspection. */
 export function dominantRaceCandidateFailure(runs: CandidateRun[]): CandidateRun | undefined {
   return (
     runs.find((run) => delegationFailureKind(run.telemetry)) ??
-    runs.find((run) => run.secretDiffRefusal && run.secretDiffRefusal.disposition !== "discarded")
+    runs.find((run) => run.captureRefusal && run.captureRefusal.disposition !== "discarded")
   );
 }
 
@@ -83,32 +80,29 @@ export function candidateFailureTerminal(run: CandidateRun, lane: "race" | "conv
   const delegation = delegationFailureKind(run.telemetry);
   if (delegation) {
     const terminal = delegationFailureTerminal(run, lane);
-    return run.secretDiffRefusal
+    return run.captureRefusal
       ? {
           ...terminal,
           metadata: {
             ...terminal.metadata,
             nextActions: [
-              ...secretDiffNextActions(run.secretDiffRefusal),
+              ...captureRefusalNextActions(run.captureRefusal),
               ...terminal.metadata.nextActions,
             ],
           },
         }
       : terminal;
   }
-  if (!run.secretDiffRefusal) throw new Error("candidate failure terminal requested without cause");
+  if (!run.captureRefusal) throw new Error("candidate failure terminal requested without cause");
   return {
-    phase: "artifact_security",
-    error: new Error(run.errors[0] ?? "candidate patch diff was refused by the secret fence"),
+    phase: run.captureRefusal.phase ?? "workspace",
+    error: new Error(run.errors[0] ?? run.captureRefusal.detail),
     metadata: {
       category: "harness_error" as const,
       harnessId: run.harnessId,
       attemptId: run.attemptId,
       rawDetailRef: `attempts/${run.attemptId}/attempt.yaml`,
-      nextActions:
-        run.secretDiffRefusal.disposition === "manual_cleanup"
-          ? ["Remove the secret-bearing in-place bytes manually", "Retry the run"]
-          : ["Retry the run without writing secret material"],
+      nextActions: captureRefusalNextActions(run.captureRefusal),
     },
   };
 }
@@ -130,14 +124,16 @@ export async function persistFailedInPlaceWorkProduct(input: {
   kind: "patch" | "new_repo";
   attempts?: number;
 }): Promise<void> {
-  if (!input.live || (!input.run.diff.trim() && !input.run.secretDiffRefusal)) return;
-  const secretRefusal = input.run.secretDiffRefusal;
-  if (secretRefusal) {
+  if (!input.live || (!input.run.diff.trim() && !input.run.captureRefusal)) return;
+  const refusal = input.run.captureRefusal;
+  if (refusal) {
+    // Uncaptured live effects: nothing was rolled back and no patch or revert
+    // anchor can be produced, so the record says exactly that.
+    const manualCleanup = refusal.disposition === "manual_cleanup";
     const facts = makeOutcomeFacts("failed", {
       reason: "harness_failed",
-      noChanges: secretRefusal.disposition !== "manual_cleanup",
+      noChanges: !manualCleanup,
     });
-    const manualCleanup = secretRefusal.disposition === "manual_cleanup";
     input.store.writeYaml(join(input.paths.finalDir, "work_product.yaml"), {
       id: newId("wp"),
       kind: input.kind,
@@ -151,11 +147,11 @@ export async function persistFailedInPlaceWorkProduct(input: {
         lifecycle: facts.lifecycle,
         outcome_facts: facts,
         review_verified: false,
-        secret_diff_refused: true,
-        secret_recovery: secretRefusal.disposition,
-        recovery_detail: secretRefusal.detail,
+        capture_refused: true,
+        capture_recovery: refusal.disposition,
+        recovery_detail: refusal.detail,
         adopted: manualCleanup,
-        apply_state: manualCleanup ? "applied_review_blocked" : "reverted",
+        apply_state: manualCleanup ? "applied_review_blocked" : "not_applied",
         pre_turn_sha: input.preTurnSha,
         post_turn_sha: null,
         revert_anchor_id: null,
@@ -163,8 +159,8 @@ export async function persistFailedInPlaceWorkProduct(input: {
     });
     input.log.emit("work_product.emitted", {
       winner: input.run.attemptId,
-      apply_state: manualCleanup ? "applied_review_blocked" : "reverted",
-      secret_diff_refused: true,
+      apply_state: manualCleanup ? "applied_review_blocked" : "not_applied",
+      capture_refused: true,
       manual_cleanup_required: manualCleanup,
     });
     return;

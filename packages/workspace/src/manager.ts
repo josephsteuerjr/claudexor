@@ -9,12 +9,7 @@ import type {
 } from "@claudexor/schema";
 import { WorkspaceEnvelope as WorkspaceEnvelopeSchema } from "@claudexor/schema";
 import { runCaptureRaw, WorkspaceError } from "@claudexor/core";
-import {
-  ensureDir,
-  newId,
-  nowIso,
-  projectRuntimeDir,
-} from "@claudexor/util";
+import { ensureDir, newId, nowIso, projectRuntimeDir } from "@claudexor/util";
 import { ensureLaneHomeEnv, type LaneHomeEnv } from "./lanes.js";
 import { ensureHarnessHome, harnessHomeEnv } from "./harness-home.js";
 import { ArtifactOwnership } from "./artifact-ownership.js";
@@ -94,6 +89,7 @@ export class WorkspaceManager {
   /** Current-prep bridge ownership, also persisted beside owner.json for recovery.
    * Only a bridge created here and still byte-identical is excluded from capture. */
   private readonly bridgeCreatedEnvelopes = new Set<string>();
+  private readonly retainedEnvelopes = new Set<string>();
 
   constructor(
     private readonly repoRoot: string,
@@ -473,7 +469,14 @@ export class WorkspaceManager {
     return bridgeCreatedMarkerMatches(this.envelopeBase(env.task_id, env.attempt_id), env.id);
   }
 
+  /** Keep this envelope on disk past `dispose()`: it holds the only exact copy
+   * of candidate bytes (the private exact patch object could not be written). */
+  retainEnvelope(env: WorkspaceEnvelope): void {
+    this.retainedEnvelopes.add(env.id);
+  }
+
   async dispose(env: WorkspaceEnvelope): Promise<void> {
+    if (this.retainedEnvelopes.has(env.id)) return;
     // Drop the created-this-run bridge fact so a long-lived manager doesn't
     // accumulate envelope ids (a disposed envelope is never diffed again).
     this.bridgeCreatedEnvelopes.delete(env.id);

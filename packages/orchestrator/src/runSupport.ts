@@ -3,6 +3,7 @@
  * prompt constraints, harness-event redaction/payload projection, and the
  * run summary/findings renderers. Pure functions — no orchestrator state.
  */
+import { secretLikeSummaryLine, type SecretLikeFinding } from "./persistedPatch.js";
 import type {
   HarnessEvent,
   ModeKind,
@@ -335,6 +336,7 @@ export function renderSummary(
   evidences: CandidateEvidence[],
   synthReason: string,
   reviewVerified: boolean,
+  secretLike?: SecretLikeFinding,
 ): string {
   return (
     [
@@ -347,6 +349,7 @@ export function renderSummary(
       `- Apply: ${decision.apply_recommendation}`,
       `- Review verified (cross-family): ${reviewVerified}`,
       `- Synthesis: ${synthReason}`,
+      ...[secretLikeSummaryLine(secretLike) ?? []].flat(),
       "",
       "## Candidates",
       ...evidences.map(

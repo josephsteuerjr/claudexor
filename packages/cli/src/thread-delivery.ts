@@ -1,12 +1,11 @@
 import type { ProjectPartitions } from "@claudexor/daemon";
-import { verifyAndDeliver } from "@claudexor/delivery";
+import { PR_SECRET_LIKE_REFUSAL, verifyAndDeliver } from "@claudexor/delivery";
 import {
   advanceThreadWorktree,
   captureWorkingTreeTransient,
   git,
   snapshotTree,
 } from "@claudexor/workspace";
-import { containsSecretLikeToken } from "@claudexor/util";
 import type { ControlDeliveryResponse } from "@claudexor/schema";
 
 export interface ThreadApplyOptions {
@@ -49,15 +48,6 @@ export async function applyThreadDiff(
       detail: "no changes to apply",
       delivery: null,
     };
-  if (containsSecretLikeToken(patch) || captured.binarySecretLike) {
-    return {
-      applied: false,
-      status: "rejected",
-      headMoved: false,
-      detail: "patch contains a secret-like token; refusing apply",
-      delivery: null,
-    };
-  }
   let headMoved = false;
   try {
     const head = (await git(projectRoot, ["rev-parse", "HEAD"])).stdout.trim();
@@ -68,10 +58,19 @@ export async function applyThreadDiff(
   }
   const mode = (["apply", "branch", "commit", "pr"].includes(opts.mode) ? opts.mode : "apply") as
     "apply" | "branch" | "commit" | "pr";
+  // INV-062: the thread applies its LIVE worktree capture (exact bytes), so a
+  // local apply/branch/commit keeps secret-like strings where the agent wrote
+  // them. Only `pr` refuses — inside the one delivery owner, before any push —
+  // for a text match and for a blob-only binary finding alike.
   const delivered = await verifyAndDeliver(
     projectRoot,
     patch,
-    { mode, branch: opts.branch, message: opts.message },
+    {
+      mode,
+      branch: opts.branch,
+      message: opts.message,
+      secretLikeBinary: captured.binarySecretPaths.length > 0,
+    },
     opts.gates ?? [],
   );
   if (delivered.applied) {
@@ -84,7 +83,9 @@ export async function applyThreadDiff(
     );
   }
   const status = !delivered.applied
-    ? "conflict"
+    ? delivered.detail === PR_SECRET_LIKE_REFUSAL
+      ? "rejected"
+      : "conflict"
     : mode === "branch"
       ? "branched"
       : mode === "commit"

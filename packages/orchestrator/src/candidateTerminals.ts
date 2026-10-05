@@ -72,8 +72,8 @@ export async function cancelledCandidatesResult(
       kind: "patch",
       facts: makeOutcomeFacts("cancelled", { noChanges: !runs[0]!.diff.trim() }),
     });
-  } else if (runs.some((run) => run.diff.trim() && !run.secretDiffRefusal)) {
-    const patches = runs.filter((run) => run.diff.trim() && !run.secretDiffRefusal);
+  } else if (runs.some((run) => run.diff.trim() && !run.captureRefusal)) {
+    const patches = runs.filter((run) => run.diff.trim() && !run.captureRefusal);
     store.writeText(
       join(paths.finalDir, "retained-changes.md"),
       "# Unverified candidate changes\n\nNo candidate was selected or applied.\n\n" +
@@ -191,7 +191,9 @@ export async function failedCandidatesResult(
     : null;
   const phase =
     budget?.phase ??
-    (first.secretDiffRefusal ? "artifact_security" : (first.infraPhase ?? "harness"));
+    (first.captureRefusal
+      ? (first.captureRefusal.phase ?? "workspace")
+      : (first.infraPhase ?? "harness"));
   const partition = partitionCandidates(runs);
   const facts = budget ? { ...partition.facts, reason: budget.reason } : partition.facts;
   const rootCause = budget?.safeMessage ?? partition.why;
@@ -247,8 +249,8 @@ export async function failedCandidatesResult(
     requestRefusal: unanimous?.requestRefusal,
     // The first candidate speaks (like harnessId/attemptId); a budget terminal speaks for itself.
     vendorFailure: budget ? null : attemptVendorFailure([first], first.attemptId),
-    nextActions: first.secretDiffRefusal
-      ? secretDiff.secretDiffNextActions(first.secretDiffRefusal)
+    nextActions: first.captureRefusal
+      ? secretDiff.captureRefusalNextActions(first.captureRefusal)
       : phase === "workspace"
         ? ["Check the project folder", "Open diagnostics", "Retry the run"]
         : harnessFailureNextActions(harnessCategory),

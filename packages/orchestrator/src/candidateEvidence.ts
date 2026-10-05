@@ -5,7 +5,8 @@ import type { AttemptOutcomeClass } from "./attemptFinalize.js";
 import type { AttemptTelemetry } from "./attemptTelemetry.js";
 import type { DeclaredFailure } from "./runTerminalResults.js";
 import type { AppliedAttemptFacts } from "./delegatedHome.js";
-import type { SecretDiffRefusal } from "./secretDiff.js";
+import type { CaptureRefusal } from "./secretDiff.js";
+import type { SecretLikeFinding } from "./persistedPatch.js";
 import { toolWarnings } from "./attemptTelemetry.js";
 import { directoryHasOutput, type DirectoryCandidate } from "./directoryCandidate.js";
 import { gatesPassed } from "@claudexor/review";
@@ -27,10 +28,14 @@ export interface CandidateRun {
   errors: string[];
   telemetry: AttemptTelemetry;
   infraPhase?: "workspace" | "harness";
-  /** A secret-bearing candidate diff is never persisted. Isolated bytes are
-   * discarded with their envelope; in-place bytes are reverse-applied from the
-   * transient patch when its exact postimage still matches. */
-  secretDiffRefusal?: SecretDiffRefusal;
+  /** The saved copy of `diff` when secret-like strings had to be hidden in it
+   * (INV-062). `diff` itself is always the exact patch; absent = identical. */
+  persistedDiff?: string;
+  /** Disclosure of what the saved copies hide: paths and counts, never values. */
+  secretLike?: SecretLikeFinding;
+  /** The candidate's changes could not be captured at all. Secret-like content
+   * is never a refusal; this is the honest name of a failed capture. */
+  captureRefusal?: CaptureRefusal;
   /** D-16 r7: the finalizer's outcome class for THIS attempt. An `interrupted`
    * candidate (terminal context exhaustion with NO completed WorkReport) is
    * never reviewed/arbitrated/adopted as clean — it terminalizes the run
@@ -85,7 +90,7 @@ export function unanimousDeclaredFailure(
  * synthesis lanes (D-16 r8) so no sibling path re-derives the veto. */
 export function isWorkingCandidate(run: CandidateRun): boolean {
   return (
-    !run.secretDiffRefusal &&
+    !run.captureRefusal &&
     run.outcomeClass !== "interrupted" &&
     (!run.errored || run.diff.length > 0 || directoryHasOutput(run.files))
   );

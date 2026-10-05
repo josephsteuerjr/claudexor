@@ -15,7 +15,7 @@ import {
   selectedWorkspaceChanges,
   workspaceFilePath,
 } from "@claudexor/workspace";
-import { newId, redactSecrets, sha256 } from "@claudexor/util";
+import { containsSecretLikeToken, newId, redactSecrets, sha256 } from "@claudexor/util";
 import type { FinalVerifyRecord } from "@claudexor/schema";
 import type { GateSpec } from "@claudexor/review";
 import { finalVerifyBlocks, finalVerifyPatch, type VerifyEventLog } from "./final-verifier.js";
@@ -92,6 +92,24 @@ export interface DeliverOptions {
   branch?: string;
   message?: string;
   prBodyFile?: string;
+  /** The caller knows this patch carries a binary payload with secret-like
+   * bytes (a blob-only finding is invisible to a text scan of the patch). */
+  secretLikeBinary?: boolean;
+}
+
+/**
+ * INV-062: `pr` is the one delivery mode that sends bytes off this machine
+ * (push to origin + PR). A patch with secret-like text or a secret-like binary
+ * payload is never published; local `apply` / `branch` / `commit` stay allowed
+ * because those bytes are already on this machine.
+ */
+export const PR_SECRET_LIKE_REFUSAL =
+  "refusing 'pr' delivery: the patch contains secret-like strings and would be pushed to a remote. Apply, branch or commit it locally, or remove the strings and re-run.";
+
+function refusesPublishing(patch: string, options: DeliverOptions): boolean {
+  return (
+    options.mode === "pr" && (options.secretLikeBinary === true || containsSecretLikeToken(patch))
+  );
 }
 
 export interface DeliverResult {
@@ -194,6 +212,27 @@ async function verifyAndDeliverUnlocked(
   log: VerifyEventLog,
 ): Promise<VerifiedDeliverResult> {
   const targetPreimageSha = await snapshotTree(repoRoot);
+  // Decided before the fresh verify, any authorization and any mutation: no
+  // branch, commit or push is ever attempted for an unpublishable patch.
+  if (refusesPublishing(patch, options)) {
+    return {
+      mode: "pr",
+      applied: false,
+      treeMutated: false,
+      refused: true,
+      detail: PR_SECRET_LIKE_REFUSAL,
+      finalVerify: {
+        attempted: false,
+        base_sha: null,
+        applied_cleanly: null,
+        gates_passed: null,
+        gates: [],
+        duration_ms: null,
+        reason: "secret_like_patch_not_published",
+      },
+      targetPreimageSha,
+    };
+  }
   const targetPreimageTree = await revParse(repoRoot, `${targetPreimageSha}^{tree}`);
   const finalVerify = await finalVerifyPatch(
     repoRoot,
@@ -310,6 +349,8 @@ async function deliverUnlocked(
   if (!DELIVER_MODES.has(opts.mode)) {
     throw new Error(`unsupported delivery mode: ${opts.mode}`);
   }
+  if (refusesPublishing(patch, opts))
+    return { mode: "pr", applied: false, treeMutated: false, detail: PR_SECRET_LIKE_REFUSAL };
   // Runtime is external in v2. Every path reported by the repository,
   // including `.claudexor*`, is user state and blocks a clean-tree mutation.
   const dirty = await statusPorcelainMeaningful(repoRoot).catch((err: unknown) => {

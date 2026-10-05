@@ -2,9 +2,10 @@ import { join } from "node:path";
 import type { ArtifactStore, RunPaths } from "@claudexor/artifact-store";
 import type { EventLog } from "@claudexor/event-log";
 import type { ModeKind, RunOutcomeFacts } from "@claudexor/schema";
-import { containsSecretLikeToken, newId, sha256 } from "@claudexor/util";
+import { newId } from "@claudexor/util";
 import { createRevertAnchorOrNull } from "@claudexor/workspace";
 import type { CandidateRun } from "./candidateEvidence.js";
+import { persistFinalPatch } from "./secretDiff.js";
 
 /** Publish captured Git work without accepting it or performing another mutation. */
 export async function publishUnverifiedGitCandidate(input: {
@@ -22,14 +23,12 @@ export async function publishUnverifiedGitCandidate(input: {
   postTurnSha: string | null;
   attempts?: number;
 }): Promise<void> {
-  if (!input.run.diff.trim() || input.run.secretDiffRefusal) return;
-  if (containsSecretLikeToken(input.run.diff))
-    throw new Error("unverified patch diff contains secret-like token; refusing artifact");
+  if (!input.run.diff.trim() || input.run.captureRefusal) return;
   const revertAnchorId = input.live
     ? await createRevertAnchorOrNull(input.execRoot, input.preTurnSha, input.postTurnSha)
     : null;
   const applyState = input.live ? "applied_review_blocked" : "not_applied";
-  input.store.writeText(join(input.paths.finalDir, "patch.diff"), input.run.diff);
+  const saved = persistFinalPatch(input.store, input.paths.finalDir, input.run);
   input.store.writeYaml(join(input.paths.finalDir, "work_product.yaml"), {
     id: newId("wp"),
     kind: input.kind,
@@ -43,7 +42,8 @@ export async function publishUnverifiedGitCandidate(input: {
       lifecycle: input.facts.lifecycle,
       outcome_facts: input.facts,
       review_verified: false,
-      patch_sha256: sha256(input.run.diff),
+      patch_sha256: saved.patchSha256,
+      ...saved.meta,
       adopted: input.live,
       apply_state: applyState,
       pre_turn_sha: input.live ? input.preTurnSha : null,

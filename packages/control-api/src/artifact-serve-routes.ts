@@ -194,7 +194,8 @@ export async function resolveProjectRoot(
   return null;
 }
 
-/** Shared artifact-file body: caps, patch secret fence, text redaction. */
+/** Shared artifact-file body: caps, patch secret fence, text redaction, and the
+ * binary content check (one funnel for run artifacts, outputs and produced). */
 function serveArtifactFile(
   ctx: ArtifactServeContext,
   res: ServerResponse,
@@ -239,6 +240,16 @@ function serveArtifactFile(
     });
   }
   if (isTextArtifact(target)) data = Buffer.from(redactSecrets(data.toString("utf8")), "utf8");
+  // INV-062 for SERVED copies: text is redacted above, but media and other
+  // binaries (project outputs and produced files come straight from the
+  // project/thread tree) cannot be redacted in place. The same content policy
+  // decides: bytes that match it are withheld typed; safe files serve as before.
+  else if (containsSecretLikeToken(data.toString("latin1"))) {
+    return ctx.json(res, 409, {
+      error: `refusing to serve ${basename(target)}: its bytes match the secret-like content policy`,
+      code: "secret_like_content_withheld",
+    });
+  }
   res.writeHead(200, { "content-type": contentType(target), "content-length": data.length });
   res.end(data);
 }

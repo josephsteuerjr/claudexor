@@ -1,179 +1,191 @@
-import { realpathSync } from "node:fs";
-import { resolve, sep } from "node:path";
-import { summarizeDiffPaths } from "@claudexor/core";
-import type { WorkspaceEnvelope } from "@claudexor/schema";
-import { revertWorkingTreePatch, type WorkspaceManager } from "@claudexor/workspace";
-import { containsSecretLikeToken, redactSecrets } from "@claudexor/util";
+import { join } from "node:path";
+import type { ArtifactStore } from "@claudexor/artifact-store";
+import { AnswerAssembly, summarizeDiffPaths } from "@claudexor/core";
+import type { HarnessEvent, WorkspaceEnvelope } from "@claudexor/schema";
+import { createRevertAnchorFromPatchOrNull, type WorkspaceManager } from "@claudexor/workspace";
+import { sensitiveResourcePolicy, sha256 } from "@claudexor/util";
 import { candidateOutputSecretRisk, rasterLinksInMarkdown } from "./candidateOutputs.js";
+import {
+  assertPersistableText,
+  buildSecretLikeFinding,
+  persistedPatchCopy,
+  secretLikeSummaryLine,
+  type SecretLikeFinding,
+} from "./persistedPatch.js";
 
-export interface SecretDiffRefusal {
-  disposition: "discarded" | "reverted" | "manual_cleanup";
+/** The candidate's changes could not be observed at all. This is the ONLY
+ * capture-time refusal left: secret-like content is never one (INV-062). */
+export interface CaptureRefusal {
+  disposition: "discarded" | "manual_cleanup";
   detail: string;
+  /** Failure phase; a directory result keeps its sensitive-resource phase. */
+  phase?: "workspace" | "artifact_security";
 }
 
-export function recordSecretDiffRefusal(
-  refusal: SecretDiffRefusal | undefined,
+export function recordCaptureRefusal(
+  refusal: CaptureRefusal | undefined,
   errors: string[],
   existingError: boolean,
 ): boolean {
   if (!refusal) return existingError;
-  errors.push("candidate output could not be proven secret-safe; refusing artifact persistence");
+  errors.push(refusal.detail);
   return true;
 }
 
-export function secretDiffNextActions(refusal: SecretDiffRefusal): string[] {
+export function captureRefusalNextActions(refusal: CaptureRefusal): string[] {
   return refusal.disposition === "manual_cleanup"
-    ? ["Inspect and clean the state named in the recovery receipt", "Retry the run"]
-    : ["Retry the run without writing secret material"];
+    ? ["Inspect the changed files in the project folder directly", "Retry the run"]
+    : ["Retry the run"];
 }
 
-/** Keep a secret-bearing patch memory-only. Isolated bytes die with their
- * envelope; in-place bytes are removed only through the existing exact
- * postimage check, so a concurrent edit turns into manual cleanup rather than
- * a destructive rollback. */
-export async function quarantineSecretDiff(input: {
+/** Answer assembly that also counts secret-like matches in answer material
+ * BEFORE its first redaction. Harness events are redacted one by one on their
+ * way into the assembly, so a count taken on the assembled answer would
+ * always read zero. The count mirrors the assembly's own selection: a typed
+ * final wins verbatim, otherwise the narration parts add up. */
+export class CountedAnswerAssembly extends AnswerAssembly {
+  private finalMatches: number | null = null;
+  private partMatches = 0;
+
+  observeCounted(raw: HarnessEvent, safe: HarnessEvent): void {
+    this.observe(safe);
+    if (raw.type !== "message" || !raw.text) return;
+    const payload = raw.payload ?? {};
+    if (payload["auth_switched"] === true || payload["delta"] === true) return;
+    if (payload["buffered"] === true) return;
+    const matches = sensitiveResourcePolicy.inspectContent(raw.text, "redact").matches;
+    if (raw.final !== true) this.partMatches += matches;
+    else if (raw.text.trim().length > 0) this.finalMatches = matches;
+  }
+
+  secretLikeMatches(): number {
+    return this.hasFinal() && this.finalMatches !== null ? this.finalMatches : this.partMatches;
+  }
+}
+
+export interface CandidateCapture {
+  /** The EXACT candidate patch: apply, synthesis, digests and gates read it. */
   diff: string;
-  inPlace: boolean;
-  repo: string;
-  binarySecretLike: boolean;
-  /** Secret-risk media that is not represented by `diff` cannot be removed by
-   * a successful text rollback and therefore requires truthful manual cleanup. */
-  secretOutsidePatch?: boolean;
-  gitBacked: boolean;
-  /** Test seam for the typed workspace rollback contract. */
-  revertPatch?: typeof revertWorkingTreePatch;
-}): Promise<{ diff: string; refusal?: SecretDiffRefusal }> {
-  if (!containsSecretLikeToken(input.diff) && !input.binarySecretLike) {
-    return { diff: input.diff };
-  }
-  if (!input.inPlace) {
-    return {
-      diff: "",
-      refusal: {
-        disposition: "discarded",
-        detail:
-          "isolated candidate bytes that could not be proven secret-safe were discarded with the candidate envelope",
-      },
-    };
-  }
-  if (input.binarySecretLike && !input.diff.trim()) {
-    return {
-      diff: "",
-      refusal: {
-        disposition: "manual_cleanup",
-        detail:
-          "candidate output could not be proven secret-safe or captured as an exact reversible patch; manual cleanup required",
-      },
-    };
-  }
-  let rollback;
-  try {
-    rollback = await (input.revertPatch ?? revertWorkingTreePatch)(input.repo, input.diff, {
-      isolateObjectWrites: input.gitBacked,
-      noIndex: !input.gitBacked,
-    });
-  } catch (error) {
-    const rollbackCompleted =
-      error instanceof Error &&
-      Object.prototype.hasOwnProperty.call(error, "cleanupError") &&
-      (error as Error & { rollbackReverted?: unknown }).rollbackReverted === true;
-    return {
-      diff: "",
-      refusal: {
-        disposition: "manual_cleanup",
-        detail: rollbackCompleted
-          ? "in-place bytes were rolled back, but Claudexor scratch cleanup could not be proven; manual cleanup of Claudexor temporary state is required"
-          : "in-place output that could not be proven secret-safe could not be rolled back; manual cleanup required",
-      },
-    };
-  }
-  const manuallyClean = !rollback.reverted || input.gitBacked || input.secretOutsidePatch === true;
-  return {
-    diff: "",
-    refusal: !manuallyClean
-      ? {
-          disposition: "reverted",
-          detail:
-            "in-place bytes that could not be proven secret-safe were removed by an exact checked rollback",
-        }
-      : {
-          disposition: "manual_cleanup",
-          detail: redactSecrets(
-            rollback.reverted && input.secretOutsidePatch
-              ? `the exact reversible patch was removed, but candidate media outside that patch could not be proven removed; manual cleanup required${input.gitBacked ? "; inspect Git index, refs, and objects too" : ""}`
-              : rollback.reverted && input.gitBacked
-                ? "worktree bytes were removed; inspect Git index, refs, and objects for harness-written secret state"
-                : (rollback.reason ??
-                  "candidate output could not be proven removed; manual cleanup required"),
-          ),
-        },
-  };
+  /** The saved copy, present only when it differs from the exact patch. */
+  persistedDiff?: string;
+  secretLike?: SecretLikeFinding;
+  captureRefusal?: CaptureRefusal;
 }
 
-export async function quarantineCandidateWorkspace(
-  wsm: WorkspaceManager,
-  envelope: WorkspaceEnvelope,
-  inPlace: boolean,
-  answerText?: string,
-): ReturnType<typeof quarantineSecretDiff> {
+/**
+ * Capture a candidate's changes and classify what a SAVED copy must hide.
+ * Nothing is rolled back, discarded or failed for secret-like content: the
+ * tree, the in-memory diff and the reviewer's verdict all keep the real bytes.
+ */
+export async function captureCandidateWorkspace(input: {
+  wsm: WorkspaceManager;
+  envelope: WorkspaceEnvelope;
+  inPlace: boolean;
+  /** Project root owning the private exact patch object store. */
+  projectRoot: string;
+  answerText?: string;
+  answerMatches: number;
+}): Promise<CandidateCapture> {
+  const { wsm, envelope, inPlace } = input;
   let captured;
   try {
     captured = await wsm.captureDiff(envelope);
   } catch (error) {
     const scratchCleanupUnproven =
       error instanceof Error && Object.prototype.hasOwnProperty.call(error, "cleanupError");
-    return {
-      diff: "",
-      refusal: {
-        disposition: inPlace || scratchCleanupUnproven ? "manual_cleanup" : "discarded",
-        detail: scratchCleanupUnproven
-          ? "candidate output capture failed and private scratch cleanup could not be proven; manual cleanup of Claudexor temporary state is required"
-          : inPlace
-            ? "candidate output could not be captured safely; manual cleanup required"
-            : "uncaptured isolated candidate output was discarded with the candidate envelope",
-      },
-    };
+    return refused(
+      inPlace || scratchCleanupUnproven ? "manual_cleanup" : "discarded",
+      scratchCleanupUnproven
+        ? "candidate output capture failed and private scratch cleanup could not be proven; manual cleanup of Claudexor temporary state is required"
+        : inPlace
+          ? "candidate output could not be captured; the changed files are untouched and need direct inspection"
+          : "uncaptured isolated candidate output was discarded with the candidate envelope",
+    );
   }
-  const diffPaths = summarizeDiffPaths(captured.diff).paths;
-  const linkedPaths = rasterLinksInMarkdown(answerText ?? "");
-  const mediaRisk = candidateOutputSecretRisk({
+  if (captured.captureIncomplete) {
+    return refused(
+      inPlace ? "manual_cleanup" : "discarded",
+      inPlace
+        ? "candidate output could not be captured as a complete patch; the changed files are untouched and need direct inspection"
+        : "uncaptured isolated candidate output was discarded with the candidate envelope",
+    );
+  }
+  const media = candidateOutputSecretRisk({
     worktreePath: envelope.worktree_path,
-    changedPaths: [...diffPaths, ...linkedPaths],
+    changedPaths: [
+      ...summarizeDiffPaths(captured.diff).paths,
+      ...rasterLinksInMarkdown(input.answerText ?? ""),
+    ],
     artifactRelativeDir: wsm.ownedArtifactRelativeDirectory(envelope),
   });
-  const diffIdentities = new Set(
-    diffPaths.map((path) => candidatePathIdentity(envelope.worktree_path, path)),
-  );
-  const secretOutsidePatch =
-    mediaRisk.artifactDirectoryUnsafe ||
-    mediaRisk.nonReversiblePaths.length > 0 ||
-    mediaRisk.riskyPaths.some(
-      (path) => !diffIdentities.has(candidatePathIdentity(envelope.worktree_path, path)),
-    );
-  return quarantineSecretDiff({
-    diff: captured.diff,
-    binarySecretLike: captured.binarySecretLike || mediaRisk.risky,
-    secretOutsidePatch,
-    repo: envelope.worktree_path,
-    inPlace,
-    gitBacked: Boolean(envelope.base_sha),
+  const copy = persistedPatchCopy(captured.diff, captured.binarySecretPaths);
+  const secretLike = buildSecretLikeFinding({
+    copy,
+    binaryPaths: captured.binarySecretPaths,
+    mediaWithheld: [
+      ...media.riskyPaths,
+      ...(media.artifactDirectoryUnsafe
+        ? [wsm.ownedArtifactRelativeDirectory(envelope) ?? ""]
+        : []),
+    ].filter(Boolean),
+    answerMatches: input.answerText ? input.answerMatches : 0,
   });
+  const redactedCopy = copy.text !== captured.diff;
+  // An isolated candidate's envelope is the only other holder of the exact
+  // bytes and is about to be removed, so its exact object is written NOW. If
+  // that write fails the envelope is kept: a deferred Apply then refuses typed
+  // while the bytes, the answer and the run state stay readable.
+  if (
+    redactedCopy &&
+    !inPlace &&
+    createRevertAnchorFromPatchOrNull(input.projectRoot, captured.diff) === null
+  ) {
+    wsm.retainEnvelope(envelope);
+  }
+  return {
+    diff: captured.diff,
+    ...(redactedCopy ? { persistedDiff: copy.text } : {}),
+    ...(secretLike ? { secretLike } : {}),
+  };
 }
 
-function candidatePathIdentity(root: string, raw: string): string {
-  const absolute = resolve(root, raw);
-  if (absolute !== resolve(root) && !absolute.startsWith(resolve(root) + sep)) return absolute;
-  try {
-    return realpathSync.native(absolute);
-  } catch {
-    return absolute;
-  }
+function refused(disposition: CaptureRefusal["disposition"], detail: string): CandidateCapture {
+  return { diff: "", captureRefusal: { disposition, detail } };
 }
 
-/** Fail-loud persistence fence for a final artifact: a secret-like token in
- * the winner's bytes must throw before anything is written (INV-062). */
-export function assertNoSecretLikeTokens(label: string, text: string): void {
-  if (containsSecretLikeToken(text)) {
-    throw new Error(`${label} contains secret-like token; refusing to persist artifact`);
-  }
+/**
+ * Write a run's final patch: the saved copy to `final/patch.diff`, the exact
+ * bytes to the private exact patch object when the copy hides anything, and
+ * the disclosure fields for `work_product.yaml` meta. `patchSha256` is ALWAYS
+ * the digest of the exact patch, so a redacted copy can never pass the apply
+ * gate's digest binding on any route.
+ */
+export function persistFinalPatch(
+  store: ArtifactStore,
+  finalDir: string,
+  run: { diff: string; persistedDiff?: string; secretLike?: SecretLikeFinding },
+): { patchSha256: string; meta: Record<string, unknown> } {
+  const copy = run.persistedDiff ?? persistedPatchCopy(run.diff, []).text;
+  assertPersistableText("final patch copy", copy);
+  store.writeText(join(finalDir, "patch.diff"), copy);
+  return {
+    patchSha256: sha256(run.diff),
+    meta: {
+      ...(run.secretLike ? { secret_like: run.secretLike } : {}),
+      ...(copy !== run.diff
+        ? {
+            persisted_patch: "redacted",
+            // null: the exact bytes could not be stored; a deferred Apply answers
+            // patch_exact_bytes_unavailable instead of applying the copy.
+            exact_patch_object: createRevertAnchorFromPatchOrNull(store.repoRoot, run.diff),
+          }
+        : {}),
+    },
+  };
+}
+
+/** `\n`-prefixed disclosure line for a summary template; "" when clean. */
+export function summaryDisclosure(finding: SecretLikeFinding | undefined): string {
+  const line = secretLikeSummaryLine(finding);
+  return line ? `\n${line}` : "";
 }

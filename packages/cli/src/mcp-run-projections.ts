@@ -1,4 +1,9 @@
-import { isTerminalLifecycle, RunFactsInvalidError, type RunOutcomeFacts } from "@claudexor/schema";
+import {
+  isTerminalLifecycle,
+  RunFactsInvalidError,
+  SecretLikeDisclosure,
+  type RunOutcomeFacts,
+} from "@claudexor/schema";
 import { CliError } from "./cli-error.js";
 import {
   describeRunDetailProblem,
@@ -33,6 +38,32 @@ export function projectImmediateRunDetail(
     failure: projectRunFailure(detail),
     ...projectRunLineage(detail),
   };
+}
+
+/**
+ * INV-062 disclosure as a consumable fact. `run_result` answers with the
+ * primary output first, so the summary.md disclosure line never reaches an MCP
+ * host; this projects the same record from `workProduct.meta`. Null when the
+ * run hid nothing (or the record is absent/malformed).
+ */
+export function projectSecretLikeDisclosure(
+  detail: Record<string, unknown> | null,
+): SecretLikeDisclosure | null {
+  const meta = (detail?.["workProduct"] as { meta?: Record<string, unknown> } | null | undefined)
+    ?.meta;
+  const finding = meta?.["secret_like"] as Record<string, unknown> | undefined;
+  const redactedCopy = meta?.["persisted_patch"] === "redacted";
+  if (!finding && !redactedCopy) return null;
+  const parsed = SecretLikeDisclosure.safeParse({
+    totalMatches: finding?.["total_matches"] ?? 0,
+    answerMatches: finding?.["answer_matches"] ?? 0,
+    files: finding?.["files"] ?? [],
+    binaryPaths: finding?.["binary_paths"] ?? [],
+    mediaWithheld: finding?.["media_withheld"] ?? [],
+    persistedPatch: redactedCopy ? "redacted" : "exact",
+    exactPatchRecorded: redactedCopy ? typeof meta?.["exact_patch_object"] === "string" : null,
+  });
+  return parsed.success ? parsed.data : null;
 }
 
 /** One typed read projection for inspect/status/result from a single detail snapshot. */
@@ -96,6 +127,7 @@ export function projectRecoveryRunDetail(
       summary["delegation"] && typeof summary["delegation"] === "object"
         ? summary["delegation"]
         : null,
+    secretLike: projectSecretLikeDisclosure(detail),
   };
   if (mode !== "__run_result") {
     return {
@@ -157,6 +189,7 @@ export function projectDegradedRecoveryRunDetail(
     parentRunId: null,
     delegatedFromRunId: null,
     delegation: null,
+    secretLike: null,
     detailProblem: describeRunDetailProblem(error),
   };
 }
