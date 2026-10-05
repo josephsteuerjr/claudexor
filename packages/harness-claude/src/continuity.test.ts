@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONTINUITY_PROFILE_LOCATOR_ENV } from "@claudexor/core";
 import { claudeContinuity, claudeProjectDirName, claudeStoreDir } from "./continuity.js";
