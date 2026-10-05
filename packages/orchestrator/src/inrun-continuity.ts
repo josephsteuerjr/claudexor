@@ -46,6 +46,7 @@ import {
   type WorkState,
 } from "@claudexor/schema";
 import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
+import type { ModelGovernedRoute } from "./modelGovernance.js";
 import type { AttemptTelemetry, TransientFailureObservation } from "./attemptTelemetry.js";
 import {
   composeContinuedTry,
@@ -109,6 +110,8 @@ export interface InRunContinuityDeps {
     "probeCurrentSubject" | "liveUnusable" | "notePreProgressRefusal"
   >;
   emit: ContinuityEmit;
+  /** The model-governed route: an attested model is pinned only if it lists the id. */
+  route?: ModelGovernedRoute;
   newSessionId: () => string;
   /** Thread facts for the moved-session disclosure (INV-137); null outside a thread. */
   thread: {

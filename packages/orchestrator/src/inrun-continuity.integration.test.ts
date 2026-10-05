@@ -44,6 +44,8 @@ interface Scenario {
   pinned?: string;
   limitAction?: "rotate" | "fail" | "ask";
   maxRetries?: number;
+  /** The run's requested model; null = none (the harness default). */
+  model?: string | null;
 }
 
 const RESET = "2026-10-06T21:00:00.000Z";
@@ -194,7 +196,7 @@ async function run(scenario: Scenario) {
     prompt: "WORK-ORDER-7f3a: build the dashboard",
     harnesses: ["fake"],
     review: false,
-    models: { fake: "m1" },
+    ...(scenario.model === null ? {} : { models: { fake: scenario.model ?? "m1" } }),
     effort: "high",
     authPreference: "subscription",
     web: "off",
@@ -449,6 +451,35 @@ describe("in-run continuation (agent lane, in place)", () => {
     expect(bounded.result.lifecycle).not.toBe("succeeded");
     expect(bounded.spawns.map((s) => s.profile)).toEqual(["a", "a", "a"]);
     expect(bounded.resumable).toMatchObject({ cause: "transport", carriers: ["packet"] });
+  });
+
+  it("a packet continuation with no requested model pins the attested model only when the route lists it", async () => {
+    const continueAfter = (observed: string) =>
+      run({
+        mode: "agent",
+        profiles: ["a", "b"],
+        maxRetries: 1,
+        continuity: null,
+        model: null,
+        script: function* ({ spec, emit, tryOfProfile }) {
+          if (tryOfProfile === 1) {
+            yield emit({ type: "started", observed_model: observed });
+            writeFileSync(join(spec.cwd, "part1.txt"), "x\n");
+            yield emit({ type: "file_change", payload: { path: "part1.txt" } });
+            yield* crash(emit);
+            return;
+          }
+          yield emit({ type: "started" });
+          yield emit({ type: "message", text: "finished", final: true });
+          yield emit({ type: "completed" });
+        },
+      });
+    const label = await continueAfter("Fake Model 1M Extra High");
+    expect(label.result.lifecycle, label.result.summary).toBe("succeeded");
+    expect(label.spawns.map((s) => s.model)).toEqual([null, null]);
+    const listed = await continueAfter("m1");
+    expect(listed.result.lifecycle, listed.result.summary).toBe("succeeded");
+    expect(listed.spawns.map((s) => s.model)).toEqual([null, "m1"]);
   });
 
   it("native rejected by the adapter's typed fact → same-account PACKET with the evidence index (1B), never a fresh replay", async () => {

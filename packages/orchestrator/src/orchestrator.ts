@@ -2929,7 +2929,6 @@ export class Orchestrator {
       snapshots: this.deps.quotaSnapshots?.() ?? [],
       retryPolicy: transientRetryPolicy(this.config(repoRoot)),
       pinned: runInput?.credentialProfileId != null, // D-U6: a pin never rotates
-
       defaultRouteWasVendorNative: routed.authRouteEstimate === "local_session",
       requestedProfileId: runInput?.credentialProfileId ?? null,
       rotationEnabled: runInput !== undefined,
@@ -2947,6 +2946,7 @@ export class Orchestrator {
       rotationObservations: (spec, transients, refusal) =>
         this.credentials.rotationObservations(adapter, spec, transients, refusal),
       emit: (type, payload) => log?.emit(type, payload),
+      route: routed,
       newSessionId: () => newId("ses"),
       thread: runInput?.threadId
         ? {

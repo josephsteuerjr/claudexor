@@ -23,6 +23,7 @@ import { decideCarrier, prepareCarrier, type CarrierFacts } from "./carrier-plan
 import { diffStatFromPatch, steeringFromRunLog } from "./continuation-evidence-io.js";
 import { continuationNotice, packetContinuationPrompt } from "./continuity-notice.js";
 import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-continuity.js";
+import { routeListsModel } from "./modelGovernance.js";
 import {
   registryProfile,
   relocateSessionCapsule,
@@ -124,8 +125,15 @@ export async function composeContinuedTry(
     uncertainInput: ctx.uncertainInput,
     callerText: null,
   });
-  // A null model hint must not re-resolve to another default on a new session (§7.1).
-  const modelHint = base.model_hint ?? (prepared.carrier === "packet" ? effectiveModel : null);
+  // A null model hint must not re-resolve to another default on a new session
+  // (§7.1): the packet pins the attested model, but only an id the route itself
+  // lists — an observed display label is never sent as a model id.
+  const attested = facts.telemetry.observedModel;
+  const pinned =
+    base.model_hint == null && prepared.carrier === "packet" && attested
+      ? !!deps.route && (await routeListsModel(deps.route, base, attested))
+      : false;
+  const modelHint = base.model_hint ?? (pinned ? attested : null);
   const continued: ContinuedTry = {
     carrier: prepared.carrier,
     cause,
