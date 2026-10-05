@@ -79,3 +79,4 @@ export * from "./mcp-run-result.js";
 export * from "./model-operation.js";
 export * from "./run-continuity.js";
 export * from "./run-continuation.js";
+export * from "./continuation-admission.js";

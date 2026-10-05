@@ -48,6 +48,7 @@ import {
   type JobRecord,
 } from "./job-record.js";
 import { settleJobError } from "./job-settlement.js";
+import { admitContinuationRequest } from "./continuation-admission.js";
 import {
   daemonTokenMatches,
   recoveryOnlyRefusal,
@@ -346,7 +347,7 @@ export class DaemonServer {
         // Journal-owned belt admission spans retries/processes; ordinary
         // parentRunId alone never establishes delegated lineage.
         const request = admitDelegatedRequest(
-          rawRequest,
+          admitContinuationRequest(rawRequest, this.allRecords()),
           operation,
           this.allRecords(),
           this.opts.delegationAuthority,

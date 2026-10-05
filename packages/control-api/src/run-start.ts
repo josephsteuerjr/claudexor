@@ -19,8 +19,13 @@ import {
 } from "@claudexor/schema";
 import { assertNoInlineSecretValues, noProjectRepoRoot } from "@claudexor/util";
 import type { DaemonFacadeClient, DaemonRunRecord } from "./daemon-server.js";
+import { assertContinuationAdmissible, resolveContinuationBody } from "./run-continuation-start.js";
 
 const NO_PROJECT_ROOT = noProjectRepoRoot();
+
+function errorCodeOf(error: unknown): unknown {
+  return error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+}
 
 export function validateAbsoluteRepoRoot(repoRoot: string): string | null {
   return isAbsolute(repoRoot) ? null : "project root must be an absolute path";
@@ -80,8 +85,9 @@ export function normalizeRunStart(parsed: ControlRunStartRequest): ControlRunSta
   const mode = parsed.mode ?? "agent";
   // Empty chat is never a silent no-op (Bible): reject a blank prompt at the
   // engine boundary. Fail loud (400) rather than enqueue a doomed run that
-  // produces nothing.
-  if (parsed.prompt.trim().length === 0) {
+  // produces nothing. A continuation is the exception: its work order is the
+  // predecessor's, so the caller's continuation text may be empty.
+  if (parsed.prompt.trim().length === 0 && !parsed.continueFrom) {
     throw Object.assign(new Error("prompt must not be empty"), { status: 400 });
   }
   // The shared mode/strategy coherence owner (D11) refuses every strategy flag
@@ -363,7 +369,7 @@ export async function handleRunCreate(
   let recorded: RecordedControlRunStartRequest;
   try {
     idempotencyKey = requiredIdempotencyKey(req);
-    const body = await ctx.readBody(req);
+    const body = await resolveContinuationBody(ctx.daemon, await ctx.readBody(req));
     assertNoInlineSecretValues(body);
     recorded = recordedRunStartReplayProjection(RecordedControlRunStartRequest.parse(body));
   } catch (error) {
@@ -389,6 +395,7 @@ export async function handleRunCreate(
         if (recorded.access === RETIRED_EXTERNAL_SANDBOX_FULL) {
           throw retiredAccessProfileError();
         }
+        await assertContinuationAdmissible(ctx.daemon, recorded);
         params = normalizeRunStart(ControlRunStartRequest.parse(recorded));
         await ctx.validateResources?.(params.attachments ?? []);
         await ctx.preflightRunRequirements?.(params);
@@ -453,6 +460,14 @@ export async function handleRunCreate(
       idempotencyRequest: params,
     });
   } catch (error) {
+    // A concurrent continuation won the daemon's atomic claim after our check:
+    // answer the same typed refusal with its chain head.
+    if (errorCodeOf(error) === "continuation_superseded") {
+      return assertContinuationAdmissible(ctx.daemon, params).then(
+        () => ctx.requestError(res, error),
+        (refusal: unknown) => ctx.requestError(res, refusal),
+      );
+    }
     // A root unregistered between the lookup and enqueue answers the same
     // typed refusal as the lookup; every typed enqueue error keeps its facts.
     const typed = (projectNotRegisteredError(error) ?? error) as {
