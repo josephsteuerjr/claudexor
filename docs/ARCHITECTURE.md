@@ -3696,8 +3696,10 @@ as evidence and do not enter accepted-answer or retry predicates. The event-log
 package projects this ordered stream into `final/retained-output.md`, separating
 attempts and physical `session_id` values while retaining explicit delta bytes.
 It excludes reasoning, tool output and status prose, and collapses only exact
-adjacent delta/flush/final repetitions. Missing WorkReport still means unverified
-contract failure; no additional generation is performed to repair the format.
+adjacent delta/flush/final repetitions. A missing WorkReport still means an
+unverified work state (a contract failure on the native channels, a disclosed
+`unverified` on the instructed fence); no additional generation is performed to
+repair the format.
 A final-only successful answer without captured files needs no duplicate retained
 document. Captured media references are added from the existing attempt capture, using distinct
 attempt-scoped handles; the original text remains intact. The full retained
@@ -3736,21 +3738,38 @@ wraps the markdown deliverable as `output: string`; a `side_tool` route
 (claude's `--json-schema` materializes a StructuredOutput tool) arms a
 `{work_report}`-ONLY schema so the prose final stays the deliverable and the
 report rides the tool payload (the adapter surfaces it on the final message's
-`work_report_side_tool` payload); a `validated` route (cursor, no native
-schema) INSTRUCTS the model to write its complete markdown answer normally and
+`work_report_side_tool` payload); a `validated` route (cursor, agy, acp — no
+native schema) ASKS the model to write its complete markdown answer normally and
 end with a fenced `{work_report}` metadata block that the finalizer validates
 off the last fenced block. Historical fence-only `{work_report, output}` replies
 remain readable through a compatibility fallback; a nonempty markdown prefix
 is always canonical, and legacy `output` is consulted only when that prefix is
 empty. The three tiers
 are one resolver (`resolveWorkReportEnvelope`) and one unwrap
-(`unwrapWorkReportEnvelope`, keyed on the envelope `channel`). The unified
-attempt finalizer removes the transport beside `finalizeStructuredOutput` —
-`answer.md` persists the deliverable, never the envelope/footer — and validates the
-model-authored `WorkReport { state, required_inputs }`. A missing/malformed
-report on a constrained OR validated route is a typed `work_report_contract`
-failure (never a prose success); a valid `needs_input`/`incomplete` report
-becomes a `work_state` veto.
+(`unwrapWorkReportEnvelope`, keyed on the envelope `channel`;
+`workReportEnvelope.ts`). The unified
+attempt finalizer (`attemptFinalize.ts`) removes the transport beside
+`finalizeStructuredOutput` — `answer.md` persists the deliverable, never the
+envelope/footer — and validates the model-authored
+`WorkReport { state, required_inputs }`. On the two NATIVE channels
+(`constrained_json`, `side_tool`) a missing/malformed report is a typed
+`work_report_contract` failure (never a prose success): there the envelope is
+the only witness that the final is the model's own. On the INSTRUCTED fence
+(owner decision 2026-10-05, partially revising the 2026-10-04 strict reading)
+nothing enforces the footer, so any footer problem — no fence, a last fence that
+is not JSON or not an object, an object without `work_report`, a malformed or
+contradictory report (completed with `required_inputs`, needs_input without
+any), a historical fence-only envelope with a non-string `output` — is a CLEAN
+outcome: the lifecycle succeeds, `work_state` is
+`{state: unverified, source: validated, unverified_reason}` (the typed reason
+rides attempt telemetry and the run's outcome facts), and the deliverable is
+the COMPLETE answer: a trailing fence that is the consumer's own JSON or code is
+never cut out; only a fence carrying a `work_report` key (the model's footer
+attempt) is trimmed, and a footer-only broken block keeps the whole text; the
+contradiction claim is retained as evidence (`reportProblem`) and a Council
+draft with it is an ordinary accepted draft. A valid `needs_input`/`incomplete`
+report still becomes a `work_state` veto on every channel. The canary
+`[INV-116:work-report-contract]` pins the native-channel failure.
 
 Claude API-error results retain the originating attempt's vendor message and
 nullable machine code as opaque failure evidence. A native stdout error result

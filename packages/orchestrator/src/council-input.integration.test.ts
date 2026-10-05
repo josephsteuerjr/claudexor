@@ -203,15 +203,12 @@ describe("Council retains contradictory input through real planner attempts (#21
     expect(run.text("final/failure.yaml")).not.toContain("Retry the run");
   });
 
-  it.each<Channel>(["constrained_json", "side_tool", "instructed_fence"])(
+  it.each<Channel>(["constrained_json", "side_tool"])(
     "%s preserves the extracted draft and original claim without accepting the attempt",
     async (channel) => {
       const run = await runCouncil([{ channel, draft: { report: contradiction } }, {}]);
       expect(run.result.lifecycle).toBe("succeeded");
-      // The fence parser owns its separator trim; staging preserves its full extraction.
-      expect(run.text("council/draft-planner-1.md")).toBe(
-        channel === "instructed_fence" ? draft.trimEnd() : draft,
-      );
+      expect(run.text("council/draft-planner-1.md")).toBe(draft);
       expect(run.read("attempts/p01/council-input.yaml")).toMatchObject({
         attempt_id: "p01",
         harness_id: "planner-1",
@@ -271,6 +268,68 @@ describe("Council retains contradictory input through real planner attempts (#21
       expect(run.text("final/plan.md")).toBe(`${merged}\n`);
     },
   );
+
+  it("instructed_fence: a contradictory footer is an accepted draft with an unverified work_state (owner decision 2026-10-05)", async () => {
+    // The instructed fence is a request, not a native constraint: a broken
+    // footer never fails the planner attempt. The draft is accepted whole, the
+    // work_state discloses the cause, and the contradiction claim stays evidence.
+    const run = await runCouncil([
+      { channel: "instructed_fence", draft: { report: contradiction } },
+      {},
+    ]);
+    expect(run.result.lifecycle).toBe("succeeded");
+    // The fence parser owns its separator trim; staging preserves its full extraction.
+    expect(run.text("council/draft-planner-1.md")).toBe(draft.trimEnd());
+    expect(run.read("attempts/p01/council-input.yaml")).toMatchObject({
+      attempt_id: "p01",
+      harness_id: "planner-1",
+      status: "success",
+      outcome_class: "clean",
+      error: null,
+      harness_failed_before_report: false,
+      work_state: {
+        state: "unverified",
+        source: "validated",
+        unverified_reason: "report_contradictory",
+      },
+      report_problem: { kind: "completed_with_required_inputs", reported: contradiction },
+      draft_path: "council/draft-planner-1.md",
+    });
+    const council = CouncilProjection.parse(run.read("council/membership.yaml"));
+    expect(council).toMatchObject({
+      drafted: 2,
+      requested: 2,
+      degraded: false,
+      mergedBy: "planner-1",
+    });
+    // planner-1 (the first accepted draft in primary order) is also the merger.
+    expect(council.members.map((member) => member.status)).toEqual(["merged", "drafted"]);
+    expect(
+      run.events.filter((e) => e.type === "council.draft").map((e) => e.payload["harness_id"]),
+    ).toEqual(["planner-1", "planner-2"]);
+    expect(run.events.some((e) => e.type === "council.member.failed")).toBe(false);
+    expect(run.telemetry.attempts[0]?.outcome).toMatchObject({
+      status: "success",
+      deliverable_present: true,
+      work_state: {
+        state: "unverified",
+        source: "validated",
+        unverified_reason: "report_contradictory",
+      },
+    });
+    expect(run.facts.participants.attempts.map((a) => a.status)).toEqual([
+      "success",
+      "success",
+      "success",
+    ]);
+    const mergeCall = run.calls.find((call) => call.intent === "synthesize");
+    expect(mergeCall?.prompt).toContain("planner-1 (ordinary)");
+    expect(mergeCall?.prompt).not.toContain("planner-1 (UNVERIFIED)");
+    expect(run.text("final/summary.md")).toContain(
+      "2 contract-accepted draft(s), 0 unverified draft(s)",
+    );
+    expect(run.text("final/plan.md")).toBe(`${merged}\n`);
+  });
 
   it("merges all contradictory drafts once without turning the merger's failed draft into merged", async () => {
     const run = await runCouncil([

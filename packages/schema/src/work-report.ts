@@ -83,19 +83,43 @@ export const WorkReportSource = z
 export type WorkReportSource = z.infer<typeof WorkReportSource>;
 
 /**
+ * Why an ACTIVE instructed footer channel (`validated` source: cursor, agy,
+ * acp) produced no valid WorkReport. On such a route nothing constrains the
+ * model natively, so a missing or broken footer is disclosed, never a failure
+ * (owner decision 2026-10-05): the run completes with `state: unverified`, the
+ * complete answer stays the deliverable, and this reason names the cause. Never
+ * set for a valid report or for a route that carries no transport (`absent`).
+ */
+export const WorkReportUnverifiedReason = z
+  .enum([
+    "footer_missing",
+    "footer_not_json",
+    "footer_not_object",
+    "report_missing",
+    "report_malformed",
+    "report_contradictory",
+    "legacy_output_invalid",
+  ])
+  .describe(
+    "Why an active instructed footer yielded no valid WorkReport: no fenced block, a non-JSON or non-object last fence, a fence without work_report, a malformed report, a contradictory one (completed with required_inputs, or needs_input without any), or a historical fence-only envelope whose output is not a string.",
+  );
+export type WorkReportUnverifiedReason = z.infer<typeof WorkReportUnverifiedReason>;
+
+/**
  * The D-16 work_state axis attached to attempt/run outcomes, ORTHOGONAL to the
  * process lifecycle (INV-116). `state` folds the WorkReport state with an
- * `unverified` value for the disclosed-absence case (transport unsupported /
- * lane gated). A `needs_input`/`incomplete` work_state VETOES applyability and
- * forces a non-zero CLI exit even when the process lifecycle succeeded, but it
- * NEVER flips the lifecycle itself.
+ * `unverified` value for the disclosed no-valid-report cases (transport
+ * unsupported / lane gated, or an instructed footer that was missing or
+ * broken — `unverified_reason` says which). A `needs_input`/`incomplete`
+ * work_state VETOES applyability and forces a non-zero CLI exit even when the
+ * process lifecycle succeeded, but it NEVER flips the lifecycle itself.
  */
 export const WorkState = z
   .object({
     state: z
       .enum(["completed", "needs_input", "incomplete", "unverified"])
       .describe(
-        "Folded work state: the WorkReport state, or unverified when no report was obtainable (transport unsupported / lane gated).",
+        "Folded work state: the WorkReport state, or unverified when no valid report was obtained (transport unsupported / lane gated, or an instructed footer missing or broken).",
       ),
     source: WorkReportSource,
     required_inputs: z
@@ -103,6 +127,9 @@ export const WorkState = z
       .max(16)
       .optional()
       .describe("Carried through from a needs_input/incomplete WorkReport for honest disclosure."),
+    unverified_reason: WorkReportUnverifiedReason.optional().describe(
+      "Present only with state unverified on a validated (instructed footer) source: the disclosed cause of the missing report.",
+    ),
   })
   .describe(
     "D-16 work_state axis: the model-attested work outcome, orthogonal to process lifecycle (INV-116); a needs_input/incomplete state vetoes applyability and exit 0 without flipping the lifecycle.",

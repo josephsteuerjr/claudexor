@@ -20,11 +20,8 @@ import type { EventLog } from "@claudexor/event-log";
 import { buildDeepScanReducerPrompt } from "@claudexor/synthesis";
 import { type BudgetDenial, classifyBudgetFailure } from "./budgetFailure.js";
 import type { RoutedAdapter } from "./orchestrator.js";
-import {
-  finalizeAttempt,
-  unwrapWorkReportEnvelope,
-  type WorkReportEnvelopeMode,
-} from "./attemptFinalize.js";
+import { finalizeAttempt } from "./attemptFinalize.js";
+import { unwrapWorkReportEnvelope, type WorkReportEnvelopeMode } from "./workReportEnvelope.js";
 import {
   redactHarnessEvent,
   harnessEventPayload,
@@ -430,6 +427,7 @@ export async function runDeepScanReducer(
     workReport: unwrapped.workReport,
     workReportSource: unwrapped.source,
     workReportViolation: unwrapped.contractViolation,
+    workReportUnverified: unwrapped.unverified ?? null,
     contextTerminalExhausted: telemetry.contextExhausted,
   });
   if (stoppedDuringRun === "timeout")

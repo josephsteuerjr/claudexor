@@ -3,12 +3,14 @@ import type { WorkReport } from "@claudexor/schema";
 import {
   finalizeAttempt,
   readOnlyNoSuccessTerminal,
-  resolveWorkReportEnvelope,
   unrecoveredToolErrorFailure,
-  unwrapWorkReportEnvelope,
   webEvidenceFailure,
-  type WorkReportEnvelopeMode,
 } from "./attemptFinalize.js";
+import {
+  resolveWorkReportEnvelope,
+  unwrapWorkReportEnvelope,
+  type WorkReportEnvelopeMode,
+} from "./workReportEnvelope.js";
 import type { ToolErrorRecord } from "./attemptTelemetry.js";
 
 const completed: WorkReport = { state: "completed", required_inputs: [] };
@@ -150,6 +152,11 @@ describe("resolveWorkReportEnvelope (D-16 spec-build decision)", () => {
     expect(mode.instruction).toBeTruthy();
     expect(mode.instruction).toContain("complete final answer as normal Markdown");
     expect(mode.instruction).not.toContain('"output"');
+    // The footer is requested, not "mandatory": its absence leaves the work
+    // state unverified (owner decision 2026-10-05), and the instruction says so.
+    expect(mode.instruction).not.toContain("mandatory");
+    expect(mode.instruction).toContain("Always end with this block");
+    expect(mode.instruction).toContain("unverified");
     expect(outputSchema).toBeUndefined();
   });
 
@@ -213,14 +220,17 @@ describe("unwrapWorkReportEnvelope", () => {
       expect(r.workReport).toBeNull();
       expect(r.deliverable).not.toContain("[object Object]");
     });
-    it(`instructed_fence: fence-only legacy ${label} output is a work_report contract violation`, () => {
-      const r = unwrapWorkReportEnvelope(
-        fenceEnvelope({ work_report: completed, output: badOutput }),
-        FENCE,
-      );
-      expect(r.contractViolation).toMatch(/output must be a string/);
+    it(`instructed_fence: fence-only legacy ${label} output is disclosed unverified, never a violation`, () => {
+      const text = fenceEnvelope({ work_report: completed, output: badOutput });
+      const r = unwrapWorkReportEnvelope(text, FENCE);
+      expect(r.contractViolation).toBeNull();
       expect(r.workReport).toBeNull();
-      expect(r.deliverable).not.toContain("[object Object]");
+      expect(r.unverified).toEqual({
+        reason: "legacy_output_invalid",
+        detail: expect.stringMatching(/output must be a string/),
+      });
+      // The whole reply is kept: never "[object Object]", never an empty answer.
+      expect(r.deliverable).toBe(text);
     });
   }
 
@@ -422,9 +432,118 @@ describe("unwrapWorkReportEnvelope", () => {
     expect(r.contractViolation).toBeNull();
   });
 
-  it("instructed_fence: no fenced block is a typed contract violation (validated route)", () => {
+  // Owner decision 2026-10-05 («1. A»): an INSTRUCTED footer is a request, not
+  // a native constraint, so every footer problem is a disclosed unverified
+  // work_state with the COMPLETE answer as the deliverable — never a contract
+  // failure, and never a trailing consumer JSON block cut out of the answer.
+  it("instructed_fence: no fenced block ⇒ unverified footer_missing, whole answer kept", () => {
     const r = unwrapWorkReportEnvelope("just prose, no fence", FENCE);
-    expect(r.contractViolation).toMatch(/no fenced work_report envelope/);
+    expect(r).toEqual({
+      deliverable: "just prose, no fence",
+      workReport: null,
+      source: "validated",
+      contractViolation: null,
+      unverified: { reason: "footer_missing", detail: expect.stringMatching(/no fenced/) },
+    });
+  });
+
+  it("instructed_fence: a trailing consumer JSON array is part of the answer, not a footer", () => {
+    const answer = [
+      "Review result:",
+      "```json",
+      JSON.stringify([{ id: "f1", class: "need_evidence" }]),
+      "```",
+    ].join("\n");
+    const r = unwrapWorkReportEnvelope(answer, FENCE);
+    expect(r.deliverable).toBe(answer);
+    expect(r.contractViolation).toBeNull();
+    expect(r.unverified?.reason).toBe("footer_not_object");
+  });
+
+  it("instructed_fence: a lone consumer JSON object fence keeps the whole text (never an empty deliverable)", () => {
+    const answer = fenceEnvelope({ verdict: "PASS", findings: [] });
+    const r = unwrapWorkReportEnvelope(answer, FENCE);
+    expect(r.deliverable).toBe(answer);
+    expect(r.unverified?.reason).toBe("report_missing");
+    expect(r.workReport).toBeNull();
+    expect(r.contractViolation).toBeNull();
+  });
+
+  it("instructed_fence: a trailing code fence that is not JSON is part of the answer", () => {
+    const answer = "# Fix\n\n```ts\nconst preserved = true;\n```";
+    const r = unwrapWorkReportEnvelope(answer, FENCE);
+    expect(r.deliverable).toBe(answer);
+    expect(r.unverified?.reason).toBe("footer_not_json");
+    expect(r.contractViolation).toBeNull();
+  });
+
+  it("instructed_fence: a broken footer attempt is trimmed off a present prefix and disclosed", () => {
+    const answer = [
+      "# Answer",
+      "Full detail.",
+      fenceEnvelope({ work_report: { state: "bogus" } }),
+    ].join("\n");
+    const r = unwrapWorkReportEnvelope(answer, FENCE);
+    expect(r.deliverable).toBe("# Answer\nFull detail.");
+    expect(r.workReport).toBeNull();
+    expect(r.contractViolation).toBeNull();
+    expect(r.unverified).toEqual({
+      reason: "report_malformed",
+      detail: expect.stringMatching(/work_report missing or malformed/),
+    });
+  });
+
+  it("instructed_fence: a footer-only broken attempt keeps the whole text", () => {
+    const answer = fenceEnvelope({ work_report: { state: "bogus" } });
+    const r = unwrapWorkReportEnvelope(answer, FENCE);
+    expect(r.deliverable).toBe(answer);
+    expect(r.unverified?.reason).toBe("report_malformed");
+  });
+
+  it("instructed_fence: a contradictory footer is unverified AND retains the claim as evidence", () => {
+    const contradictory = { ...completed, required_inputs: needsInput.required_inputs };
+    const answer = ["# Plan", fenceEnvelope({ work_report: contradictory })].join("\n");
+    const r = unwrapWorkReportEnvelope(answer, FENCE);
+    expect(r.deliverable).toBe("# Plan");
+    expect(r.workReport).toBeNull();
+    expect(r.contractViolation).toBeNull();
+    expect(r.unverified).toEqual({
+      reason: "report_contradictory",
+      detail: "a completed work_report must not list required_inputs",
+    });
+    expect(r.reportProblem).toEqual({
+      kind: "completed_with_required_inputs",
+      reported: contradictory,
+    });
+    const emptyNeedsInput = unwrapWorkReportEnvelope(
+      fenceEnvelope({ work_report: { state: "needs_input", required_inputs: [] } }),
+      FENCE,
+    );
+    expect(emptyNeedsInput.unverified?.reason).toBe("report_contradictory");
+    expect(emptyNeedsInput.reportProblem).toBeUndefined();
+  });
+
+  it("instructed_fence: a VALID footer keeps the full contract (no unverified marker)", () => {
+    const r = unwrapWorkReportEnvelope(
+      ["# Done", fenceEnvelope({ work_report: completed })].join("\n"),
+      FENCE,
+    );
+    expect(r.unverified).toBeUndefined();
+    expect(r.workReport).toEqual(completed);
+    expect(r.deliverable).toBe("# Done");
+  });
+
+  it("the native channels stay strict: no unverified marker, a violation instead", () => {
+    for (const r of [
+      unwrapWorkReportEnvelope("just prose", ACTIVE),
+      unwrapWorkReportEnvelope("[]", ACTIVE),
+      unwrapWorkReportEnvelope(JSON.stringify({ output: "x" }), ACTIVE),
+      unwrapWorkReportEnvelope("# answer", SIDE_TOOL, {}),
+      unwrapWorkReportEnvelope("# answer", SIDE_TOOL, { sideToolReport: { state: "bogus" } }),
+    ]) {
+      expect(r.contractViolation).not.toBeNull();
+      expect(r.unverified).toBeUndefined();
+    }
   });
 
   it("instructed_fence: a needs_input envelope carries required_inputs", () => {
@@ -509,6 +628,41 @@ describe("finalizeAttempt (the unified finalizer matrix)", () => {
     });
     expect(r.outcomeClass).toBe("clean");
     expect(r.workState.state).toBe("completed");
+  });
+
+  it("an instructed footer problem ⇒ clean, unverified work_state with the route's source and reason", () => {
+    const r = finalizeAttempt({
+      ...base,
+      workReportSource: "validated",
+      workReportUnverified: { reason: "footer_missing", detail: "no fenced work_report block" },
+    });
+    expect(r.outcomeClass).toBe("clean");
+    expect(r.reason).toBeNull();
+    expect(r.harnessErrored).toBe(false);
+    expect(r.deliverablePresent).toBe(true);
+    expect(r.workState).toEqual({
+      state: "unverified",
+      source: "validated",
+      unverified_reason: "footer_missing",
+    });
+  });
+
+  it("a valid report outranks a stale unverified marker; a native violation still fails", () => {
+    const completedRun = finalizeAttempt({
+      ...base,
+      workReport: completed,
+      workReportSource: "validated",
+      workReportUnverified: { reason: "footer_missing", detail: "stale" },
+    });
+    expect(completedRun.workState).toEqual({ state: "completed", source: "validated" });
+    const strict = finalizeAttempt({
+      ...base,
+      workReportSource: "constrained",
+      workReportViolation: "final answer is not the JSON work_report envelope",
+      workReportUnverified: null,
+    });
+    expect(strict.outcomeClass).toBe("contract_failure");
+    expect(strict.workState).toEqual({ state: "unverified", source: "constrained" });
   });
 
   it("a completed claim NEVER invents deliverable evidence", () => {

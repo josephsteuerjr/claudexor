@@ -9,7 +9,7 @@ import { HarnessRunSpec, type HarnessEvent } from "@claudexor/schema";
 import { nowIso } from "@claudexor/util";
 import type { HarnessAdapter } from "@claudexor/core";
 import { runDeepScanReducer, type DeepScanReducerDeps } from "./deepScanReducer.js";
-import type { WorkReportEnvelopeMode } from "./attemptFinalize.js";
+import type { WorkReportEnvelopeMode } from "./workReportEnvelope.js";
 import type { RoutedAdapter } from "./orchestrator.js";
 
 /**

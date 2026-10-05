@@ -30,8 +30,8 @@ export function catalogInputLimits(limits: readonly HarnessInputLimit[]): Catalo
 /** WorkReport guidance stays in instructions, outside native turn-text capacity. */
 export function applyWorkEnvelope(
   spec: HarnessRunSpec,
-  workEnvelope: import("./attemptFinalize.js").ResolvedWorkReportEnvelope,
-): import("./attemptFinalize.js").WorkReportEnvelopeMode {
+  workEnvelope: import("./workReportEnvelope.js").ResolvedWorkReportEnvelope,
+): import("./workReportEnvelope.js").WorkReportEnvelopeMode {
   if (workEnvelope.outputSchema !== undefined) spec.output_schema = workEnvelope.outputSchema;
   const instruction = workEnvelope.mode.instruction;
   if (instruction) {

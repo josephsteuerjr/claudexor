@@ -274,13 +274,15 @@ import { dominantHarnessFailureCategory, harnessFailureNextActions } from "./har
 import {
   finalizeAttempt,
   readOnlyNoSuccessTerminal,
-  resolveWorkReportEnvelope,
   unrecoveredToolErrorFailure,
-  unwrapWorkReportEnvelope,
   webEvidenceFailure,
+} from "./attemptFinalize.js";
+import {
+  resolveWorkReportEnvelope,
+  unwrapWorkReportEnvelope,
   type ResolvedWorkReportEnvelope,
   type WorkReportEnvelopeMode,
-} from "./attemptFinalize.js";
+} from "./workReportEnvelope.js";
 import {
   buildContinuationPacket,
   decideContinuation,
@@ -2821,6 +2823,7 @@ export class Orchestrator {
       workReport: unwrapped.workReport,
       workReportSource: unwrapped.source,
       workReportViolation: unwrapped.contractViolation,
+      workReportUnverified: unwrapped.unverified ?? null,
       contextTerminalExhausted: telemetry.contextExhausted,
     });
     harnessErrored = finalized.harnessErrored;
@@ -6884,6 +6887,7 @@ export class Orchestrator {
         workReport: roUnwrapped.workReport,
         workReportSource: roUnwrapped.source,
         workReportViolation: roUnwrapped.contractViolation,
+        workReportUnverified: roUnwrapped.unverified ?? null,
         contextTerminalExhausted: telemetry.contextExhausted,
       });
       // A broken WorkReport contract is a hard failure ONLY when the finalizer

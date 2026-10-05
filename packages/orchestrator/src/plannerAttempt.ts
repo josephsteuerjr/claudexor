@@ -27,12 +27,14 @@ import { appendLine, redactSecrets, safeInvoke } from "@claudexor/util";
 import {
   finalizeAttempt,
   unrecoveredToolErrorFailure,
-  unwrapWorkReportEnvelope,
   webEvidenceFailure,
   type AttemptOutcomeClass,
+} from "./attemptFinalize.js";
+import {
+  unwrapWorkReportEnvelope,
   type UnwrappedAnswer,
   type WorkReportEnvelopeMode,
-} from "./attemptFinalize.js";
+} from "./workReportEnvelope.js";
 import {
   createAttemptTelemetry,
   observeAttemptTelemetry,
@@ -366,6 +368,7 @@ export async function runPlannerAttempt(
     workReport: planUnwrapped.workReport,
     workReportSource: planUnwrapped.source,
     workReportViolation: planUnwrapped.contractViolation,
+    workReportUnverified: planUnwrapped.unverified ?? null,
     contextTerminalExhausted: telemetry.contextExhausted,
   });
   if (!harnessError && finalized.outcomeClass === "contract_failure") {

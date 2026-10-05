@@ -980,8 +980,10 @@ reports context occupancy, not billable token counts; cumulative USD cost
 is converted to deltas for run spend. Missing/non-USD cost stays unknown.
 Model choices come from `session/new.configOptions` with category `model`,
 or advisory `origin: hint` rows. No live verification stamp is fabricated.
-WorkReport transport is `validated`: the orchestrator supplies and validates
-its fenced final report without native JSON-schema support.
+WorkReport transport is `validated`: the orchestrator asks for and validates
+its fenced final report without native JSON-schema support; a missing or broken
+footer leaves the run succeeded with an `unverified` work_state and a typed
+reason, the complete answer kept (see the WorkReport envelope in ARCHITECTURE).
 
 `recorded-*.jsonl` fixtures in this package are explicitly **synthetic** ACP
 specification and ouroboros#769 scenarios. Tests replay them through real
