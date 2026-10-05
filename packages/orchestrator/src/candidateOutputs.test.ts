@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFileBackedSynthesisInput,
+  candidateOutputSecretRisk,
   candidateOutputsContainSecret,
   collectArtifactDirMedia,
   materializeWinnerOutputs,
@@ -396,7 +397,7 @@ describe("candidate produced-output persistence", () => {
     expect(existsSync(join(attemptDir, "produced", artifactRelativeDir, "third.png"))).toBe(false);
   });
 
-  it("persists no produced media for a secret-refused candidate", () => {
+  it("persists no produced media for an uncaptured candidate", () => {
     const worktree = root("claudexor-refused-output-tree-");
     const attemptDir = root("claudexor-refused-output-attempt-");
     mkdirSync(join(worktree, artifactRelativeDir), { recursive: true });
@@ -418,11 +419,83 @@ describe("candidate produced-output persistence", () => {
       answerText: "![clean](clean.png)",
       persistPatch: false,
       persistProducedMedia: false,
-      record: { attempt_id: "a01", secret_diff_refusal: { reason: "secret_like_output" } },
+      record: { attempt_id: "a01", capture_refusal: { disposition: "manual_cleanup" } },
     });
     expect(produced).toEqual([]);
     expect(existsSync(join(attemptDir, "produced"))).toBe(false);
     expect(writes[0]?.["produced_files"]).toEqual([]);
     expect(writes[0]).not.toHaveProperty("diffstat");
+  });
+
+  it("writes only the saved copy to patch.diff while diffstat comes from the exact diff", () => {
+    const worktree = root("claudexor-copy-output-tree-");
+    const attemptDir = root("claudexor-copy-output-attempt-");
+    // Assembled at runtime so no secret-shaped literal lives in this file.
+    const token = ["sk", "o".repeat(24)].join("-");
+    const exact =
+      "diff --git a/LEAK.txt b/LEAK.txt\nnew file mode 100644\n--- /dev/null\n+++ b/LEAK.txt\n" +
+      `@@ -0,0 +1,2 @@\n+${token}\n+second line\n`;
+    const texts: Record<string, string> = {};
+    const yamls: Record<string, unknown>[] = [];
+    const store = {
+      writeText: (path: string, value: string) => void (texts[path] = value),
+      writeYaml: (_path: string, value: unknown) => yamls.push(value as Record<string, unknown>),
+    } as never;
+
+    // A caller that supplies the saved copy gets exactly that copy on disk...
+    writeCandidateAttemptArtifacts({
+      store,
+      attemptDir,
+      worktreePath: worktree,
+      artifactRelativeDir: null,
+      diff: exact,
+      persistedDiff: "# saved copy\n+[redacted]\n",
+      record: { attempt_id: "a01" },
+    });
+    expect(texts[join(attemptDir, "patch.diff")]).toBe("# saved copy\n+[redacted]\n");
+    expect(yamls[0]?.["diffstat"]).toEqual({ files: 1, additions: 2, deletions: 0 });
+
+    // ...and a caller that forgot it can still never write the exact token.
+    writeCandidateAttemptArtifacts({
+      store,
+      attemptDir,
+      worktreePath: worktree,
+      artifactRelativeDir: null,
+      diff: exact,
+      record: { attempt_id: "a02" },
+    });
+    expect(texts[join(attemptDir, "patch.diff")]).not.toContain(token);
+    expect(texts[join(attemptDir, "patch.diff")]).toContain("+[redacted]");
+  });
+
+  it("skips a secret-like raster but still saves its safe sibling (no whole-candidate refusal)", () => {
+    const worktree = root("claudexor-mixed-output-tree-");
+    const attemptDir = root("claudexor-mixed-output-attempt-");
+    const token = ["sk", "m".repeat(24)].join("-");
+    writeFileSync(join(worktree, "clean.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(
+      join(worktree, "leak.png"),
+      // A zero byte separates the header from the token so the token is a whole word.
+      Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0]), Buffer.from(token)]),
+    );
+    const produced = writeCandidateAttemptArtifacts({
+      store: { writeText: () => undefined, writeYaml: () => undefined } as never,
+      attemptDir,
+      worktreePath: worktree,
+      artifactRelativeDir: null,
+      diff: "",
+      answerText: "![a](clean.png) ![b](leak.png)",
+      record: { attempt_id: "a01" },
+    });
+    expect(produced).toEqual(["clean.png"]);
+    expect(existsSync(join(attemptDir, "produced", "leak.png"))).toBe(false);
+    // The risk projection names exactly the withheld image for the disclosure.
+    expect(
+      candidateOutputSecretRisk({
+        worktreePath: worktree,
+        changedPaths: ["clean.png", "leak.png"],
+        artifactRelativeDir: null,
+      }).riskyPaths,
+    ).toEqual(["leak.png"]);
   });
 });

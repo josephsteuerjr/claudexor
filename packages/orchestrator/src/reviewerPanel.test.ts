@@ -16,9 +16,12 @@ import { resolveAutoReviewerPanel, resolveExplicitReviewerPanel } from "./review
 /**
  * The reviewer effort gate. `reviewerEfforts` and `reviewerPanel[].effort` are
  * OPEN slugs on the wire (a level only means something per harness+model), so the
- * boundary can only refuse a malformed shape. These pin the layer that refuses an
- * unsupported LEVEL: without it an unadvertised effort is dropped by the adapter's
- * normalizer while the review artifact still records it as requested.
+ * boundary can only refuse a malformed shape. These pin the layer that judges the
+ * LEVEL for a reviewer without a native knob: a word its ladder can place (its
+ * own order first, the shared preference order for a word it does not list) is
+ * kept; a harness with no effort controls keeps the preference as omitted and
+ * discloses it; only a word a real ladder cannot place is refused (explicit
+ * panel) or dropped with disclosure (auto panel).
  */
 function reviewerAdapter(
   id: string,
@@ -94,15 +97,40 @@ describe("reviewer effort gate", () => {
     ]);
   });
 
-  it("drops (not forwards) a well-known vendor level this reviewer's ladder does not advertise", async () => {
-    // `ultra` is real elsewhere (codex sol models), just not on this reviewer's
-    // advertised ladder. It must not travel inward to die natively — and the
-    // drop must still resolve a working panel even with NO disclosure sink wired.
-    const specs = await resolveAutoReviewerPanel(deps([claude()]), {
-      reviewerEfforts: { anthropic: "ultra" },
-    });
+  it("KEEPS a shared-vocabulary level this reviewer's ladder does not list — the route places it", async () => {
+    // `ultra` is not on this reviewer's advertised ladder, but the shared
+    // preference order places it (above max), so it is a preference the route
+    // can resolve downward — no longer dropped to null, which used to make the
+    // receipt read as if nothing had been requested (owner decision 2026-10-05).
+    const ignored: string[] = [];
+    const specs = await resolveAutoReviewerPanel(
+      { ...deps([claude()]), onIgnoredSetting: (d) => ignored.push(d) },
+      { reviewerEfforts: { anthropic: "ultra" } },
+    );
     expect(specs).toHaveLength(1);
-    expect(specs[0]?.requestedEffort).toBeNull();
+    expect(specs[0]?.requestedEffort).toBe("ultra");
+    expect(ignored).toEqual([]);
+  });
+
+  it("the AUTO panel keeps a knob-less reviewer's preference as omitted, disclosed — not nulled", async () => {
+    const bare = reviewerAdapter("bare", "cursor", []);
+    const ignored: string[] = [];
+    const specs = await resolveAutoReviewerPanel(
+      { ...deps([bare]), onIgnoredSetting: (d) => ignored.push(d) },
+      { reviewerEfforts: { cursor: "high" } },
+    );
+    expect(specs).toHaveLength(1);
+    // The original preference survives into the reviewer spec (and so into the
+    // run's receipt as requested=high / omitted) instead of being erased.
+    expect(specs[0]?.requestedEffort).toBe("high");
+    expect(ignored).toEqual([
+      "reviewer effort omitted: reviewer harness 'bare' declares no effort controls; " +
+        "the preference 'high' stays in the receipt and no native effort is submitted",
+    ]);
+    // No sink wired: the panel still resolves.
+    expect(
+      await resolveAutoReviewerPanel(deps([bare]), { reviewerEfforts: { cursor: "high" } }),
+    ).toHaveLength(1);
   });
 
   it("accepts a legacy reviewer effort the reviewer advertises", async () => {
@@ -194,11 +222,29 @@ describe("reviewer effort gate", () => {
     expect(specs[0]?.requestedEffort).toBe("high");
   });
 
-  it("refuses any reviewer effort when the harness declares no effort controls", async () => {
+  it("keeps the review when the harness declares no effort controls: omitted, disclosed", async () => {
+    // This used to refuse the WHOLE explicit panel — a preference the harness
+    // simply has no knob for cost the owner the review (owner decision
+    // 2026-10-05). The preference now stays in the receipt and nothing is sent.
     const bare = reviewerAdapter("bare", "openai", []);
+    const ignored: string[] = [];
+    const specs = await resolveExplicitReviewerPanel(
+      { ...deps([bare]), onIgnoredSetting: (d) => ignored.push(d) },
+      [{ harness: "bare", effort: "high" }],
+    );
+    expect(specs).toMatchObject([{ requestedEffort: "high" }]);
+    expect(ignored).toEqual([expect.stringMatching(/reviewer effort omitted:.*'bare' declares/)]);
+    // No new refusal for an unknown word on a knob-less route either: it is
+    // omitted like any other, and the disclosure notes it is not a known word.
+    ignored.length = 0;
     await expect(
-      resolveExplicitReviewerPanel(deps([bare]), [{ harness: "bare", effort: "high" }]),
-    ).rejects.toThrow(/harness declares no effort controls/);
+      resolveExplicitReviewerPanel({ ...deps([bare]), onIgnoredSetting: (d) => ignored.push(d) }, [
+        { harness: "bare", effort: "turbo" },
+      ]),
+    ).resolves.toMatchObject([{ requestedEffort: "turbo" }]);
+    expect(ignored).toEqual([
+      expect.stringContaining("'turbo' is outside the shared preference order (none < minimal"),
+    ]);
   });
 
   it("preserves a known preference for resolution against the final reviewer model", async () => {
@@ -225,14 +271,23 @@ describe("reviewer effort gate", () => {
     expect(specs[0]?.requestedEffort).toBe("ultra");
   });
 
-  it("falls back to the harness ladder (and says so) for a model with no recorded ladder", async () => {
+  it("falls back to the harness ladder for a model with no recorded ladder: placeable is kept, a typo says so", async () => {
     const codexish = () =>
       reviewerAdapter("codexish", "openai", ["low", "medium", "high"], {
         knownModels: ["m-new"],
       });
+    // `ultra` is listed by no ladder here; the shared preference order places it
+    // above `high`, so the route can clamp it — the panel keeps the preference
+    // instead of refusing the review (this was a refusal before 2026-10-05).
     await expect(
       resolveExplicitReviewerPanel(deps([codexish()]), [
         { harness: "codexish", model: "m-new", effort: "ultra" },
+      ]),
+    ).resolves.toMatchObject([{ requestedModel: "m-new", requestedEffort: "ultra" }]);
+    // A word neither order places is still refused, naming the fallback ladder.
+    await expect(
+      resolveExplicitReviewerPanel(deps([codexish()]), [
+        { harness: "codexish", model: "m-new", effort: "ulta" },
       ]),
     ).rejects.toThrow(/harness-wide advertised ladder — no per-model ladder recorded for 'm-new'/);
   });
@@ -651,16 +706,23 @@ describe("reviewer manifest truth under the harness's absence declaration (INV-1
 });
 
 it.each(["cursor-grok-4.6-xhigh", "gemini-3.7-flash-high"])(
-  "preserves compound route %s and refuses a conflicting separate knob",
+  "preserves compound route %s; a separate effort beside it is omitted and disclosed, not refused",
   async (slug) => {
     const adapter = reviewerAdapter("compound", "openai", [], { knownModels: [slug] });
     expect(
       await resolveExplicitReviewerPanel(deps([adapter]), [{ harness: "compound", model: slug }]),
     ).toMatchObject([{ requestedModel: slug, requestedEffort: null }]);
-    await expect(
-      resolveExplicitReviewerPanel(deps([adapter]), [
-        { harness: "compound", model: slug, effort: "low" },
-      ]),
-    ).rejects.toThrow(/does not support requested effort/);
+    // The harness declares no effort controls, so the preference cannot be
+    // applied here; the route id is forwarded exactly as written and the review
+    // runs. (Selecting a sibling model variant from the preference is separate,
+    // owner-decided follow-up work; this gate never rewrites a model id.)
+    const ignored: string[] = [];
+    expect(
+      await resolveExplicitReviewerPanel(
+        { ...deps([adapter]), onIgnoredSetting: (d) => ignored.push(d) },
+        [{ harness: "compound", model: slug, effort: "low" }],
+      ),
+    ).toMatchObject([{ requestedModel: slug, requestedEffort: "low" }]);
+    expect(ignored).toEqual([expect.stringContaining("declares no effort controls")]);
   },
 );

@@ -63,6 +63,21 @@ fixtures:
       delta_messages: 0
       tool_error_results: 0
       typed_rate_limit: false
+  # MULTI-AGENT stream, synthetic, shaped after a live incident on codex-cli
+  # 0.156.1 (proactive multi-agent mode, 2026-10-04): the root thread spawned a
+  # sub-agent whose thread emits its own `turn/started`, items, token usage and
+  # `turn/completed` on the SAME stdio stream. The child settles FIRST with the
+  # text `[]\nNO_FINDINGS` (and a failed command), the root keeps working and
+  # ends with its valid `{work_report, output}` envelope. Frame shapes follow
+  # recorded-steer-0.156.1.jsonl; request ids 1..6 are the adapter's own
+  # (initialize, thread/start, turn/start, thread/read, thread/goal/get,
+  # thread/backgroundTerminals/list), so conformance.test.ts replays the file
+  # 1:1 through runCodexAppServer. Pins root-thread ownership of finality: the
+  # final is the root envelope, `completed.native_turn_id` is the root turn, the
+  # child's command failure and text are timeline evidence only, and the
+  # child's tokens stay in the usage total.
+  app-server/synthetic-multi-agent-0.156.1.jsonl:
+    source: synthetic
   app-server/recorded-run-0.156.1.jsonl:
     source: recorded
     cli_version: "0.156.1"

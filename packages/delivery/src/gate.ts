@@ -67,7 +67,17 @@ export interface ApplyGateInput {
    * saying it is not done). Absent/`completed`/`unverified` never veto.
    */
   workState?: WorkState | null;
+  /**
+   * INV-062: the saved `final/patch.diff` is a display-only copy (secret-like
+   * strings hidden) and its exact bytes could not be produced. `patch` then
+   * holds that copy, which must never be applied or advertised as applyable.
+   */
+  exactPatchUnavailable?: boolean;
 }
+
+/** One wording for every surface that answers `patch_exact_bytes_unavailable`. */
+export const EXACT_PATCH_UNAVAILABLE_MESSAGE =
+  "This change can't be applied from Claudexor: its saved patch copy hides secret-like strings and the exact patch bytes are unavailable (patch_exact_bytes_unavailable). The project files were not touched.";
 
 /**
  * Honest, axes-specific guidance for why a run is not applyable and what
@@ -211,12 +221,15 @@ export function validateApplyGate(input: ApplyGateInput): string | null {
   const fv = input.finalVerify !== undefined ? input.finalVerify : input.decision.final_verify;
   const verifyDeferred =
     input.deferFinalVerify === true && input.finalVerify === undefined && fv == null;
-  if (!fv?.attempted && !verifyDeferred) {
-    // A blocked run authorized by a hash-bound override skips FinalVerifier by
-    // construction; the read-only projection reports deliverable and the fresh
-    // check runs at apply (QA-032). The apply path supplies `finalVerify` and so
-    // never takes this branch — an unattempted fresh verify there still refuses.
-    if (isOverrideVerifyPending(input)) return null;
+  // A blocked run authorized by a hash-bound override skips FinalVerifier by
+  // construction; the read-only projection reports deliverable and the fresh
+  // check runs at apply (QA-032). The apply path supplies `finalVerify` and so
+  // never takes this exemption — an unattempted fresh verify there still
+  // refuses. The exemption waives ONLY the missing verifier: the work-product
+  // integrity, digest binding, original-project and confinement checks below
+  // still run, so a saved copy that is not the recorded exact patch can never
+  // be reported deliverable through the override path.
+  if (!fv?.attempted && !verifyDeferred && !isOverrideVerifyPending(input)) {
     return "This change needs a fresh final check before it can be applied.";
   }
   if (fv?.attempted) {
@@ -242,6 +255,7 @@ export function validateApplyGate(input: ApplyGateInput): string | null {
     return "only a complete copied files result can be applied";
   if (!files && input.workProduct.kind !== "patch")
     return `work product kind ${input.workProduct.kind} is not applyable as a patch`;
+  if (!files && input.exactPatchUnavailable) return EXACT_PATCH_UNAVAILABLE_MESSAGE;
   const recorded = input.workProduct.meta?.[files ? "manifest_sha256" : "patch_sha256"];
   if (typeof recorded !== "string" || recorded.length === 0)
     return files

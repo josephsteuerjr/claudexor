@@ -1,4 +1,9 @@
-import { ProcessingReceipt, ProcessingCostBasis, type HarnessRunSpec } from "@claudexor/schema";
+import {
+  EffortResolution,
+  ProcessingReceipt,
+  ProcessingCostBasis,
+  type HarnessRunSpec,
+} from "@claudexor/schema";
 import type {
   HarnessAdapter,
   HarnessProcessingSpec,
@@ -6,12 +11,14 @@ import type {
 } from "./adapter.js";
 
 /** Shared fallback for adapters without service controls. Never changes model,
- * effort, credential route, or output policy. Native observations stay unknown. */
+ * effort, credential route, or output policy. Native observations stay unknown.
+ * An adapter whose effort rides the model id returns its effort receipt from
+ * the same call; it is validated here and travels with the prepared result. */
 export async function prepareHarnessProcessing(
   adapter: HarnessAdapter,
   spec: HarnessProcessingSpec,
 ): Promise<PreparedHarnessProcessing> {
-  const prepared = adapter.prepareProcessing
+  const prepared: PreparedHarnessProcessing = adapter.prepareProcessing
     ? await adapter.prepareProcessing(spec)
     : {
         model: spec.model,
@@ -31,6 +38,7 @@ export async function prepareHarnessProcessing(
     model: prepared.model,
     receipt,
     costBasis: ProcessingCostBasis.parse(prepared.costBasis),
+    ...(prepared.effort ? { effort: EffortResolution.parse(prepared.effort) } : {}),
   };
 }
 

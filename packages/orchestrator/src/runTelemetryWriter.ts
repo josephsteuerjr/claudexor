@@ -150,6 +150,12 @@ export function writeRunTelemetryArtifact(args: {
           finalRecord ??
           records[0];
         const requestedModel = disclosing?.requested_model ?? null;
+        // Only model-id effort carriers put the sent model in submittedNative;
+        // other adapters use it for service tiers or flags such as fastMode.
+        const sentModel =
+          disclosing?.effort_resolution?.parameter === "--model"
+            ? (disclosing.processing?.submittedNative ?? requestedModel)
+            : requestedModel;
         const observedModel = disclosing?.observed_model ?? null;
         // The requested route is the RESOLVED per-harness preference of the
         // disclosing lane (run-level scalar → per-harness config → global),
@@ -171,8 +177,8 @@ export function writeRunTelemetryArtifact(args: {
           profile_id: disclosing?.profile_id ?? null,
           // Typed mismatch, only when BOTH sides are known and differ.
           model_mismatch:
-            requestedModel !== null && observedModel !== null && requestedModel !== observedModel
-              ? { requested: requestedModel, observed: observedModel }
+            sentModel !== null && observedModel !== null && sentModel !== observedModel
+              ? { requested: sentModel, observed: observedModel }
               : null,
         };
       })(),

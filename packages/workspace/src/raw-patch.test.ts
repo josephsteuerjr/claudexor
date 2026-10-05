@@ -3,9 +3,18 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { RawContextPacket, RawGitPatchEnvelope, type RawPatchRefusalCode } from "@claudexor/schema";
+import {
+  RawContextPacket,
+  RawGitPatchEnvelope,
+  type HarnessEvent,
+  type RawPatchRefusalCode,
+} from "@claudexor/schema";
 import { sha256 } from "@claudexor/util";
-import { consumeRawPatchEnvelope, RawPatchRefusalError } from "./raw-patch.js";
+import {
+  captureRawPatchEnvelope,
+  consumeRawPatchEnvelope,
+  RawPatchRefusalError,
+} from "./raw-patch.js";
 import { rmSync as __rmSyncReap } from "node:fs";
 import { afterAll as __afterAllReap } from "vitest";
 
@@ -158,6 +167,57 @@ const refusalCases: Array<{
     },
   },
 ];
+
+describe("raw patch envelope capture (INV-062)", () => {
+  // Assembled at runtime so no secret-shaped literal lives in this file.
+  const tokenLike = ["ghp", "y".repeat(24)].join("_");
+  const patch = `diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+${tokenLike}\n`;
+  const event = (): HarnessEvent =>
+    ({
+      type: "patch_produced",
+      session_id: "s",
+      ts: "t",
+      patch_envelope: {
+        schema_version: 1,
+        context_packet_hash: "sha256:packet",
+        base_tree_sha: "tree",
+        patch,
+        patch_hash: sha256(patch),
+        touched_paths: [{ path: "a.txt", expected_blob_oid: "blob" }],
+      },
+    }) as HarnessEvent;
+
+  it("keeps an envelope whose patch holds secret-like content instead of refusing it early", () => {
+    const captured = captureRawPatchEnvelope(true, null, event());
+    expect(captured?.patch).toBe(patch);
+    expect(captured?.patch_hash).toBe(sha256(patch));
+  });
+
+  it("still refuses a disabled lane, a second envelope and a missing envelope", () => {
+    const refusal = (run: () => unknown) => {
+      try {
+        run();
+        return null;
+      } catch (error) {
+        return error instanceof RawPatchRefusalError ? error.code : String(error);
+      }
+    };
+    expect(refusal(() => captureRawPatchEnvelope(false, null, event()))).toBe(
+      "raw_patch_missing_evidence",
+    );
+    const first = captureRawPatchEnvelope(true, null, event());
+    expect(refusal(() => captureRawPatchEnvelope(true, first, event()))).toBe(
+      "raw_patch_missing_evidence",
+    );
+    expect(
+      refusal(() => captureRawPatchEnvelope(true, null, { ...event(), patch_envelope: undefined })),
+    ).toBe("raw_patch_missing_evidence");
+    // Non-patch events pass the previous value through untouched.
+    expect(
+      captureRawPatchEnvelope(true, first, { type: "message", session_id: "s", ts: "t" }),
+    ).toBe(first);
+  });
+});
 
 describe("raw patch envelope consumer", () => {
   it("checks against the exact base and materializes only in the isolated worktree", async () => {

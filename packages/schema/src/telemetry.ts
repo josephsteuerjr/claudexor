@@ -558,9 +558,9 @@ export const RunTelemetry = z
             "Credential profile the deciding attempt ran under; null = engine-default credentials.",
           ),
         /** Typed model mismatch on the deciding attempt (Quiz-2a): the engine
-         * SENT requested but the stream DISCLOSED observed. Null when they
-         * match or either side is unknown — never inferred. Distinct from the
-         * reviewer-panel same_model_fallback route proof. */
+         * SENT `requested` (the processing receipt's final native id when one
+         * was prepared, else the hint) but the stream DISCLOSED observed. Null
+         * when they match or either side is unknown — never inferred. */
         model_mismatch: z
           .object({
             requested: z.string(),

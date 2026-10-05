@@ -8,15 +8,26 @@ import { NonBlankString } from "./primitives.js";
  * its own consumers — adapters, the CLI, the MCP tool schema and the macOS
  * picker all resolve through here rather than copying a level list.
  *
- * There is deliberately NO static rank table here. Vendors already return
- * their effort levels ORDERED weakest→strongest (codex `model/list` →
- * `supportedReasoningEfforts` is an ordered array per model; `claude --help`
- * prints the `--effort` values in order), and that order is part of the parsed
- * vendor response. Ordering authority is therefore the vendor's own advertised
- * sequence: a model's ladder is its own ordered list, a harness's ladder is
+ * ORDERING DOCTRINE. The vendor's own advertised order is the primary rank
+ * authority: vendors already return their effort levels ORDERED
+ * weakest→strongest (codex `model/list` → `supportedReasoningEfforts` is an
+ * ordered array per model; `claude --help` prints the `--effort` values in
+ * order), so a model's ladder is its own ordered list, a harness's ladder is
  * the positional merge of its models' lists (`mergeEffortLadders`), and a
- * level's rank is its position in that merged list. A second, hand-maintained
- * copy of that knowledge can only ever disagree with the first.
+ * level's rank is its position in that merged list. A brand-new vendor level
+ * therefore sorts correctly with no code change.
+ *
+ * `EFFORT_PREFERENCE_ORDER` below is NOT a second copy of that knowledge and
+ * never replaces it. It is the shared vocabulary every Claudexor client speaks
+ * (Ouroboros' `EFFORT_SCALE` is the same row), consulted ONLY to place a
+ * requested word that the route's own vendor ladder does not list at all
+ * (`ultra` on a Claude binary that stops at `max`, `none` on a vendor whose
+ * ladder starts at `low`). Placing a word is not a claim that the vendor
+ * supports it, nor that two vendors' words of the same name are of equal
+ * quality: the resolver still submits only a level the route actually
+ * advertises, and the receipt says the shared order did the placing. Where the
+ * vendor lists contradict the shared order, the vendor wins inside its own
+ * ladder and the shared fallback is unavailable (never an invented rank).
  */
 
 /** Longest effort slug accepted on the wire. */
@@ -30,10 +41,11 @@ export const EFFORT_HINT_PATTERN = /^[a-z0-9]+(?:[_-][a-z0-9]+)*$/;
  * `ReasoningEffort` as "a non-empty reasoning effort value advertised by the
  * model"). Adapters advertise the subset they actually accept per (harness,
  * model); the shared normalizer passes an advertised level through verbatim,
- * resolves a known preference downward (or to the known minimum)
- * inside the vendor's own order, and REFUSES a level the merged ladder has
- * never seen — so a vendor level newer than this repo works with no code
- * change, and a typo is never silently downgraded.
+ * resolves a known preference downward (or to the known minimum) inside the
+ * vendor's own order, falls back to `EFFORT_PREFERENCE_ORDER` only to place a
+ * word the vendor ladder does not list, and REFUSES a word neither places — so
+ * a vendor level newer than this repo works with no code change, and a typo is
+ * never silently downgraded.
  */
 export const EffortHint = z
   .string()
@@ -44,9 +56,28 @@ export const EffortHint = z
     "effort must be a lowercase slug (letters, digits, single - or _ separators)",
   )
   .describe(
-    "Cross-harness reasoning-effort level as a lowercase slug (open vocabulary, mirroring the vendor contract); adapters advertise the levels they accept per model, ordered weakest to strongest by the vendor itself, and a shared normalizer passes advertised levels through, clamps inside the vendor order, and refuses levels the advertised ladder has never seen.",
+    "Cross-harness reasoning-effort level as a lowercase slug (open vocabulary, mirroring the vendor contract); adapters advertise the levels they accept per model, ordered weakest to strongest by the vendor itself, and a shared normalizer passes advertised levels through, clamps inside the vendor order, places a word the vendor order lacks by the shared preference order (none < minimal < low < medium < high < xhigh < max < ultra) onto an advertised level, and refuses words neither order places.",
   );
 export type EffortHint = z.infer<typeof EffortHint>;
+
+/**
+ * The shared preference order every Claudexor client speaks, weakest→strongest.
+ * A FALLBACK placement aid, not a rank table (see the doctrine above): the
+ * resolver consults it only for a word the route's own vendor ladder does not
+ * list, submits only vendor-advertised levels, and names the placement in the
+ * receipt. Listing a word here declares neither vendor support nor equal
+ * quality across vendors. Same row as Ouroboros' `EFFORT_SCALE`.
+ */
+export const EFFORT_PREFERENCE_ORDER: readonly EffortHint[] = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+];
 
 /** One receipt for preparation and independent provider observation. Dispatch
  * remains the operation/session lifecycle's fact, never inferred from this. */

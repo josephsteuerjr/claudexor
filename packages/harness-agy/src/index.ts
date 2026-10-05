@@ -4,6 +4,7 @@ import type {
   HarnessCapabilityProfile,
   HarnessEvent,
   HarnessManifest,
+  HarnessModel,
   HarnessRunSpec,
 } from "@claudexor/schema";
 import {
@@ -13,7 +14,7 @@ import {
   HarnessCapabilityProfile as HarnessCapabilityProfileSchema,
   HarnessManifest as HarnessManifestSchema,
 } from "@claudexor/schema";
-import type { DoctorSpec, HarnessAdapter } from "@claudexor/core";
+import type { DoctorSpec, HarnessAdapter, HarnessModelSpec } from "@claudexor/core";
 import {
   HarnessUnavailableError,
   harnessPlatform,
@@ -33,6 +34,7 @@ import {
 } from "./profile.js";
 import { AGY_VENDOR_CLI_VERSION } from "./vendor-cli-version.js";
 import { listAgyModels } from "./models.js";
+import { applyAgyRunProcessing, prepareAgyProcessing } from "./processing.js";
 // The package publishes only what other packages consume. The profile probe,
 // the route resolver and the stream parser are reached through the adapter
 // this file returns, so re-exporting them would be a dead public surface.
@@ -73,8 +75,10 @@ async function detectVersion(): Promise<string | null> {
 }
 
 /** Historical menu hints; account-specific presence comes from `models()`.
- * Effort rides the vendor slug and the separate effort ladder stays empty.
- * New Claude ids come from the profile listing instead of extending this
+ * Effort rides the vendor slug: the separate effort ladder stays empty and an
+ * effort preference selects the listed level variant of the model's family
+ * from the pinned account's LIVE list only (processing.ts) — these hints never
+ * authorize a rewrite. New Claude ids come from the profile listing instead of extending this
  * version-stamped fallback. Inherited Gemini 3.8 hints were recorded on
  * 2026-10-03 while the binary self-updated from 1.1.13 to 1.2.16, so those
  * additions did not re-verify the fixture pin. Older 4.6 routes remain hints:
@@ -223,8 +227,13 @@ export function createAgyAdapter(options: AgyAdapterOptions = {}): HarnessAdapte
       if (!needsPrivatePerProfileKeychain(AGY_CAPABILITY_PROFILE, platform)) return;
       prepareAgyProfileKeychain(home, { platform });
     });
+  const listModels = (spec: HarnessModelSpec) => listAgyModels(spec, prepareProfileKeychain);
   return {
     id: "agy",
+    // The level is a token of the model id: `prepareProcessing` selects the
+    // listed variant of the requested model's family from the pinned
+    // account's live inventory and returns the effort receipt with it.
+    effortParameter: "--model",
     capabilityProfile: AGY_CAPABILITY_PROFILE,
 
     async discover(): Promise<HarnessManifest> {
@@ -259,7 +268,8 @@ export function createAgyAdapter(options: AgyAdapterOptions = {}): HarnessAdapte
           // force a SECOND turn per run (PLAN §1.2e) and stays off until the
           // owner opts in.
           work_report_transport: "validated",
-          // Effort rides the model slug (`-high`), not a flag (Л-21).
+          // Effort rides the model slug (`-high`), not a flag (Л-21): an effort
+          // preference selects the listed slug variant at preparation.
           effort_levels: [],
           model_inventory_absence: "advisory",
           known_models: [...AGY_KNOWN_MODELS],
@@ -283,7 +293,11 @@ export function createAgyAdapter(options: AgyAdapterOptions = {}): HarnessAdapte
           origin: "hint" as const,
         }));
       }
-      return listAgyModels(spec, prepareProfileKeychain);
+      return listModels(spec);
+    },
+
+    prepareProcessing(spec) {
+      return prepareAgyProcessing(spec, listModels);
     },
 
     async doctor(spec: DoctorSpec): Promise<ConformanceReport> {
@@ -387,11 +401,11 @@ export function createAgyAdapter(options: AgyAdapterOptions = {}): HarnessAdapte
     },
 
     run(spec: HarnessRunSpec): AsyncIterable<HarnessEvent> {
-      return runAgy(spec, prepareProfileKeychain);
+      return runAgy(spec, prepareProfileKeychain, listModels);
     },
 
     review(spec: HarnessRunSpec): AsyncIterable<HarnessEvent> {
-      return runAgy(spec, prepareProfileKeychain);
+      return runAgy(spec, prepareProfileKeychain, listModels);
     },
 
     // INV-135: pinned routing is admitted by THIS probe (there is no default
@@ -414,6 +428,7 @@ export function createAgyAdapter(options: AgyAdapterOptions = {}): HarnessAdapte
 async function* runAgy(
   spec: HarnessRunSpec,
   prepareProfileKeychain: (home: string, platform?: NodeJS.Platform) => void,
+  listModels: (spec: HarnessModelSpec) => Promise<HarnessModel[]>,
 ): AsyncIterable<HarnessEvent> {
   const input = promptWithInstructions(spec);
   if (!input) {
@@ -473,7 +488,12 @@ async function* runAgy(
   // data dir instead of the workspace (live-proven §1.2d).
   args.push("--add-dir", spec.cwd);
   args.push(...accessArgs(spec.access));
-  if (spec.model_hint) args.push("--model", spec.model_hint);
+  // ONE prepared result: the id sent is the processing receipt's
+  // submittedNative (the effort-selected family variant); spec.model_hint
+  // stays the caller's requested id.
+  const prepared = await applyAgyRunProcessing(spec, listModels);
+  spec = prepared.spec;
+  if (prepared.nativeModel) args.push("--model", prepared.nativeModel);
   // INV-137: the vendor conversation id is the resumable native session.
   if (spec.resume_session_id) args.push("--conversation", spec.resume_session_id);
 
@@ -492,6 +512,10 @@ async function* runAgy(
           ev.credential_route = "vendor_native";
           ev.credential_source = "native_session";
           ev.credential_profile_id = profile.profile_id;
+          if (spec.processing) {
+            ev.processing = spec.processing;
+            ev.processing_cost_basis = spec.processing_cost_basis;
+          }
         }
       }
       return out;

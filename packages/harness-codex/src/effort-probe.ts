@@ -12,10 +12,9 @@ import {
  * or malformed answer falls back to the recorded snapshot below.
  */
 import { spawn } from "node:child_process";
-import type { HarnessEvent, HarnessRunSpec, ModelEffortCapability } from "@claudexor/schema";
+import type { EffortResolution, ModelEffortCapability } from "@claudexor/schema";
 import { EffortHint, effortLevelsForModel, mergeEffortLadders } from "@claudexor/schema";
-import { effortRankLadder, resolveEffort } from "@claudexor/core";
-import { nowIso } from "@claudexor/util";
+import { effortLadders, resolveEffortEvidence } from "@claudexor/core";
 import { readCodexProcessingModels } from "./processing.js";
 import type { ProcessingCapability, HarnessModel } from "@claudexor/schema";
 import { BIN, probeEnv } from "./missing-cli.js";
@@ -436,40 +435,52 @@ export async function codexEffortsForEnv(
   return await codexEffortCapability(deps.probeEfforts, deps.nowMs, BIN, probeEnv(envPatch));
 }
 
-/**
- * Internal projection for arg builders; the run emits the shared typed receipt.
- */
+/** The ONE effort result of a codex route: arg builders send `resolution.submitted`,
+ * the run records `resolution`, and the disclosure seams (effort-gate.ts) describe it. */
 export interface CodexEffortResolution {
-  /** The level to send, or null when no flag should be sent at all. */
-  effort: EffortHint | null;
-  /** True when `effort` differs from the request — the merged vendor order clamped it. */
-  clamped: boolean;
+  resolution: EffortResolution;
   /** The model whose advertised ladder decided this (the hint, or the catalog default). */
   effectiveModel: string | null;
 }
 
 /**
- * The effort value to send for one (model, requested) pair: advertised passes
- * through verbatim, a level a SIBLING model advertises clamps inside the merged
- * vendor order (`ultra` on gpt-5.4 → `xhigh` because the merged codex ladder
- * places it), anything else sends no flag at all.
- *
- * Inconsistent/incomparable vendor lists cannot authorize a substitution.
+ * The effort receipt for one (model, requested) pair: advertised passes through
+ * verbatim; a level a SIBLING model advertises clamps inside the merged vendor
+ * order (`ultra` on gpt-5.4 → `xhigh`, because the merged codex ladder places
+ * it); a word NO codex model lists is placed by the shared preference order onto
+ * the model's own ladder (`none` → `low`, `ultra` on a catalog that stops at
+ * `xhigh` → `xhigh`), which the receipt's `reason` states; a word neither order
+ * places is rejected and sends no flag. Contradicting vendor lists authorize no
+ * substitution at all. `provenance` is the run's (where its catalog came from,
+ * and whether a snapshot fallback is untrusted on this CLI version — nothing is
+ * submitted then); pure arg-shape callers keep the default.
  */
 export function codexEffortResolution(
   catalog: CodexEffortCatalog,
   model: string | null | undefined,
   requested: EffortHint | null | undefined,
+  provenance: { source: EffortResolution["source"]; untrusted: boolean } = {
+    source: "live_probe",
+    untrusted: false,
+  },
 ): CodexEffortResolution {
-  const { effectiveModel, advertised, ladder, unverifiable } = codexEffortInputs(catalog, model);
-  const check = resolveEffort(requested, unverifiable ? [] : advertised, ladder);
-  if (check.status !== "ok") return { effort: null, clamped: false, effectiveModel };
-  return { effort: check.effort, clamped: check.clamped, effectiveModel };
+  const { effectiveModel, advertised, ladders, unverifiable } = codexEffortInputs(catalog, model);
+  const resolution = resolveEffortEvidence(
+    requested,
+    advertised,
+    ladders,
+    provenance.source,
+    "model_reasoning_effort",
+    unverifiable || provenance.untrusted,
+  );
+  return { resolution, effectiveModel };
 }
 
-/** Shared capability inputs for arg builders and the typed run receipt. */
-export function codexEffortInputs(catalog: CodexEffortCatalog, model: string | null | undefined) {
-  const merged = mergeEffortLadders(Object.values(catalog.models).map((entry) => entry.levels));
+/** Capability inputs of one (catalog, model) pair: what the final model accepts
+ * and the two rank orders a request may be placed along (vendor first). */
+function codexEffortInputs(catalog: CodexEffortCatalog, model: string | null | undefined) {
+  const lists = Object.values(catalog.models).map((entry) => entry.levels);
+  const merged = mergeEffortLadders(lists);
   // Final model identity narrows accepted values, including known empty arrays.
   // Missing metadata on a listed model cannot borrow a sibling's capability;
   // a genuinely unlisted advisory model retains the existing union fallback.
@@ -488,105 +499,20 @@ export function codexEffortInputs(catalog: CodexEffortCatalog, model: string | n
         },
         effectiveModel,
       ));
-  return {
-    effectiveModel,
-    advertised,
-    unverifiable,
-    ladder: effortRankLadder(Object.values(catalog.models).map((entry) => entry.levels)),
-  };
+  return { effectiveModel, advertised, unverifiable, ladders: effortLadders(lists) };
 }
 
 /**
- * The level the arg builder should emit for one (model, requested) pair, or
- * null when no flag should be sent. Thin projection of
- * `codexEffortResolution`; the run-side disclosure seams read the full
- * resolution so a clamp or a drop is never silent.
+ * The level an arg builder emits for one (model, requested) pair, or null when
+ * no flag should be sent: `submitted` of `codexEffortResolution` — the same
+ * function the run's receipt comes from. A run hands its builders the receipt's
+ * own `submitted`; this projection serves arg-shape callers that have only a
+ * catalog (the recorded snapshot by default).
  */
 export function codexEffortFor(
-  catalog: CodexEffortCatalog,
+  catalog: CodexEffortCatalog = CODEX_EFFORT_SNAPSHOT,
   model: string | null | undefined,
   requested: EffortHint | null | undefined,
 ): EffortHint | null {
-  return codexEffortResolution(catalog, model, requested).effort;
-}
-
-/**
- * The INV-105 disclosure for an effort the RUN itself could not honor, or null
- * when nothing was dropped. Preflight validates against the manifest — the
- * DEFAULT account's catalog — but the adapter resolves against the catalog for
- * the env the child actually runs in (profile / API-key homes have their own
- * accounts), so a level can pass preflight and still resolve to "send no flag"
- * here. Without this event that run silently executed at the vendor default;
- * the payload rides the same `ignored_settings` channel governance uses, so
- * the timeline renders the same warning either way.
- */
-export function codexEffortIgnoredEvent(
-  catalog: CodexEffortCatalog,
-  spec: Pick<HarnessRunSpec, "session_id" | "model_hint" | "effort_hint">,
-): HarnessEvent | null {
-  if (!spec.effort_hint) return null;
-  if (codexEffortFor(catalog, spec.model_hint, spec.effort_hint) !== null) return null;
-  const target = spec.model_hint ?? catalog.defaultModel;
-  // An EMPTY catalog is the version-gated snapshot distrust case
-  // (`codexCatalogForRun`): the live probe could not answer and the recorded
-  // snapshot belongs to a different CLI version, so the honest statement is
-  // "unverifiable", not "not accepted".
-  const detail =
-    Object.keys(catalog.models).length > 0
-      ? `effort=${spec.effort_hint} (not accepted by the codex catalog resolved for this run's ` +
-        `environment${target ? ` on model ${target}` : ""}; no effort flag is prepared; the vendor default is left unspecified)`
-      : `effort=${spec.effort_hint} (could not be verified against the installed codex CLI: ` +
-        "the live model/list probe could not answer, and the recorded snapshot was captured " +
-        `from CLI ${CODEX_EFFORT_SNAPSHOT_VERIFIED_AGAINST}, a different version, ` +
-        "so no effort flag is prepared; the vendor default is left unspecified)";
-  return {
-    type: "status",
-    session_id: spec.session_id,
-    ts: nowIso(),
-    text: `[effort] ignored: ${detail}`,
-    payload: { ignored_settings: [detail] },
-  };
-}
-
-/**
- * The INV-105 disclosure for an effort the run CLAMPED, or null when the
- * requested level rode through verbatim (or was dropped — that is
- * `codexEffortIgnoredEvent`'s shape, and the two are mutually exclusive: a
- * drop sends no level, a clamp sends a different one). A clamp is quieter than
- * a drop but just as much a changed setting: `--effort ultra` on gpt-5.4 runs
- * at `xhigh`, and without this event nothing in the timeline said so. The
- * payload rides the same `ignored_settings` channel governance and the drop
- * seam use, so every existing reader renders the same warning.
- */
-/**
- * The one INV-105 seam the run yields: the DROP disclosure or the CLAMP
- * disclosure, whichever applies (they are mutually exclusive by construction —
- * a drop sends no flag, a clamp sends a different one), or null when the
- * requested level rode through verbatim or nothing was requested.
- */
-export function codexEffortDisclosureEvent(
-  catalog: CodexEffortCatalog,
-  spec: Pick<HarnessRunSpec, "session_id" | "model_hint" | "effort_hint">,
-): HarnessEvent | null {
-  return codexEffortIgnoredEvent(catalog, spec) ?? codexEffortClampedEvent(catalog, spec);
-}
-
-export function codexEffortClampedEvent(
-  catalog: CodexEffortCatalog,
-  spec: Pick<HarnessRunSpec, "session_id" | "model_hint" | "effort_hint">,
-): HarnessEvent | null {
-  if (!spec.effort_hint) return null;
-  const resolved = codexEffortResolution(catalog, spec.model_hint, spec.effort_hint);
-  if (!resolved.clamped || resolved.effort === null) return null;
-  const detail =
-    `effort=${spec.effort_hint} (clamped to ${resolved.effort}: the requested level is not ` +
-    `advertised by${resolved.effectiveModel ? ` model ${resolved.effectiveModel}` : " the resolved model"}, ` +
-    `so preparation selected ${resolved.effort}, the resolved supported level)`;
-  return {
-    type: "status",
-    session_id: spec.session_id,
-    ts: nowIso(),
-    text: `[effort] clamped: ${detail}`,
-    payload: { ignored_settings: [detail] },
-  };
+  return codexEffortResolution(catalog, model, requested).resolution.submitted;
 }

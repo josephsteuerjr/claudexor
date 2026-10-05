@@ -163,11 +163,11 @@ export const HarnessCapabilities = z
      * How the harness can carry the D-16 WorkReport envelope (a compiled
      * wrapper over any caller output schema). Consumer: the orchestrator spec
      * build compiles the envelope only for `constrained`/`validated` routes,
-     * and the attempt finalizer demands a report only from them.
+     * and the attempt finalizer demands a report only from `constrained` ones.
      * - `constrained`: a native schema-constrained transport carries it
      *   (codex --output-schema, claude StructuredOutput tool).
-     * - `validated`: no native flag; an instructed terminal metadata block is
-     *   validated (cursor's fenced WorkReport footer on the existing parse path).
+     * - `validated`: no native flag; a requested fenced WorkReport footer is
+     *   validated, and a missing or broken one is disclosed, never a failure.
      * - `unsupported`: the route cannot carry a WorkReport; the work_state axis
      *   stays `unverified` (a disclosed absence, never a failure).
      */

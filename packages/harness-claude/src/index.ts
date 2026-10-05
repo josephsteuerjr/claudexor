@@ -24,7 +24,6 @@ import {
   throwIfEffortRejected,
   interactionChannelFromSpec,
   needsScopedHomeKeychainBridge,
-  normalizeEffort,
   providerScrubEnv,
   runCapture,
   runCliHarness,
@@ -65,7 +64,7 @@ import {
   CLAUDE_EFFORT_SNAPSHOT,
   CLAUDE_EFFORT_SNAPSHOT_VERIFIED_AGAINST,
   claudeRunEffortResolution,
-  claudeEffortLadder,
+  claudeEffortResolution,
   claudeRunPatchPath,
   detectClaudeVersion,
   probeClaudeEffortLevels,
@@ -430,9 +429,14 @@ export function claudeArgsForSpec(
   spec: HarnessRunSpec,
   interactive = false,
   suppressBare = false,
-  /** What the installed CLI advertises; the recorded snapshot by default so
-   * arg-shape callers stay synchronous and the probe stays optional. */
-  advertisedEfforts: readonly EffortHint[] = CLAUDE_EFFORT_SNAPSHOT,
+  /** The run's ONE effort receipt (`submitted`, see claudeRunEffortResolution);
+   * arg-shape callers without a probe resolve against the recorded snapshot
+   * through the same resolver, so they stay synchronous and never diverge. */
+  effort: EffortHint | null = claudeEffortResolution(
+    spec.effort_hint,
+    CLAUDE_EFFORT_SNAPSHOT,
+    "versioned_snapshot",
+  ).submitted,
   instructionsPath?: string,
 ): string[] {
   // Both paths use stdin; the interactive control protocol keeps sole ownership.
@@ -463,14 +467,9 @@ export function claudeArgsForSpec(
   args.push(...claudeProcessingArgs(spec));
   // W-C4 live deltas (engine-gated to single-candidate lanes; parser tags payload.delta).
   if (spec.stream_deltas) args.push("--include-partial-messages");
-  // Use the installed CLI's ladder: pass advertised levels, clamp rankable
-  // preferences, and omit unsupported or unrequested levels.
-  const eff = normalizeEffort(
-    spec.effort_hint,
-    advertisedEfforts,
-    claudeEffortLadder(advertisedEfforts),
-  );
-  if (eff) args.push("--effort", eff);
+  // The flag is the receipt's `submitted`: exact, clamped, or omitted — never a
+  // second resolution against a different ladder.
+  if (effort) args.push("--effort", effort);
   if (spec.max_turns !== null && spec.max_turns > 0)
     args.push("--max-turns", String(spec.max_turns));
   if (spec.instructions?.trim()) {
@@ -734,7 +733,7 @@ async function* runClaude(
         spec,
         interactive,
         useSubscription,
-        effort.advertised,
+        effort.resolution.submitted,
         instructionsPath,
       ),
       spec,

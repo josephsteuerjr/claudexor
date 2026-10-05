@@ -1440,6 +1440,7 @@ describe("mcp daemon body mapping", () => {
         parentRunId: null,
         delegatedFromRunId: null,
         delegation: null,
+        secretLike: null,
         detailProblem: {
           code: problemCode,
           message: `typed ${problemCode}`,

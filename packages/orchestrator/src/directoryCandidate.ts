@@ -18,7 +18,7 @@ import {
 import { type ArtifactStore, type RunPaths } from "@claudexor/artifact-store";
 import { type EventLog } from "@claudexor/event-log";
 import { newId, sha256 } from "@claudexor/util";
-import type { SecretDiffRefusal } from "./secretDiff.js";
+import type { CaptureRefusal } from "./secretDiff.js";
 
 export interface DirectoryCandidate extends CapturedWorkspaceFiles {
   artifactRoot: string;
@@ -47,7 +47,7 @@ export async function captureDirectoryCandidate(input: {
   artifactRoot: string;
   sourceRoot: string;
   observedPaths: string[];
-}): Promise<{ files?: DirectoryCandidate; refusal?: SecretDiffRefusal }> {
+}): Promise<{ files?: DirectoryCandidate; refusal?: CaptureRefusal }> {
   try {
     const files = await input.manager.captureFiles(input.envelope, input.artifactRoot, {
       observedPaths: input.observedPaths,
@@ -64,6 +64,9 @@ export async function captureDirectoryCandidate(input: {
             : "discarded",
         detail:
           "Directory output capture or its sensitive-resource check failed; no file payload was published. Direct effects require inspection, not a fabricated rollback.",
+        // Directory results still fail closed on their content scan (the
+        // per-file manifest has no `withheld` form yet); keep its honest phase.
+        phase: "artifact_security",
       },
     };
   }

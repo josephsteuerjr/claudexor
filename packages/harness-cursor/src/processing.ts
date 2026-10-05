@@ -1,4 +1,4 @@
-import type { HarnessAdapter, HarnessModelSpec } from "@claudexor/core";
+import { selectEffortVariant, type HarnessAdapter, type HarnessModelSpec } from "@claudexor/core";
 import type { HarnessRunSpec, HarnessEvent } from "@claudexor/schema";
 import type { CursorModelLister, CursorEnvMap } from "./models.js";
 import type { CursorEventParser } from "./parse.js";
@@ -34,12 +34,29 @@ export function cursorProcessingModels(models: HarnessModel[]): HarnessModel[] {
   });
 }
 
+/**
+ * ONE prepared result for a Cursor route. The effort preference is applied
+ * FIRST: it selects the listed level variant of the requested model's family
+ * (`-fast`/`thinking` stay in the family key, so the level never switches
+ * fast/standard). The existing fast/standard pair and the paid policy then run
+ * on that selected id exactly as before. `model`, `receipt.submittedNative`
+ * and the `--model` argument are the same value; `effort` is the receipt of the
+ * level choice (`parameter: --model`).
+ */
 export function prepareCursorProcessing(
   preference: ProcessingPreference | undefined,
-  model: string | null,
+  requestedModel: string | null,
   models: HarnessModel[],
   allowPaid = true,
+  effort: string | null = null,
 ) {
+  const level = selectEffortVariant(
+    effort,
+    requestedModel,
+    models.map((item) => item.id),
+    "the account's `cursor-agent --list-models` answer was empty",
+  );
+  const model = level.model;
   const catalog = cursorProcessingModels(models);
   const entry = catalog.find((item) => item.id === model);
   // An existing explicit native Fast model remains deliberate native intent.
@@ -72,7 +89,7 @@ export function prepareCursorProcessing(
     kind: "unknown",
     source: "cursor_cli_has_no_tier_billing_receipt",
   };
-  return { model: selected, receipt, costBasis };
+  return { model: selected, receipt, costBasis, effort: level.effort };
 }
 
 export async function applyCursorRunProcessing(
@@ -82,13 +99,17 @@ export async function applyCursorRunProcessing(
 ) {
   let processing = spec.processing;
   let nativeModel = processing?.submittedNative ?? spec.model_hint;
-  if (!processing && (spec.processing_preference || spec.model_hint?.endsWith("-fast"))) {
+  if (
+    !processing &&
+    (spec.processing_preference || spec.effort_hint || spec.model_hint?.endsWith("-fast"))
+  ) {
     const models = await listModels(env, spec.cwd);
     const prepared = prepareCursorProcessing(
       spec.processing_preference,
       spec.model_hint ?? null,
       models,
       spec.processing_allow_paid,
+      spec.effort_hint,
     );
     processing = spec.processing_preference
       ? prepared.receipt
@@ -123,6 +144,12 @@ export function cursorProcessingMethods(
   return {
     models: async (spec) => cursorProcessingModels(await modelsFor(spec)),
     prepareProcessing: async (spec) =>
-      prepareCursorProcessing(spec.preference, spec.model, await modelsFor(spec), spec.allowPaid),
+      prepareCursorProcessing(
+        spec.preference,
+        spec.model,
+        await modelsFor(spec),
+        spec.allowPaid,
+        spec.effort,
+      ),
   };
 }

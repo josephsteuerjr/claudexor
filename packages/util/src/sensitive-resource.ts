@@ -32,6 +32,9 @@ export interface SensitiveContentDecision {
   readonly action: "allow" | "redact" | "reject";
   readonly containsSensitiveContent: boolean;
   readonly signatures: readonly SensitiveContentSignature[];
+  /** Number of replaced matches; the same pass that redacts also counts, so a
+   * disclosure can name how many strings were hidden without ever echoing one. */
+  readonly matches: number;
   readonly text: string;
 }
 
@@ -229,21 +232,26 @@ export class SensitiveResourcePolicy {
   inspectContent(
     text: string,
     handling: SensitiveContentHandling = "redact",
+    replaceMatch: (match: string) => string = () => this.redactionMarker,
   ): SensitiveContentDecision {
     let redacted = text;
+    let matches = 0;
     const signatures = new Set<SensitiveContentSignature>();
     for (const rule of CONTENT_RULES) {
-      const before = redacted;
-      redacted = redacted.replace(rule.pattern, this.redactionMarker);
-      if (redacted !== before) signatures.add(rule.id);
+      redacted = redacted.replace(rule.pattern, (match) => {
+        matches += 1;
+        signatures.add(rule.id);
+        return replaceMatch(match);
+      });
     }
-    if (signatures.size === 0) {
-      return { action: "allow", containsSensitiveContent: false, signatures: [], text };
+    if (matches === 0) {
+      return { action: "allow", containsSensitiveContent: false, signatures: [], matches, text };
     }
     return {
       action: handling,
       containsSensitiveContent: true,
       signatures: [...signatures],
+      matches,
       // Never echo a matched secret from a policy decision, including a reject
       // decision that a caller might later persist as diagnostic evidence.
       text: redacted,

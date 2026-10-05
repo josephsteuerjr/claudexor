@@ -174,47 +174,58 @@ describe("codex adapter conformance fixtures", () => {
   });
 });
 
+/**
+ * Replays an app-server stdout capture 1:1 through runCodexAppServer: the
+ * capture's request ids are the adapter's own, so every RESPONSE frame is
+ * released only once the run has written the request with that id, while
+ * notification frames stream in recorded order.
+ */
+function appServerReplay(lines: string[]): {
+  spawn: typeof spawnProcess;
+  writes: Array<{ id?: number; method: string; params?: Record<string, unknown> }>;
+} {
+  const written = new Set<number>();
+  const writes: Array<{ id?: number; method: string; params?: Record<string, unknown> }> = [];
+  let wake: (() => void) | undefined;
+  let ended = false;
+  const spawn: typeof spawnProcess = async function* (_bin, _args, options = {}) {
+    options.onSpawn?.({
+      write(data) {
+        const request = JSON.parse(data) as (typeof writes)[number];
+        writes.push(request);
+        if (typeof request.id === "number") written.add(request.id);
+        wake?.();
+        wake = undefined;
+      },
+      end() {
+        ended = true;
+        wake?.();
+        wake = undefined;
+      },
+      closed: Promise.resolve(),
+    });
+    for (const line of lines) {
+      const id = (JSON.parse(line) as { id?: number }).id;
+      while (typeof id === "number" && !written.has(id) && !ended)
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      if (ended) return;
+      yield { type: "stdout", line };
+    }
+    while (!ended)
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+  };
+  return { spawn, writes };
+}
+
 describe("codex live-message fixture (turn/steer)", () => {
   it("replays the recorded 0.156.1 steer stream through the run: accepted, then the echo delivers", async () => {
     const name = "app-server/recorded-steer-0.156.1.jsonl";
     const lines = readFileSync(join(FIXTURES, name), "utf8").split("\n").filter(Boolean);
-    // The recording was taken THROUGH runCodexAppServer, so its request ids are
-    // the adapter's own: every response frame is released only once the run has
-    // written the request with that id, which replays the wire 1:1.
-    const written = new Set<number>();
-    const writes: Array<{ id?: number; method: string; params?: Record<string, unknown> }> = [];
-    let wake: (() => void) | undefined;
-    let ended = false;
-    const spawn: typeof spawnProcess = async function* (_bin, _args, options = {}) {
-      options.onSpawn?.({
-        write(data) {
-          const request = JSON.parse(data) as (typeof writes)[number];
-          writes.push(request);
-          if (typeof request.id === "number") written.add(request.id);
-          wake?.();
-          wake = undefined;
-        },
-        end() {
-          ended = true;
-          wake?.();
-          wake = undefined;
-        },
-        closed: Promise.resolve(),
-      });
-      for (const line of lines) {
-        const id = (JSON.parse(line) as { id?: number }).id;
-        while (typeof id === "number" && !written.has(id) && !ended)
-          await new Promise<void>((resolve) => {
-            wake = resolve;
-          });
-        if (ended) return;
-        yield { type: "stdout", line };
-      }
-      while (!ended)
-        await new Promise<void>((resolve) => {
-          wake = resolve;
-        });
-    };
+    const { spawn, writes } = appServerReplay(lines);
     const controller = new CodexAppServerController();
     const events: HarnessEvent[] = [];
     let steer: Promise<LiveMessageResult> | undefined;
@@ -295,5 +306,110 @@ describe("codex live-message fixture (turn/steer)", () => {
       payload: { native_session_id: "thread-fixture", dropped_unrecognized_events: 22 },
     });
     expect(events.at(-1)?.payload).not.toHaveProperty("harness_reported_error");
+  });
+});
+
+describe("codex multi-agent fixture (root-thread ownership of finality)", () => {
+  it("replays the synthetic 0.156.1 sub-agent stream: the root envelope is the final, the child is evidence", async () => {
+    const name = "app-server/synthetic-multi-agent-0.156.1.jsonl";
+    const lines = readFileSync(join(FIXTURES, name), "utf8").split("\n").filter(Boolean);
+    const { spawn, writes } = appServerReplay(lines);
+    const events: HarnessEvent[] = [];
+    for await (const event of runCodexAppServer({
+      bin: "codex",
+      args: [],
+      spec: HarnessRunSpec.parse({
+        session_id: "ses-multi-agent",
+        intent: "review",
+        prompt: "Review the staged diff.",
+        cwd: process.cwd(),
+        access: "readonly",
+        model_hint: "gpt-6-astra",
+        // The live incident armed a caller schema: the root's final is the raw
+        // `{work_report, output}` envelope the orchestrator un-nests.
+        output_schema: {
+          type: "object",
+          properties: { findings: { type: "array" } },
+          required: ["findings"],
+          additionalProperties: false,
+        },
+      }),
+      env: {},
+      spawn,
+      pollIntervalMs: 0,
+    }))
+      events.push(event);
+
+    const envelope = JSON.stringify({
+      work_report: { state: "completed", required_inputs: [] },
+      output: { findings: [] },
+    });
+    expect(events[0]).toMatchObject({
+      type: "started",
+      payload: { native_session_id: "thread-root", native_turn_id: "turn-root" },
+    });
+    // Finality belongs to the root thread: ONE final, the root's envelope —
+    // never the sub-agent's `[]\nNO_FINDINGS` that settled first.
+    expect(events.filter((event) => event.final)).toEqual([
+      expect.objectContaining({
+        type: "message",
+        text: envelope,
+        final: true,
+        payload: expect.objectContaining({ final_source: "last_agent_message" }),
+      }),
+    ]);
+    expect(
+      events.filter((event) => event.type === "message").map((event) => event.text),
+    ).not.toContain("[]\nNO_FINDINGS");
+    // The sub-agent's text is timeline evidence (a status row), not an answer.
+    expect(events.filter((event) => event.payload?.["code"] === "subagent_message")).toEqual([
+      expect.objectContaining({
+        type: "status",
+        text: "[]\nNO_FINDINGS",
+        payload: {
+          code: "subagent_message",
+          native_thread_id: "thread-child",
+          native_turn_id: "turn-child",
+          subagent: true,
+        },
+      }),
+    ]);
+    // The child's failed command stays visible, tagged with its thread.
+    const results = events.filter((event) => event.type === "tool_result");
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({
+      tool: { use_id: "command-child", status: "error", exit_code: 1 },
+      payload: { native_thread_id: "thread-child", native_turn_id: "turn-child", subagent: true },
+    });
+    expect(results[1]).toMatchObject({ tool: { use_id: "command-root", status: "ok" } });
+    expect(results[1]?.payload).not.toHaveProperty("subagent");
+    // The child's tokens stay in the run's usage, attributed to its thread.
+    const usage = events.filter((event) => event.type === "usage");
+    expect(usage.map((event) => event.usage?.input_tokens)).toEqual([304843, 73005, 84935]);
+    expect(usage[1]?.payload).toMatchObject({ native_thread_id: "thread-child", subagent: true });
+    expect(usage[0]?.payload ?? {}).not.toHaveProperty("subagent");
+    // The terminal is the root turn; the sub-agent thread is disclosed; the
+    // child's lifecycle frames are recognized, not "dropped".
+    expect(events.at(-1)).toMatchObject({
+      type: "completed",
+      payload: {
+        native_session_id: "thread-root",
+        native_turn_id: "turn-root",
+        subagent_threads: 1,
+        dropped_unrecognized_events: 7,
+      },
+    });
+    expect(events.at(-1)?.payload).not.toHaveProperty("harness_reported_error");
+    expect(events.filter((event) => event.type === "error")).toEqual([]);
+    // The thread was read exactly once — after the ROOT turn completed, never
+    // on the child's terminal.
+    expect(writes.filter((request) => request.method === "thread/read")).toHaveLength(1);
+    const stats = validateTypedStream(events);
+    expect(stats.started).toBe(1);
+    expect(stats.toolCalls).toBe(2);
+    expect(stats.toolResults).toBe(2);
+    expect(stats.errorToolResults).toBe(1);
+    expect(stats.usageEvents).toBe(3);
+    expect(stats.statuslessToolResults).toBe(0);
   });
 });

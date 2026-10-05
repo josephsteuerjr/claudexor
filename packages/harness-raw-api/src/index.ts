@@ -25,7 +25,6 @@ import {
   normalizeRetryDelayMs,
   nowIso,
   redactSecrets,
-  sensitiveResourcePolicy,
   sha256,
 } from "@claudexor/util";
 import { parseChatCompletion, parseModelsList } from "./parse.js";
@@ -510,23 +509,14 @@ export function createRawApiAdapter(config: RawApiConfig = {}): HarnessAdapter {
               };
             }
             if (patchEnvelope) {
-              const content = sensitiveResourcePolicy.inspectContent(patchEnvelope.patch, "reject");
-              if (content.containsSensitiveContent) {
-                yield {
-                  type: "error",
-                  session_id: spec.session_id,
-                  ts: nowIso(),
-                  error: `${id} ${spec.intent} patch refused by sensitive-content policy`,
-                  refusal_code: "raw_patch_sensitive_content",
-                };
-              } else {
-                yield {
-                  type: "patch_produced",
-                  session_id: spec.session_id,
-                  ts: nowIso(),
-                  patch_envelope: patchEnvelope,
-                };
-              }
+              // INV-062: secret-like content in the proposal is not a refusal;
+              // the engine keeps the bytes and masks only its saved copies.
+              yield {
+                type: "patch_produced",
+                session_id: spec.session_id,
+                ts: nowIso(),
+                patch_envelope: patchEnvelope,
+              };
             }
           }
         } else if (parsed.text) {

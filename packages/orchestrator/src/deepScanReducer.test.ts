@@ -9,7 +9,7 @@ import { HarnessRunSpec, type HarnessEvent } from "@claudexor/schema";
 import { nowIso } from "@claudexor/util";
 import type { HarnessAdapter } from "@claudexor/core";
 import { runDeepScanReducer, type DeepScanReducerDeps } from "./deepScanReducer.js";
-import type { WorkReportEnvelopeMode } from "./attemptFinalize.js";
+import type { WorkReportEnvelopeMode } from "./workReportEnvelope.js";
 import type { RoutedAdapter } from "./orchestrator.js";
 
 /**
@@ -270,6 +270,30 @@ describe("runDeepScanReducer WorkReport contract parity (D-16)", () => {
     if (result.status === "success") {
       expect(result.report).toContain("Plain merged synthesis");
     }
+  });
+
+  it("an INSTRUCTED footer that is missing keeps the whole synthesis; a valid needs_input footer still fails the reducer", async () => {
+    const instructedMode: WorkReportEnvelopeMode = {
+      active: true,
+      source: "validated",
+      hasCallerSchema: false,
+      channel: "instructed_fence",
+      instruction: "…",
+    };
+    const synthesis = 'Merged synthesis.\n\n```json\n[{"id":"f1"}]\n```';
+    const accepted = await runWith(instructedMode, synthesis);
+    expect(accepted.status).toBe("success");
+    if (accepted.status === "success") expect(accepted.report).toBe(synthesis);
+
+    const footer = JSON.stringify({
+      work_report: {
+        state: "needs_input",
+        required_inputs: [{ kind: "decision", locator: null, description: "which merge order?" }],
+      },
+    });
+    const vetoed = await runWith(instructedMode, `Partial.\n\n\`\`\`json\n${footer}\n\`\`\``);
+    expect(vetoed.status).toBe("failed");
+    if (vetoed.status === "failed") expect(vetoed.error).toMatch(/needs_input/);
   });
 
   it("does not infer required web from a live reducer policy", async () => {

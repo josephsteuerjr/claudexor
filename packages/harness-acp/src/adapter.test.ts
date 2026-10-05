@@ -6,6 +6,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   AccessProfileIncompatibleError,
+  EffortPreferenceRejectedError,
   HarnessUnavailableError,
   streamExpectationViolations,
   validateTypedStream,
@@ -213,6 +214,68 @@ describe("ACP adapter over stdio", () => {
     request.tool_permission_policy.deny = [];
     const events = await collect(peer.adapter.run(request));
     expect(validateTypedStream(events)).toMatchObject({ started: 1, completed: 1, errors: 0 });
+  });
+
+  it("resolves effort once: the receipt's submitted value is the --effort the child receives", async () => {
+    // `ultra` is not on the entry's ladder (it stops at max): the shared
+    // preference order places it and the run resolves downward, disclosed.
+    const events = await collect(adapter("argv").adapter.run(spec({ effort_hint: "ultra" })));
+    const receipt = events.find((event) => event.effort_resolution);
+    expect(receipt?.effort_resolution).toMatchObject({
+      requested: "ultra",
+      submitted: "max",
+      resolution: "downward",
+      source: "adapter",
+      parameter: "--effort",
+    });
+    expect(receipt?.text).toContain("shared preference order");
+    // The receipt precedes the start, like the other knob adapters.
+    expect(events.indexOf(receipt!)).toBeLessThan(events.findIndex((e) => e.type === "started"));
+    const frame = events
+      .map((e) => e.payload?.["acp_frame"] as { line?: string } | undefined)
+      .find((f) => f?.line?.includes('"method":"fixture/argv"'));
+    const argv = JSON.parse(frame!.line!).params.argv as string[];
+    expect(argv[argv.indexOf("--effort") + 1]).toBe("max");
+    expect(validateTypedStream(events)).toMatchObject({ started: 1, completed: 1, errors: 0 });
+  });
+
+  it("records an omitted receipt and sends no --effort when nothing was requested", async () => {
+    const events = await collect(adapter("argv").adapter.run(spec()));
+    expect(events.find((event) => event.effort_resolution)?.effort_resolution).toMatchObject({
+      requested: null,
+      submitted: null,
+      resolution: "omitted",
+    });
+    const frame = events
+      .map((e) => e.payload?.["acp_frame"] as { line?: string } | undefined)
+      .find((f) => f?.line?.includes('"method":"fixture/argv"'));
+    expect(JSON.parse(frame!.line!).params.argv).not.toContain("--effort");
+  });
+
+  it("refuses a word neither order places before spawn, typed, and keeps the session reusable", async () => {
+    const peer = adapter();
+    const request = spec({ effort_hint: "ulta" });
+    const events: HarnessEvent[] = [];
+    const run = async () => {
+      for await (const event of peer.adapter.run(request)) events.push(event);
+    };
+    await expect(run()).rejects.toBeInstanceOf(EffortPreferenceRejectedError);
+    expect(events).toEqual([
+      expect.objectContaining({
+        effort_resolution: expect.objectContaining({
+          requested: "ulta",
+          submitted: null,
+          resolution: "rejected",
+        }),
+      }),
+    ]);
+    expect(existsSync(peer.log)).toBe(false);
+    request.effort_hint = "high";
+    expect(validateTypedStream(await collect(peer.adapter.run(request)))).toMatchObject({
+      started: 1,
+      completed: 1,
+      errors: 0,
+    });
   });
 
   it.each([

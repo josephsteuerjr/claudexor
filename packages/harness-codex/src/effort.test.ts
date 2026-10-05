@@ -9,6 +9,8 @@ import { CODEX_VENDOR_CLI_VERSION, clearCodexEffortCache, createCodexAdapter } f
 import { codexExecArgs } from "./index.js";
 import {
   codexCatalogForRun,
+  codexEffortClampedEvent,
+  codexEffortIgnoredEvent,
   codexRunEffortResolution,
   codexSnapshotTrustedForVersion,
 } from "./effort-gate.js";
@@ -16,9 +18,7 @@ import {
   CODEX_EFFORT_SNAPSHOT,
   CODEX_EFFORT_SNAPSHOT_VERIFIED_AGAINST,
   codexEffortCacheSize,
-  codexEffortClampedEvent,
   codexEffortCapability,
-  codexEffortIgnoredEvent,
   codexEffortsForEnv,
   probeCodexEfforts,
   readModelListEfforts,
@@ -88,7 +88,7 @@ describe("codex effort is resolved per MODEL, not per harness", () => {
       },
       "gpt-5.6-sol",
     );
-    expect(resolveEffort("ultra", onSol)).toEqual({
+    expect(resolveEffort("ultra", onSol)).toMatchObject({
       status: "ok",
       effort: "ultra",
       clamped: false,

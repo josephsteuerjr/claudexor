@@ -45,7 +45,18 @@ or permit retrying an unknown outcome.
 
 Effort preferences resolve in the engine at the final model/account/harness.
 Embedding callers preserve the original request and consume the typed
-receipt; they do not duplicate adaptation or parse disclosure text. The
+receipt; they do not duplicate adaptation or parse disclosure text. A caller
+may send any word of the shared preference order (`none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, `max`, `ultra`) to any route: the route's own vendor
+order ranks every word it lists, the shared order only places one it does not,
+and the receipt reports `downward`, `floor` or `omitted` instead of a refusal.
+A word neither order knows is refused only on a route that has a native effort
+knob. On Cursor and Antigravity the level is a token of the model id, so the
+same word selects the listed variant of the requested model's family from the
+running account's inventory: read the requested id from the model hint, the
+final id from the processing receipt's `submittedNative`, and the level from
+the effort receipt (`parameter: --model`); an id that cannot be placed stays
+unchanged with an `omitted` receipt. The
 [effort contract](ARCHITECTURE.md#4-routing) specifies existing result/artifact
 locations, omission versus explicit `none`, and independent provider observation.
 Raw model clients discover `captureEffortEvidence` on the model-operation POST
@@ -551,7 +562,12 @@ exactly `run_facts_invalid` and `invalid_service_response` to a schema-valid
 minimal handle that keeps the caller's runId, nulls the receipt and sibling
 authority fields, and carries a typed secret-redacted `detailProblem`, while
 404, auth, daemon-loss, untyped 500, and transport failures remain ordinary
-tool errors.
+tool errors. The same read tools also return `secretLike`: the INV-062
+disclosure of a run whose output held secret-like strings (hidden-match counts,
+changed-file paths, withheld binaries and images, whether the saved patch is a
+redacted copy and whether its exact object was recorded), or `null` when
+nothing was hidden. `run_result` answers with the primary output first, so this
+field is the only place that fact reaches an MCP host.
 
 Current operational behavior:
 
@@ -916,7 +932,11 @@ client exported by `@agentclientprotocol/sdk` 1.5.1. Startup flags live in the
 vendor row and were checked against the [official CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference),
 not a locally installed Copilot binary. The client negotiates `initialize`,
 creates `session/new {cwd, mcpServers: []}`, then sends one `session/prompt`.
-`--model` and `--effort` preserve requested values. Readonly restricts
+`--model` preserves the requested value. `--effort` carries the level the
+shared effort resolver prepared against the vendor row's declared ladder: an
+advertised level verbatim, otherwise the strongest declared level not above the
+request (or the declared minimum), recorded as the attempt's effort receipt; a
+word no order can place is a typed refusal before spawn. Readonly restricts
 `--available-tools` to `view,glob,grep`; tool allow/deny lists narrow the
 selected profile. Copilot ignores `--excluded-tools` beside `--available-tools`,
 so a denied tool is removed from the allowlist itself; `--excluded-tools` is
@@ -980,8 +1000,10 @@ reports context occupancy, not billable token counts; cumulative USD cost
 is converted to deltas for run spend. Missing/non-USD cost stays unknown.
 Model choices come from `session/new.configOptions` with category `model`,
 or advisory `origin: hint` rows. No live verification stamp is fabricated.
-WorkReport transport is `validated`: the orchestrator supplies and validates
-its fenced final report without native JSON-schema support.
+WorkReport transport is `validated`: the orchestrator asks for and validates
+its fenced final report without native JSON-schema support; a missing or broken
+footer leaves the run succeeded with an `unverified` work_state and a typed
+reason, the complete answer kept (see the WorkReport envelope in ARCHITECTURE).
 
 `recorded-*.jsonl` fixtures in this package are explicitly **synthetic** ACP
 specification and ouroboros#769 scenarios. Tests replay them through real

@@ -335,6 +335,7 @@ export function renderSummary(
   evidences: CandidateEvidence[],
   synthReason: string,
   reviewVerified: boolean,
+  disclosureLine: string | null = null,
 ): string {
   return (
     [
@@ -347,6 +348,7 @@ export function renderSummary(
       `- Apply: ${decision.apply_recommendation}`,
       `- Review verified (cross-family): ${reviewVerified}`,
       `- Synthesis: ${synthReason}`,
+      ...(disclosureLine ? [disclosureLine] : []),
       "",
       "## Candidates",
       ...evidences.map(

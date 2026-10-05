@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AttemptTelemetry } from "./attemptTelemetry.js";
-import { convergenceOutcomeFacts, partitionCandidates } from "./candidateEvidence.js";
+import {
+  convergenceOutcomeFacts,
+  isWorkingCandidate,
+  partitionCandidates,
+} from "./candidateEvidence.js";
 import type { CandidateRun } from "./candidateEvidence.js";
 import { makeOutcomeFacts } from "@claudexor/schema";
 
@@ -45,21 +49,36 @@ describe("partitionCandidates (D-16 veto owner)", () => {
     expect(working).toEqual([clean]);
   });
 
-  it("a safely discarded secret candidate never joins the working set beside a clean sibling", () => {
+  it("an uncaptured candidate never joins the working set beside a clean sibling", () => {
     const clean = candidate({ attemptId: "a2", diff: "diff --git a/y b/y\n+2\n" });
     const { working } = partitionCandidates([
       candidate({
         diff: "",
         errored: true,
-        secretDiffRefusal: {
+        captureRefusal: {
           disposition: "discarded",
-          detail:
-            "isolated candidate bytes that could not be proven secret-safe were discarded with the candidate envelope",
+          detail: "uncaptured isolated candidate output was discarded with the candidate envelope",
         },
       }),
       clean,
     ]);
     expect(working).toEqual([clean]);
+  });
+
+  it("a candidate whose patch holds secret-like strings is an ordinary working candidate (INV-062)", () => {
+    const flagged = candidate({
+      diff: "diff --git a/LEAK.txt b/LEAK.txt\n+exact bytes\n",
+      persistedDiff: "# Claudexor: saved copy\ndiff --git a/LEAK.txt b/LEAK.txt\n+[redacted]\n",
+      secretLike: {
+        files: [{ path: "LEAK.txt", matches: 1, kinds: ["openai_compatible_api_key"] }],
+        binary_paths: [],
+        media_withheld: [],
+        answer_matches: 0,
+        total_matches: 1,
+      },
+    });
+    expect(isWorkingCandidate(flagged)).toBe(true);
+    expect(partitionCandidates([flagged]).working).toEqual([flagged]);
   });
 });
 

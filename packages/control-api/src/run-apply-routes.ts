@@ -9,10 +9,11 @@ import {
   type RunApplyState,
   type WorkspaceFilesManifest,
 } from "@claudexor/schema";
-import { assertNoInlineSecretValues, containsSecretLikeToken, sha256 } from "@claudexor/util";
+import { assertNoInlineSecretValues, sha256 } from "@claudexor/util";
 import type { DaemonRunRecord } from "./daemon-server.js";
 import { requiredIdempotencyKey, validateAbsoluteRepoRoot } from "./run-start.js";
 import { readFilesWorkProduct } from "./files-work-product.js";
+import { runPatchHasSecretLikeBinary } from "./run-exact-patch.js";
 import { applyFilesResult, checkFilesResult } from "./files-apply-route.js";
 
 export interface DeliveryCommandServices {
@@ -167,10 +168,6 @@ export async function handleRunApplyRoutes(
       const patch = ctx.readPatch(record);
       if (patch === null)
         throw Object.assign(new Error("no patch artifact for this run"), { status: 404 });
-      if (containsSecretLikeToken(patch))
-        throw Object.assign(new Error("patch contains secret-like token; refusing apply check"), {
-          status: 409,
-        });
       const root = ctx.targetRoot(body.target, record);
       if (!root)
         throw Object.assign(new Error("project root is required for apply check"), { status: 400 });
@@ -230,10 +227,6 @@ export async function handleRunApplyRoutes(
     const patch = ctx.readPatch(record);
     if (patch === null)
       throw Object.assign(new Error("no patch artifact for this run"), { status: 404 });
-    if (containsSecretLikeToken(patch))
-      throw Object.assign(new Error("patch contains secret-like token; refusing apply"), {
-        status: 409,
-      });
     const root = ctx.targetRoot(body.target, record);
     if (!root)
       throw Object.assign(new Error("project root is required for apply"), { status: 400 });
@@ -254,7 +247,10 @@ export async function handleRunApplyRoutes(
           verifyAndDeliver(
             root,
             patch,
-            { mode: body.mode, branch: body.branch, message: body.message },
+            {
+              ...{ mode: body.mode, branch: body.branch, message: body.message },
+              secretLikeBinary: runPatchHasSecretLikeBinary(record),
+            },
             ctx.gateSpecs(record),
             (freshVerify) => ctx.gateError(record, patch, root, freshVerify),
           ),

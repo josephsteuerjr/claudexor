@@ -51,6 +51,26 @@ describe("outcomeBanner (D18 server-owned headline)", () => {
     expect(outcomeBanner(null, patch)).toBeNull();
   });
 
+  it.each(["footer_missing", "report_malformed"] as const)(
+    "shows the unverified work-state reason %s without changing the outcome or delivery",
+    (reason) => {
+      const facts = makeOutcomeFacts("succeeded", {
+        checks: "passed",
+        review: "approved",
+        work_state: { state: "unverified", source: "validated", unverified_reason: reason },
+      });
+      for (const [delivery, label] of [
+        [answer, "Done"],
+        [patch, "Candidate ready — NOT APPLIED"],
+        [{ applyState: "applied" as const, hasApplyableChange: true }, "Applied"],
+      ] as const) {
+        expect(outcomeBanner(facts, delivery)).toBe(`${label} · work state unverified: ${reason}`);
+      }
+      expect(outcomeExitCode(facts)).toBe(0);
+      expect(workStateVetoes(facts)).toBe(false);
+    },
+  );
+
   it("a clean succeeded patch that is not applied discloses NOT APPLIED", () => {
     const facts = makeOutcomeFacts("succeeded", { checks: "passed", review: "approved" });
     expect(outcomeBanner(facts, patch)).toBe("Candidate ready — NOT APPLIED");

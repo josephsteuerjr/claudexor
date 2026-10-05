@@ -48,9 +48,10 @@ export function captureRawPatchEnvelope(
   if (event.type !== "patch_produced") return previous;
   if (!enabled || !event.patch_envelope || previous)
     refuse("raw_patch_missing_evidence", "expected exactly one enabled patch envelope");
-  if (sensitiveResourcePolicy.containsSensitiveContent(event.patch_envelope.patch)) {
-    refuse("raw_patch_sensitive_content", "patch content matched sensitive-resource policy");
-  }
+  // INV-062: secret-like CONTENT is no refusal. The envelope is memory-only; it
+  // materializes in the isolated candidate tree and reaches saved artifacts only
+  // through the shared keep-and-mask capture. Scope, preimage and digest
+  // evidence are still enforced by consumeRawPatchEnvelope.
   return event.patch_envelope;
 }
 

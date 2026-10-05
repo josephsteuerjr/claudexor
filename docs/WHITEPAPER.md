@@ -177,8 +177,8 @@ hard-error rather than alias.
 
 Planning is conversational. Claudexor rides each vendor's native read-only
 planning surface. Cursor uses its read-only Ask transport because native Plan
-terminates through a tool schema that cannot carry Claudexor's mandatory final
-WorkReport; the plan intent still comes from Claudexor's planning prompt. The
+terminates through a tool schema that cannot carry the final WorkReport footer
+Claudexor asks for; the plan intent still comes from Claudexor's planning prompt. The
 lanes converge on the same shape: research read-only, ask clarifying questions,
 propose, refine — and surface the questions as typed cards the user can answer;
 each answer round continues the planner's own lane natively. Open questions

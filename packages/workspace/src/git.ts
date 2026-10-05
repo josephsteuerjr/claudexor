@@ -191,7 +191,10 @@ export async function diffTrees(repo: string, baseSha: string, endSha: string): 
  */
 export interface TransientDiffCapture {
   patch: string;
-  binarySecretLike: boolean;
+  /** Changed binary files whose pre- or postimage holds secret-like bytes (or
+   * could not be read for inspection). The exact patch still carries their
+   * payload; a persisted COPY withholds it and discloses these paths (INV-062). */
+  binarySecretPaths: string[];
 }
 
 export async function captureWorkingTreeTransient(
@@ -241,7 +244,7 @@ export async function captureWorkingTreeTransient(
       throw new WorkspaceError(`transient diff failed: ${diff.stderr.trim()}`);
     }
     assertNoBinaryStubs(diff.stdout, `transient git diff ${baseSha}`);
-    let binarySecretLike = false;
+    const flagged = new Set<string>();
     for (const file of parseUnifiedDiff(diff.stdout).files.filter((entry) => entry.binary)) {
       const blobs = [
         ...(!file.added && file.oldPath ? [{ tree: baseSha, path: file.oldPath }] : []),
@@ -251,14 +254,14 @@ export async function captureWorkingTreeTransient(
       ];
       for (const blob of blobs) {
         const content = await gitEnv(repo, ["show", `${blob.tree}:${blob.path}`], env);
+        // An unreadable blob is unprovable, so its payload is withheld too.
         if (content.code !== 0 || containsSecretLikeToken(content.stdout)) {
-          binarySecretLike = true;
+          flagged.add(file.newPath ?? file.oldPath ?? blob.path);
           break;
         }
       }
-      if (binarySecretLike) break;
     }
-    return { patch: diff.stdout, binarySecretLike };
+    return { patch: diff.stdout, binarySecretPaths: [...flagged] };
   } catch (error) {
     primaryError = error;
     throw error;

@@ -17,6 +17,7 @@ import {
   type RunParticipant,
 } from "@claudexor/schema";
 import { nowIso, readTextSafe, redactSecrets, sha256 } from "@claudexor/util";
+import { resolveExactPatch } from "@claudexor/workspace";
 import type { AnnouncedRunContext } from "./runTerminals.js";
 import type { OrchestratorResult } from "./orchestrator.js";
 import { readReviewArtifacts } from "./runFactsReview.js";
@@ -449,7 +450,15 @@ export function buildRunFacts(
   const operatorDecision = ctx.store.readYaml<Record<string, unknown>>(
     join(ctx.paths.arbitrationDir, "operator_decision.yaml"),
   );
-  const patch = readTextSafe(join(ctx.paths.finalDir, "patch.diff")) ?? "";
+  // INV-062: digests and eligibility bind to the EXACT patch. A saved copy with
+  // hidden secret-like strings resolves through the private exact patch object.
+  const savedPatch = readTextSafe(join(ctx.paths.finalDir, "patch.diff")) ?? "";
+  const exactPatch = resolveExactPatch({
+    savedCopy: savedPatch,
+    meta: workProduct?.meta,
+    roots: [contract?.repo.root, workProduct?.meta["execution_root"] as string | undefined],
+  });
+  const patch = exactPatch.ok ? exactPatch.patch : savedPatch;
   const manifestText =
     workProduct?.kind === "files" && workProduct.files.manifest
       ? readTextSafe(join(ctx.paths.root, workProduct.files.manifest))
@@ -507,7 +516,7 @@ export function buildRunFacts(
           state: outcome.lifecycle,
           decision: decisionWithCanonicalFacts,
           workProduct,
-          patch,
+          ...{ patch, exactPatchUnavailable: !exactPatch.ok },
           filesManifest,
           manifestSha256,
           originalRepoRoot: contract.repo.root,

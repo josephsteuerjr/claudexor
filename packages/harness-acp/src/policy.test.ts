@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { CredentialProfile, HarnessRunSpec } from "@claudexor/schema";
 import { copilot } from "./entry.js";
-import { acpArgs, decidePermission } from "./policy.js";
+import { acpArgs, acpEffortResolution, decidePermission } from "./policy.js";
 import { acpChildEnv, acpToken, probeAcpProfile } from "./env.js";
 
 const root = mkdtempSync(join(tmpdir(), "acp-policy-"));
@@ -187,5 +187,69 @@ describe("ACP credential and environment isolation", () => {
       "CODEX_THREAD_ID",
     ])
       expect(env[key] ?? null).toBeNull();
+  });
+});
+
+describe("ACP effort goes through the shared resolver (one result for argv and receipt)", () => {
+  const effortSpec = (effort: string | null) =>
+    HarnessRunSpec.parse({
+      session_id: "s",
+      task_id: "t",
+      intent: "implement",
+      prompt: "p",
+      cwd,
+      effort_hint: effort,
+    });
+  const flag = (args: string[]) => {
+    const at = args.indexOf("--effort");
+    return at < 0 ? null : args[at + 1];
+  };
+
+  it.each([
+    // The entry's own ladder decides every word it lists...
+    ["max", "max", "exact", false],
+    ["low", "low", "exact", false],
+    // ...and the shared preference order only places the ones it does not.
+    ["ultra", "max", "downward", true],
+    ["none", "low", "floor", true],
+    ["minimal", "low", "floor", true],
+  ] as const)("%s → --effort %s (%s)", (requested, submitted, resolution, shared) => {
+    const receipt = acpEffortResolution(copilot, requested);
+    expect(receipt).toMatchObject({
+      requested,
+      submitted,
+      resolution,
+      source: "adapter",
+      parameter: "--effort",
+    });
+    expect(receipt.reason?.includes("shared preference order") ?? false).toBe(shared);
+    expect(flag(acpArgs(copilot, effortSpec(requested)))).toBe(submitted);
+  });
+
+  it("refuses a word neither order places — a refusal that exists only because there is a knob", () => {
+    const receipt = acpEffortResolution(copilot, "ulta");
+    expect(receipt).toMatchObject({ requested: "ulta", submitted: null, resolution: "rejected" });
+    expect(receipt.reason).toContain("low, medium, high, xhigh, max");
+    expect(flag(acpArgs(copilot, effortSpec("ulta")))).toBeNull();
+  });
+
+  it("an entry that declares no levels has no knob: nothing is sent and nothing is refused", () => {
+    const knobless = { ...copilot, effortLevels: [] };
+    expect(acpEffortResolution(knobless, "high")).toMatchObject({
+      requested: "high",
+      submitted: null,
+      resolution: "omitted",
+      parameter: null,
+    });
+    // An unknown word is not a new refusal here; the receipt only notes it.
+    const typo = acpEffortResolution(knobless, "ulta");
+    expect(typo).toMatchObject({ submitted: null, resolution: "omitted" });
+    expect(typo.reason).toContain("outside the shared preference order");
+    expect(flag(acpArgs(knobless, effortSpec("high")))).toBeNull();
+  });
+
+  it("the builder sends the receipt value it is handed instead of resolving again", () => {
+    expect(flag(acpArgs(copilot, effortSpec("ultra"), "medium"))).toBe("medium");
+    expect(flag(acpArgs(copilot, effortSpec("max"), null))).toBeNull();
   });
 });

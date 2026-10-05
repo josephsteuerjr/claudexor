@@ -165,7 +165,6 @@ import {
 import {
   acceptedTryOutput,
   AccessProfileIncompatibleError,
-  AnswerAssembly,
   CLAUDEXOR_BROWSER_ARTIFACT_SUBDIR,
   countsAsAgentProgress,
   HarnessUnavailableError,
@@ -178,7 +177,6 @@ import {
   authModeForPreference,
   authRouteEvidenceFor,
 } from "./auth-route-classification.js";
-import { governRouteEffort } from "./effortGovernance.js";
 import { isFullAccess, RequestRequirementsResolver } from "./requestRequirements.js";
 import { DelegationBudgetAuthority } from "./delegationBudgetAuthority.js";
 import { activateDelegationParent } from "./delegation-parent-activation.js";
@@ -274,13 +272,15 @@ import { dominantHarnessFailureCategory, harnessFailureNextActions } from "./har
 import {
   finalizeAttempt,
   readOnlyNoSuccessTerminal,
-  resolveWorkReportEnvelope,
   unrecoveredToolErrorFailure,
-  unwrapWorkReportEnvelope,
   webEvidenceFailure,
+} from "./attemptFinalize.js";
+import {
+  resolveWorkReportEnvelope,
+  unwrapWorkReportEnvelope,
   type ResolvedWorkReportEnvelope,
   type WorkReportEnvelopeMode,
-} from "./attemptFinalize.js";
+} from "./workReportEnvelope.js";
 import {
   buildContinuationPacket,
   decideContinuation,
@@ -676,9 +676,6 @@ export interface RoutedAdapter {
   denyRequirement: RequestRequirementResolution;
   /** Per-lane Delegate requested/effective truth. */
   delegationRequirement: RequestRequirementResolution;
-  /** Harness-wide advertised effort ladder (empty = not tunable → the requested
-   * effort is DISCLOSED as ignored); the adapter re-resolves per model in its own env. */
-  effortLevels: readonly EffortHint[];
   /** Manifest model truth source (used when the adapter has no live models()). */
   knownModels: readonly KnownModelEntry[];
   modelInventory?: Pick<HarnessCapabilities, "model_inventory_routes" | "model_inventory_absence">;
@@ -879,7 +876,12 @@ export class Orchestrator {
   ): Promise<ReviewerSpec[]> {
     if (this.deps.reviewers) return this.deps.reviewers;
     if (this.deps.reviewerPanel && this.deps.reviewerPanel.length > 0) {
-      return this.resolveExplicitReviewerPanel(cwd, this.deps.reviewerPanel, runAuthPreference);
+      return this.resolveExplicitReviewerPanel(
+        cwd,
+        this.deps.reviewerPanel,
+        runAuthPreference,
+        onIgnoredSetting,
+      );
     }
     return resolveAutoReviewerPanel(
       {
@@ -911,7 +913,7 @@ export class Orchestrator {
   ): Promise<{ reviewers: ReviewerSpec[] } | { failed: OrchestratorResult }> {
     if (input.review === false) return { reviewers: [] };
     try {
-      // Auto-panel dropped knobs (reviewerEfforts) → ignored-settings channel (QA-070):
+      // Reviewer knobs a panel omitted or dropped → ignored-settings channel (QA-070):
       const warn = (d: string) => void log.emit("review.preflight", { ignored_settings: [d] });
       const config = this.config(input.repoRoot).global;
       const reviewers = await this.resolveReviewers(input.repoRoot, input.authPreference, warn);
@@ -968,6 +970,7 @@ export class Orchestrator {
     cwd: string,
     panel: ControlReviewerPanelEntry[],
     runAuthPreference?: AuthPreference,
+    onIgnoredSetting?: (detail: string) => void,
   ): Promise<ReviewerSpec[]> {
     return resolveExplicitReviewerPanel(
       {
@@ -976,6 +979,7 @@ export class Orchestrator {
         harnessSettings: this.config(cwd)?.global.harnesses ?? {},
         authPreferenceFor: (id) => this.authPreferenceForHarness(cwd, id, runAuthPreference),
         resolveReviewerProfile: reviewerProfileResolver(this.credentials, cwd),
+        onIgnoredSetting,
       },
       panel,
     );
@@ -1455,7 +1459,6 @@ export class Orchestrator {
             requiresFullAccess: manifest.capability_profile.mcp_injection_requires_full_access,
             fullAccess: isFullAccess(requiredAccess),
           }),
-          effortLevels: manifest.capabilities.effort_levels,
           knownModels: manifest.capabilities.known_models,
           modelInventory: manifest.capabilities,
           // A selected profile's credential_kind IS the route (round-18 #2);
@@ -1652,7 +1655,7 @@ export class Orchestrator {
     // settles clean), so a schema run keeps its interaction channel — since
     // the daemon always arms one, the refusal was denying claude every
     // daemon/CLI structured-output run. The WorkReport side_tool envelope
-    // stays interactive-gated separately (attemptFinalize) as a deliberate
+    // stays interactive-gated separately (workReportEnvelope) as a deliberate
     // scope choice; the caller schema itself rides regardless.
     if (input.outputSchema !== undefined && input.outputSchema !== null) {
       const incapable = out.filter((lane) => !lane.supportsJsonSchemaOutput);
@@ -2095,18 +2098,14 @@ export class Orchestrator {
     // no run-global model.
     const model =
       overrideModel ?? contract.routing_models[routed.adapter.id] ?? s?.defaultModel ?? null;
-    // Effort disclosure (INV-105) against the harness's advertised ladder. This
-    // gate only DISCLOSES an unplaceable level; the clamp belongs to the adapter,
-    // which resolves against the catalog for the profile env the child runs in
-    // (the manifest here is the DEFAULT account's — see effortGovernance.ts). The
-    // contract's FROZEN per-lane effort (QA-035) wins so Exact Retry replays it
-    // without re-reading settings; `effortHint`/settings apply only to an unfrozen lane.
-    const governed = governRouteEffort(
-      contract.routing_efforts[routed.adapter.id] ?? effortHint ?? s?.effort ?? null,
-      { id: routed.adapter.id, ...routed },
-    );
-    const effort = governed.effort;
-    if (governed.ignored) ignored.push(governed.ignored);
+    // The effort PREFERENCE travels to the route unchanged (INV-105): discovery
+    // describes the DEFAULT account, so only the final route may resolve it — a
+    // knob adapter against the catalog of the profile env its child runs in, the
+    // engine as `omitted` for a route without a knob — and that one resolution is
+    // what the receipt and the disclosure record. The contract's FROZEN per-lane
+    // effort (QA-035) wins so Exact Retry replays it without re-reading settings;
+    // `effortHint`/settings apply only to an unfrozen lane.
+    const effort = contract.routing_efforts[routed.adapter.id] ?? effortHint ?? s?.effort ?? null;
     return {
       model,
       effort,
@@ -2460,7 +2459,7 @@ export class Orchestrator {
     // QA-024: emit the belt-failure disclosure event at most once per attempt.
     let beltFailureDisclosed = false;
     const errors: string[] = [];
-    let answer = new AnswerAssembly();
+    let answer = new secretDiff.CountedAnswerAssembly();
     const retryPolicy = transientRetryPolicy(this.config(contract.repo.root));
     // QA-024: the delegation belt is the ONLY engine-owned extra MCP server
     // injected into an agent lane (the browser MCP rides its own field), so its
@@ -2491,7 +2490,7 @@ export class Orchestrator {
       for (let nativeTry = 0; !signal?.aborted; nativeTry += 1) {
         // A3 per-try isolation: neither output nor progress markers leak across tries.
         if (nativeTry > 0) {
-          answer = new AnswerAssembly();
+          answer = new secretDiff.CountedAnswerAssembly();
           telemetry.outputMarkers = newAttemptOutputMarkers();
         }
         const clearFileBackedContext = stageFileBackedContext(
@@ -2602,7 +2601,7 @@ export class Orchestrator {
             }
             // Capture assistant prose so an answer-only turn (no file changes) still
             // has an honest output artifact; a TYPED final message wins verbatim.
-            answer.observe(safeEv);
+            answer.observeCounted(ev, safeEv);
             // Observe ALL budget/quota signals (one codex usage event carries
             // BOTH spend and quota); pressure disclosed once per attempt.
             observeBudgetSignals(ledger, log, adapter.id, attemptId, safeEv, budgetSignalState);
@@ -2757,24 +2756,23 @@ export class Orchestrator {
       { sideToolReport: telemetry.sideToolWorkReport ?? undefined },
     );
     const redacted = redactSecrets(unwrapped.deliverable);
-    const candidateAnswer = redacted.trim().length > 0 ? redacted : undefined;
+    // INV-062: the (already redacted) answer is kept whatever the patch holds.
+    const answerText = redacted.trim().length > 0 ? redacted : undefined;
     if (directory) await captureDirectory();
-    const { diff, refusal: secretDiffRefusal } = directory
-      ? { diff: "", refusal: directoryCapture.refusal }
-      : await secretDiff.quarantineCandidateWorkspace(
-          wsm,
-          envelope,
-          inPlaceEnvelope,
-          candidateAnswer,
-        );
-    harnessErrored = secretDiff.recordSecretDiffRefusal(secretDiffRefusal, errors, harnessErrored);
-    const answerText = secretDiffRefusal ? undefined : candidateAnswer;
+    const captured: secretDiff.CandidateCapture = directory
+      ? { diff: "", captureRefusal: directoryCapture.refusal }
+      : await secretDiff.captureCandidateWorkspace({
+          ...{ wsm, envelope, inPlace: inPlaceEnvelope, projectRoot: store.repoRoot },
+          ...{ answerText, answerMatches: answer.secretLikeMatches() },
+        });
+    const { diff, captureRefusal } = captured;
+    harnessErrored = secretDiff.recordCaptureRefusal(captureRefusal, errors, harnessErrored);
     const deliverableEvidence =
       diff.trim().length > 0 || Boolean(answerText) || directoryHasOutput(directoryCapture.files);
     // Cancelled attempts skip gates: running a 600s-per-gate suite delays the ack
     // and burns compute on a result nobody will adopt. Diff/attempt.yaml
     // still land, so partial work stays inspectable.
-    const gateSignalAborted = signal?.aborted === true || secretDiffRefusal !== undefined;
+    const gateSignalAborted = signal?.aborted === true || captureRefusal !== undefined;
     if (!gateSignalAborted) {
       log?.emit("gate.started", {
         attempt_id: attemptId,
@@ -2821,6 +2819,7 @@ export class Orchestrator {
       workReport: unwrapped.workReport,
       workReportSource: unwrapped.source,
       workReportViolation: unwrapped.contractViolation,
+      workReportUnverified: unwrapped.unverified ?? null,
       contextTerminalExhausted: telemetry.contextExhausted,
     });
     harnessErrored = finalized.harnessErrored;
@@ -2850,9 +2849,9 @@ export class Orchestrator {
           attemptDir,
           worktreePath: envelope.worktree_path,
           artifactRelativeDir,
-          diff,
-          persistPatch: !directory && secretDiffRefusal === undefined && isMutatingAccess(access),
-          persistProducedMedia: !directory && secretDiffRefusal === undefined,
+          ...{ diff, persistedDiff: captured.persistedDiff },
+          persistPatch: !directory && captureRefusal === undefined && isMutatingAccess(access),
+          persistProducedMedia: !directory && captureRefusal === undefined,
           answerText,
           record: {
             attempt_id: attemptId,
@@ -2864,7 +2863,7 @@ export class Orchestrator {
             errors: errors.slice(0, 5),
             ...telemetrySummary(telemetry),
             outcome: telemetry.outcome,
-            ...(secretDiffRefusal ? { secret_diff_refusal: secretDiffRefusal } : {}),
+            ...secretDiff.attemptDisclosure(captured),
             gates: gates.map((g) => ({ id: g.id, status: g.status })),
             branch: envelope.branch_name,
             ...(directoryCapture.files
@@ -2905,7 +2904,7 @@ export class Orchestrator {
       attemptId,
       harnessId: adapter.id,
       label,
-      diff,
+      ...captured,
       ...(directoryCapture.files ? { files: directoryCapture.files } : {}),
       answerText,
       reviewCwd: envelope.worktree_path,
@@ -2917,7 +2916,6 @@ export class Orchestrator {
       costEstimated,
       errors: errors.slice(0, 8),
       telemetry,
-      ...(secretDiffRefusal ? { secretDiffRefusal } : {}),
       // A5: the typed refusal survives NORMAL attempt finalization (no throw).
       ...(telemetry.requestRefusal
         ? { declaredFailure: requestRefusalFailure(telemetry.requestRefusal) }
@@ -3351,7 +3349,7 @@ export class Orchestrator {
                 harness: adapter.id,
                 profileId: input.credentialProfileId ?? null,
                 priorPrompt: input.prompt,
-                priorOutput: run.answerText ?? run.diff ?? "",
+                priorOutput: run.answerText ?? run.persistedDiff ?? run.diff ?? "",
               }),
             );
             // Reserve the continuation lease BEFORE any disclosure: a denied lease
@@ -3603,7 +3601,7 @@ export class Orchestrator {
       input.workspaceKind !== "directory" &&
       input.inPlace &&
       requestedSingleCandidate &&
-      runs.every((run) => !run.secretDiffRefusal)
+      runs.every((run) => !run.captureRefusal)
     ) {
       try {
         earlyPostTurnSha = await snapshotTree(execRoot);
@@ -4128,9 +4126,8 @@ export class Orchestrator {
           delivery: directoryDelivery,
         });
       } else if (mutatingRun) {
-        secretDiff.assertNoSecretLikeTokens("final patch diff", winnerRun.diff);
-        const patchSha256 = sha256(winnerRun.diff);
-        store.writeText(join(paths.finalDir, "patch.diff"), winnerRun.diff);
+        const savedPatch = secretDiff.persistFinalPatch(store, paths.finalDir, winnerRun);
+        const patchSha256 = savedPatch.patchSha256;
         const wstats = diffStats(winnerRun.diff);
         const hasDiff = winnerRun.diff.trim().length > 0;
         const blockers = winnerEvidence
@@ -4232,7 +4229,7 @@ export class Orchestrator {
             outcome_facts: facts,
             review_verified: actualReviewVerified,
             budget_stopped: budgetStopped,
-            patch_sha256: patchSha256,
+            ...{ patch_sha256: patchSha256, ...savedPatch.meta },
             result_kind: resultKind,
             diffstat: {
               files: wstats.paths.length,
@@ -4258,6 +4255,7 @@ export class Orchestrator {
           evidences,
           synth.reason,
           actualReviewVerified,
+          secretDiff.secretLikeSummaryLine(winnerRun.secretLike),
         ),
       );
       // summary.md is a DIAGNOSTIC artifact only (V8/PLAN addendum 2): it no
@@ -4995,7 +4993,7 @@ export class Orchestrator {
               observedPaths: [...observedPaths],
             });
             run.files = captured.files;
-            run.secretDiffRefusal = captured.refusal;
+            run.captureRefusal = captured.refusal;
           }
         }
         lastRun = run;
@@ -5007,11 +5005,7 @@ export class Orchestrator {
         // Post-mutation fence for in-place: snapshot the live tree NOW (after the
         // harness mutated it, before this attempt's review). The last attempt's
         // value is the revert target persisted into work_product.yaml.
-        if (
-          input.inPlace === true &&
-          input.workspaceKind !== "directory" &&
-          !run.secretDiffRefusal
-        ) {
+        if (input.inPlace === true && input.workspaceKind !== "directory" && !run.captureRefusal) {
           try {
             lastPostTurnSha = await snapshotTree(execRoot);
           } catch {
@@ -5071,7 +5065,7 @@ export class Orchestrator {
             failure.metadata,
           );
         }
-        if (input.workspaceKind === "directory" && run.secretDiffRefusal) {
+        if (input.workspaceKind === "directory" && run.captureRefusal) {
           return failedCandidatesResult({
             ledger,
             mode,
@@ -5399,14 +5393,9 @@ export class Orchestrator {
           facts,
           log,
         });
-        if (lastRun.answerText) {
-          store.writeText(join(paths.finalDir, "answer.md"), lastRun.answerText);
-          log.emit("output.ready", { kind: "answer", path: "final/answer.md" });
-        }
       } else {
-        secretDiff.assertNoSecretLikeTokens("final patch diff", lastRun.diff);
-        const patchSha256 = sha256(lastRun.diff);
-        store.writeText(join(paths.finalDir, "patch.diff"), lastRun.diff);
+        const savedPatch = secretDiff.persistFinalPatch(store, paths.finalDir, lastRun);
+        const patchSha256 = savedPatch.patchSha256;
         // Honest apply-state (parity with runRace single-candidate in-place): a
         // convergence run with inPlace mutated the live tree directly across its
         // attempts, so it is "applied" even when review blocked (Revert offered).
@@ -5435,7 +5424,7 @@ export class Orchestrator {
             lifecycle: facts.lifecycle,
             outcome_facts: facts,
             review_verified: actualReviewVerified,
-            patch_sha256: patchSha256,
+            ...{ patch_sha256: patchSha256, ...savedPatch.meta },
             adopted: convAdopted,
             apply_state: convApplyState,
             pre_turn_sha: convAdopted === true ? preTurnSha : null,
@@ -5445,9 +5434,14 @@ export class Orchestrator {
           },
         });
       }
+      // INV-062: the answer is kept for every convergence result, patch or files.
+      if (lastRun.answerText) {
+        store.writeText(join(paths.finalDir, "answer.md"), lastRun.answerText);
+        log.emit("output.ready", { kind: "answer", path: "final/answer.md" });
+      }
       store.writeText(
         join(paths.finalDir, "summary.md"),
-        `# Run ${runId} (${mode})\n\n- Lifecycle: ${facts.lifecycle}${facts.reason ? ` (${facts.reason})` : ""}\n- Attempts: ${attempt}\n- Winner: ${lastRun.attemptId}\n- Review verified (cross-family): ${actualReviewVerified}\n- Apply recommendation: ${decision?.apply_recommendation ?? "inspect"}${stuckNoProgressReason ? `\n- No-progress reason: ${stuckNoProgressReason}` : ""}\n`,
+        `# Run ${runId} (${mode})\n\n- Lifecycle: ${facts.lifecycle}${facts.reason ? ` (${facts.reason})` : ""}\n- Attempts: ${attempt}\n- Winner: ${lastRun.attemptId}\n- Review verified (cross-family): ${actualReviewVerified}\n- Apply recommendation: ${decision?.apply_recommendation ?? "inspect"}${stuckNoProgressReason ? `\n- No-progress reason: ${stuckNoProgressReason}` : ""}${secretDiff.summaryDisclosure(lastRun.secretLike)}\n`,
       );
       // Lifecycle invariant (all modes): output.ready precedes the terminal
       // event so a client that applied the terminal event has the output.
@@ -6289,6 +6283,7 @@ export class Orchestrator {
       harnessId: string;
       status: "success" | "failed" | "blocked";
       report: string;
+      answerMatches?: number;
       error: string | null;
       telemetry: AttemptTelemetry;
       /** QA-019: this scout was refused BEFORE spawn by the budget gate — it
@@ -6539,7 +6534,7 @@ export class Orchestrator {
           readonlyWorkEnvelope,
         );
         const attemptEventsPath = join(paths.attemptsDir, attemptId, "events.jsonl");
-        const answer = new AnswerAssembly();
+        const answer = new secretDiff.CountedAnswerAssembly();
         const telemetry = createAttemptTelemetry(
           knobs.webPolicy,
           contract.external_context.web_required,
@@ -6644,7 +6639,7 @@ export class Orchestrator {
           // A3 per-try isolation (candidate-lane parity): neither a failed try's
           // output nor its progress markers leak into the next try's evidence.
           if (nativeTry > 0) {
-            answer = new AnswerAssembly();
+            answer = new secretDiff.CountedAnswerAssembly();
             telemetry.outputMarkers = newAttemptOutputMarkers();
           }
           const runSpec =
@@ -6729,7 +6724,7 @@ export class Orchestrator {
                 break;
               }
               // A TYPED final message wins verbatim over joined narration.
-              answer.observe(safeEv);
+              answer.observeCounted(ev, safeEv);
               if (safeEv.type === "error")
                 harnessError = safeEv.error
                   ? redactSecrets(safeEv.error)
@@ -6884,6 +6879,7 @@ export class Orchestrator {
         workReport: roUnwrapped.workReport,
         workReportSource: roUnwrapped.source,
         workReportViolation: roUnwrapped.contractViolation,
+        workReportUnverified: roUnwrapped.unverified ?? null,
         contextTerminalExhausted: telemetry.contextExhausted,
       });
       // A broken WorkReport contract is a hard failure ONLY when the finalizer
@@ -6949,6 +6945,7 @@ export class Orchestrator {
         harnessId: adapter.id,
         status: scoutInterrupted ? "failed" : "success",
         report: report || "(no output)",
+        answerMatches: answer.secretLikeMatches(),
         error: scoutInterrupted ? "context capacity exhausted before the scout completed" : null,
         telemetry,
         ...(scoutInterrupted ? { interrupted: true } : {}),
@@ -7374,8 +7371,9 @@ export class Orchestrator {
     // whole decision + reducer spawn lives in deepScanReducer.ts (its owner).
     let deepScanSynthesis: DeepScanSynthesis | null = null;
     let reducedReport: string | null = null;
+    let answerMatches = succeeded.reduce((sum, a) => sum + (a.answerMatches ?? 0), 0);
     if (opts.deepScan) {
-      ({ deepScanSynthesis, reducedReport } = await resolveDeepScanSynthesis(
+      ({ deepScanSynthesis, reducedReport, answerMatches } = await resolveDeepScanSynthesis(
         this.deepScanReducerDeps(input, contract, log),
         {
           succeeded,
@@ -7481,9 +7479,10 @@ export class Orchestrator {
     const harnessLabel = attempts
       .map((a) => `${a.attemptId}:${a.harnessId}:${a.status}`)
       .join(", ");
+    const secretLike = secretDiff.answerSecretLikeFinding(answerMatches);
     store.writeText(
       join(paths.finalDir, "summary.md"),
-      `# Run ${runId} (${opts.mode})\n\n- Harnesses: ${harnessLabel}\n- Lifecycle: ${terminalFacts.lifecycle}${terminalFacts.reason ? ` (${terminalFacts.reason})` : ""}\n\n${report}\n`,
+      `# Run ${runId} (${opts.mode})\n\n- Harnesses: ${harnessLabel}\n- Lifecycle: ${terminalFacts.lifecycle}${terminalFacts.reason ? ` (${terminalFacts.reason})` : ""}${secretDiff.summaryDisclosure(secretLike)}\n\n${report}\n`,
     );
     const reportProducerAttemptId =
       opts.deepScan &&
@@ -7502,6 +7501,7 @@ export class Orchestrator {
         mode: opts.mode,
         intent: opts.intent,
         read_only: true,
+        ...(secretLike ? { secret_like: secretLike } : {}),
       },
     });
     log.emit("work_product.emitted", { kind: "report", winner: reportProducerAttemptId });

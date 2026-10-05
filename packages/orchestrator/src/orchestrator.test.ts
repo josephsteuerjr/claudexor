@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -39,6 +40,7 @@ import type {
 } from "@claudexor/schema";
 import { ConformanceReport, HarnessManifest, RunFacts, makeOutcomeFacts } from "@claudexor/schema";
 import { hashJson, noProjectRepoRoot, projectRuntimeDir, sha256 } from "@claudexor/util";
+import { readRevertAnchor, revertWorkingTreePatch } from "@claudexor/workspace";
 import { writeEvidencePacket } from "@claudexor/context";
 import type { ReviewerSpec } from "@claudexor/review";
 import { Orchestrator } from "./orchestrator.js";
@@ -498,6 +500,7 @@ function expectBudgetSplit(runDir: string, cash: number, valuation: number): voi
 function rawPatchImplementer(
   id: string,
   observeAccess?: (access: AccessProfile) => void,
+  newLine = "# raw implemented",
 ): HarnessAdapter {
   return {
     id,
@@ -533,7 +536,7 @@ function rawPatchImplementer(
         "+++ b/README.md",
         "@@ -1 +1 @@",
         "-# repo",
-        "+# raw implemented",
+        `+${newLine}`,
         "",
       ].join("\n");
       const ts = new Date().toISOString();
@@ -2879,7 +2882,7 @@ describe("Orchestrator", () => {
     }
   });
 
-  it("does not persist secret-like tokens from generated patch diffs", async () => {
+  it("keeps a generated patch with secret-like tokens and hides them only in saved copies (INV-062)", async () => {
     const repo = await initRepo();
     const secret = "sk-" + "a".repeat(24);
     const adapter: HarnessAdapter = {
@@ -2914,15 +2917,42 @@ describe("Orchestrator", () => {
       harnesses: ["leaky"],
       n: 1,
     });
-    // The leaky candidate is refused before any artifact persists; with zero
-    // working candidates the run fails with the ROOT CAUSE (no corpse review,
-    // no empty final patch pretending to be a work product).
-    expect(legacyOutcome(res)).toBe("failed");
-    expect(res.summary).toContain("could not be proven secret-safe");
-    expect(existsSync(join(res.runDir, "final", "patch.diff"))).toBe(false);
-    expect(existsSync(join(res.runDir, "attempts", "a01", "patch.diff"))).toBe(false);
+    // The candidate is an ordinary working candidate: no refusal and no discarded
+    // envelope. Its saved patch copies hide the token.
+    expect(res.lifecycle).toBe("succeeded");
+    expect(res.winner).toBe("a01");
+    // `.env` is a protected path, so the ordinary path policy asks for an operator
+    // decision — the same verdict a clean `.env` edit gets. It is a review block
+    // on a kept candidate, not the old "could not be proven secret-safe" refusal.
+    expect(res.facts).toMatchObject({ review: "blocked", reason: "review_blocked" });
     const failure = readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8");
+    expect(failure).toContain("phase: review");
     expect(failure).not.toContain(secret);
+    expect(res.summary).not.toContain("secret-safe");
+    for (const rel of [
+      ["final", "patch.diff"],
+      ["attempts", "a01", "patch.diff"],
+    ]) {
+      const saved = readFileSync(join(res.runDir, ...rel), "utf8");
+      expect(saved).toContain("+OPENAI_API_KEY=[redacted]");
+      expect(saved).not.toContain(secret);
+      expect(saved.startsWith("# Claudexor: secret-like strings are replaced")).toBe(true);
+    }
+    // The whole run directory — events, attempts, reviews, final — holds no match,
+    // and an isolated candidate adds no blob to the user's repository either.
+    expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+    expect(gitObjectStoreContains(repo, secret)).toBe(false);
+    const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
+    expect(workProduct).toContain("persisted_patch: redacted");
+    expect(workProduct).toMatch(/secret_like:\n[\s\S]*path: \.env\n\s+matches: 1/);
+    expect(workProduct).toContain("total_matches: 1");
+    // The recorded digest is the EXACT patch's: the saved copy can never pass
+    // the apply gate, while the private exact object reproduces the real bytes.
+    const digest = /patch_sha256: (sha256:[0-9a-f]{64})/.exec(workProduct)?.[1] ?? "";
+    expect(workProduct).toContain(`exact_patch_object: ${digest}`);
+    const exact = readRevertAnchor(repo, digest);
+    expect(exact).toContain(`+OPENAI_API_KEY=${secret}`);
+    expect(sha256(readFileSync(join(res.runDir, "final", "patch.diff"), "utf8"))).not.toBe(digest);
   });
 
   it("fails loudly when no available harness can perform the intent", async () => {
@@ -3104,6 +3134,98 @@ describe("Orchestrator", () => {
     expect(readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8")).toContain(
       "failed without recovery",
     );
+  });
+
+  it("a native sub-agent's failed command is a warning once the ROOT thread delivered its final", async () => {
+    // The codex app-server adapter owns finality by ROOT thread: a sub-agent's
+    // command failure stays tagged timeline evidence, its text is a status row
+    // (never a message), and the typed final is the root's. With the root
+    // deliverable present the orchestrator keeps the answer and discloses the
+    // child's error as a warning — it no longer escalates through
+    // unrecoveredToolErrorFailure as "failed without recovery".
+    const repo = await initRepo();
+    const child = {
+      native_thread_id: "thread-child",
+      native_turn_id: "turn-child",
+      subagent: true,
+    };
+    const asker = askAdapter("asker", function* (sessionId) {
+      const ts = new Date().toISOString();
+      yield {
+        type: "started",
+        session_id: sessionId,
+        ts,
+        payload: { native_session_id: "thread-root", native_turn_id: "turn-root" },
+      };
+      yield {
+        type: "tool_call",
+        session_id: sessionId,
+        ts,
+        text: "cat missing.py",
+        tool: { name: "command", kind: "command", use_id: "cmd-child", target: "cat missing.py" },
+        payload: { status: "inProgress", item_id: "cmd-child", ...child },
+      };
+      yield {
+        type: "tool_result",
+        session_id: sessionId,
+        ts,
+        text: "tool_result: error: cat: missing.py: No such file or directory",
+        tool: {
+          name: "command",
+          kind: "command",
+          use_id: "cmd-child",
+          target: "cat missing.py",
+          status: "error",
+          exit_code: 1,
+          error_summary: "cat: missing.py: No such file or directory",
+        },
+        payload: { exit_code: 1, status: "failed", item_id: "cmd-child", ...child },
+      };
+      yield {
+        type: "status",
+        session_id: sessionId,
+        ts,
+        text: "[]\nNO_FINDINGS",
+        payload: { code: "subagent_message", ...child },
+      };
+      yield {
+        type: "message",
+        session_id: sessionId,
+        ts,
+        text: "Root verdict: PASS",
+        final: true,
+        payload: { final_source: "last_agent_message" },
+      };
+      yield {
+        type: "completed",
+        session_id: sessionId,
+        ts,
+        payload: {
+          native_session_id: "thread-root",
+          native_turn_id: "turn-root",
+          subagent_threads: 1,
+        },
+      };
+    });
+    const res = await new Orchestrator({
+      registry: new Map([["asker", asker]]),
+      reviewers: [],
+    }).run({ repoRoot: repo, prompt: "review", mode: "ask", harnesses: ["asker"] });
+    expect(res.lifecycle).toBe("succeeded");
+    expect(res.facts.reason ?? null).toBeNull();
+    expect(existsSync(join(res.runDir, "final", "failure.yaml"))).toBe(false);
+    const answer = readFileSync(join(res.runDir, "final", "answer.md"), "utf8");
+    expect(answer).toContain("Root verdict: PASS");
+    expect(answer).not.toContain("NO_FINDINGS");
+    const telemetry = new ArtifactStore(repo).readYaml<{
+      attempts?: Array<{ outcome?: Record<string, unknown> }>;
+    }>(join(res.runDir, "final", "telemetry.yaml"));
+    expect(telemetry?.attempts?.[0]?.outcome).toMatchObject({
+      deliverable_present: true,
+      harness_errored: false,
+      tool_warnings_count: 1,
+      status: "success_with_warnings",
+    });
   });
 
   it("QA-050: a zero-budget Ask refusal is a typed budget failure (phase=budget, code=finite_zero, route preserved) with budget remediation, never auth/setup", async () => {
@@ -8996,8 +9118,13 @@ describe("Orchestrator", () => {
     expect(reviewYaml).toContain("gpt-5.5-xhigh-1M");
   });
 
-  it("rejects explicit reviewer panel effort hints unsupported by the harness", async () => {
+  it("keeps the review when an explicit panel names an effort for a harness with no effort controls", async () => {
+    // This used to fail the whole run at review preflight ("does not support
+    // requested effort"). The harness simply has no knob: the preference stays
+    // in the reviewer's receipt as omitted, the panel discloses it, and the
+    // review runs (owner decision 2026-10-05).
     const repo = await initRepo();
+    const seen: Array<string | null> = [];
     const reviewer: HarnessAdapter = {
       id: "rev-cursor",
       async discover() {
@@ -9020,8 +9147,17 @@ describe("Orchestrator", () => {
       async models() {
         return [{ id: "gemini-3.1-pro", label: null, context_window: null, routes: null }];
       },
-      async *run() {
-        throw new Error("reviewer should not run when effort validation fails");
+      async *run(spec) {
+        const ts = new Date().toISOString();
+        seen.push(spec.effort_hint);
+        yield {
+          type: "started",
+          session_id: spec.session_id,
+          ts,
+          observed_model: spec.model_hint ?? "rev-cursor-observed",
+        };
+        yield { type: "message", session_id: spec.session_id, ts, text: "[]\n" };
+        yield { type: "completed", session_id: spec.session_id, ts };
       },
     };
     const orch = new Orchestrator({
@@ -9039,9 +9175,14 @@ describe("Orchestrator", () => {
       harnesses: ["fake-impl"],
       n: 1,
     });
-    expect(legacyOutcome(effortRes)).toBe("failed");
-    expect(effortRes.summary).toContain(
-      "reviewer harness 'rev-cursor' does not support requested effort 'max' (harness declares no effort controls)",
+    expect(legacyOutcome(effortRes)).toBe("success");
+    // The reviewer ran, and the original preference reached its spec unchanged.
+    expect(seen).toEqual(["max"]);
+    const reviewYaml = readFileSync(join(effortRes.runDir, "reviews", "a01.yaml"), "utf8");
+    expect(reviewYaml).toContain("requested_effort: max");
+    const events = readFileSync(join(effortRes.runDir, "events.jsonl"), "utf8");
+    expect(events).toContain(
+      "reviewer effort omitted: reviewer harness 'rev-cursor' declares no effort controls",
     );
   });
 
@@ -9796,6 +9937,38 @@ describe("Orchestrator", () => {
     expect(await revertInPlaceFromAnchor(repo, anchorId!)).toMatchObject({ reverted: true });
     expect(readFileSync(join(repo, "README.md"), "utf8")).toBe("# repo\n");
     expect(readFileSync(join(repo, "USER.txt"))).toEqual(userBytes);
+  });
+
+  it("accepts a raw API patch with secret-like content under the keep-and-mask contract (INV-062)", async () => {
+    const repo = await initRepo();
+    const secret = `sk-${"w".repeat(24)}`;
+    const raw = rawPatchImplementer("raw-patch", undefined, `token = "${secret}"`);
+    const orch = new Orchestrator({ registry: new Map([[raw.id, raw]]), reviewers: reviewers() });
+    const res = await orch.run({
+      repoRoot: repo,
+      prompt: "edit README",
+      mode: "agent",
+      harnesses: [raw.id],
+      n: 1,
+      inPlace: true,
+    });
+    // The proposal materialized in its isolated tree, was reviewed like any
+    // candidate and adopted with exact bytes.
+    expect(res.lifecycle).toBe("succeeded");
+    expect(readFileSync(join(repo, "README.md"), "utf8")).toBe(`token = "${secret}"\n`);
+    const finalPatch = readFileSync(join(res.runDir, "final", "patch.diff"), "utf8");
+    expect(finalPatch).toContain('+token = "[redacted]"');
+    const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
+    expect(workProduct).toContain("persisted_patch: redacted");
+    expect(workProduct).toContain("apply_state: applied");
+    // The memory-only patch event never reaches events.jsonl or any artifact.
+    expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+    // Revert restores the exact preimage from the private anchor.
+    const anchorId = workProduct.match(/revert_anchor_id:\s+['"]?(sha256:[0-9a-f]{64})/)?.[1];
+    expect(anchorId).toBeDefined();
+    const { revertInPlaceFromAnchor } = await import("@claudexor/delivery");
+    expect(await revertInPlaceFromAnchor(repo, anchorId!)).toMatchObject({ reverted: true });
+    expect(readFileSync(join(repo, "README.md"), "utf8")).toBe("# repo\n");
   });
 
   it("race leaves an ungated winner as an artifact without mutating the live tree", async () => {
@@ -12742,7 +12915,7 @@ describe("Orchestrator v0.8 honesty & streaming", () => {
     expect(synthesis).toContain("readonly access has no write-backed synthesis lifecycle");
   });
 
-  it("keeps readonly artifact-security failures diagnostic-only", async () => {
+  it("keeps a readonly answer that links a secret-like image and saves nothing of the image", async () => {
     const dir = reapMk(join(tmpdir(), "claudexor-readonly-artifact-failure-"));
     const secret = `sk-${"r".repeat(24)}`;
     writeFileSync(join(dir, "secret.png"), Buffer.concat([Buffer.from([0]), Buffer.from(secret)]));
@@ -12774,7 +12947,16 @@ describe("Orchestrator v0.8 honesty & streaming", () => {
       delegated: true,
     });
 
-    expect(res.lifecycle).toBe("failed");
+    // The answer survives; the image is simply not copied into the run.
+    expect(res.lifecycle).toBe("succeeded");
+    expect(readFileSync(join(res.runDir, "final", "answer.md"), "utf8")).toContain(
+      "![secret](secret.png)",
+    );
+    expect(readFileSync(join(res.runDir, "attempts", "a01", "attempt.yaml"), "utf8")).toMatch(
+      /media_withheld:\n\s+- secret\.png/,
+    );
+    expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+    // Readonly stays readonly: no patch, work product, delivery or adoption.
     expect(existsSync(join(res.runDir, "final", "patch.diff"))).toBe(false);
     expect(existsSync(join(res.runDir, "final", "work_product.yaml"))).toBe(false);
     expect(existsSync(join(res.runDir, "final", "delivery_receipt.yaml"))).toBe(false);
@@ -12783,6 +12965,7 @@ describe("Orchestrator v0.8 honesty & streaming", () => {
     const events = readRunEvents(res.runDir);
     expect(events.some((event) => event.type === "work_product.emitted")).toBe(false);
     expect(events.some((event) => event.type === "work_product.adopted")).toBe(false);
+    expect(readFileSync(join(dir, "secret.png")).includes(secret)).toBe(true);
   });
 
   it("refuses fresh delegated live writes without a caller-owned execution tree", async () => {
@@ -14940,7 +15123,7 @@ describe("delegation belt injection (D32)", () => {
     { lane: "Delegate convergence", delegate: true, attempts: 2 },
     { lane: "ordinary Agent", delegate: false, attempts: undefined },
   ])(
-    "quarantines a secret-bearing in-place diff for $lane without artifacts or Git objects",
+    "keeps a secret-like in-place diff for $lane and hides it only in saved copies (V4C T1)",
     async ({ delegate, attempts }) => {
       const repo = await initRepo();
       const secret = `sk-${"a".repeat(24)}`;
@@ -14970,44 +15153,64 @@ describe("delegation belt injection (D32)", () => {
         ...(delegate ? { delegate: true, delegationBelt: belt } : {}),
       });
 
-      expect(res.lifecycle).toBe("failed");
-      expect(existsSync(join(repo, "LEAK.txt"))).toBe(false);
-      expect(existsSync(join(res.runDir, "final", "patch.diff"))).toBe(false);
-      expect(existsSync(join(res.runDir, "attempts", "a01", "patch.diff"))).toBe(false);
+      // Nothing is rolled back: the bytes stay exactly where the agent wrote them.
+      expect(readFileSync(join(repo, "LEAK.txt"), "utf8")).toBe(`TOKEN=${secret}\n`);
+      for (const rel of [
+        ["final", "patch.diff"],
+        ["attempts", "a01", "patch.diff"],
+      ]) {
+        const saved = readFileSync(join(res.runDir, ...rel), "utf8");
+        expect(saved).toContain("+TOKEN=[redacted]");
+        expect(saved).not.toContain(secret);
+      }
       const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
-      expect(workProduct).toContain("secret_diff_refused: true");
-      expect(workProduct).toContain("secret_recovery: manual_cleanup");
+      expect(workProduct).toContain("persisted_patch: redacted");
+      expect(workProduct).not.toContain("capture_refused");
       expect(workProduct).toContain("adopted: true");
-      expect(workProduct).toContain("apply_state: applied_review_blocked");
-      expect(workProduct).toContain("revert_anchor_id: null");
+      // A real revert anchor exists again (the old quarantine recorded none).
+      const anchor = /revert_anchor_id: (sha256:[0-9a-f]{64})/.exec(workProduct)?.[1] ?? "";
+      expect(anchor).not.toBe("");
       const attempt = readFileSync(join(res.runDir, "attempts", "a01", "attempt.yaml"), "utf8");
-      expect(attempt).toContain("secret_diff_refusal:");
+      expect(attempt).toMatch(/secret_like:\n[\s\S]*path: LEAK\.txt\n\s+matches: 1/);
+      expect(attempt).not.toContain("capture_refusal");
       if (delegate) {
+        // The belt failure is still the terminal cause; the secret-like text is not.
+        expect(res.lifecycle).toBe("failed");
+        expect(workProduct).toContain("apply_state: applied_review_blocked");
         expect(attempt).toMatch(/delegation_belt:\n[\s\S]*tool_evidence: true/);
         expect(attempt).toContain("unrecovered_tool_errors: 1");
-        expect(readFileSync(join(res.runDir, "final", "telemetry.yaml"), "utf8")).toMatch(
-          /delegation:\n[\s\S]*used: true/,
+        expect(readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8")).toContain(
+          "phase: delegation_runtime",
+        );
+        const events = readFileSync(join(res.runDir, "events.jsonl"), "utf8");
+        expect(events.indexOf('"type":"work_product.emitted"')).toBeLessThan(
+          events.indexOf('"type":"run.failed"'),
+        );
+      } else {
+        expect(res.lifecycle).toBe("succeeded");
+        expect(existsSync(join(res.runDir, "final", "failure.yaml"))).toBe(false);
+        expect(readFileSync(join(res.runDir, "final", "answer.md"), "utf8")).toContain(
+          "Implemented.",
+        );
+        expect(readFileSync(join(res.runDir, "final", "summary.md"), "utf8")).toContain(
+          "- Secret-like strings: 1 in 1 changed file(s) (LEAK.txt) — kept in the changed files, hidden in saved copies",
         );
       }
-      const events = readFileSync(join(res.runDir, "events.jsonl"), "utf8");
-      expect(events).toContain('"type":"work_product.emitted"');
-      expect(events.indexOf('"type":"work_product.emitted"')).toBeLessThan(
-        events.indexOf('"type":"run.failed"'),
-      );
+      // Events, attempts, reviews and final artifacts: not one copy of the match.
       expect(treeContainsBytes(res.runDir, secret)).toBe(false);
-      expect(gitObjectStoreContains(repo, secret)).toBe(false);
-      const failure = readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8");
-      expect(failure).toContain(
-        delegate ? "phase: delegation_runtime" : "phase: artifact_security",
-      );
+      // Revert uses the exact private anchor and restores the tree.
+      const reverted = await revertWorkingTreePatch(repo, readRevertAnchor(repo, anchor));
+      expect(reverted.reverted).toBe(true);
+      expect(existsSync(join(repo, "LEAK.txt"))).toBe(false);
     },
   );
 
   it.each([false, true])(
-    "quarantines a binary secret-bearing Agent diff (inPlace=%s)",
+    "keeps a binary Agent diff with secret-like bytes and withholds only its saved payload (inPlace=%s, V4C T4)",
     async (inPlace) => {
       const repo = await initRepo();
       const secret = `sk-${"b".repeat(24)}`;
+      const bytes = Buffer.concat([Buffer.from([0]), Buffer.from(secret), Buffer.from([0])]);
       const adapter = delegatingAdapter(
         "deleg",
         true,
@@ -15017,11 +15220,7 @@ describe("delegation belt injection (D32)", () => {
         undefined,
         [],
         undefined,
-        (cwd) =>
-          writeFileSync(
-            join(cwd, "LEAK.bin"),
-            Buffer.concat([Buffer.from([0]), Buffer.from(secret), Buffer.from([0])]),
-          ),
+        (cwd) => writeFileSync(join(cwd, "LEAK.bin"), bytes),
       );
       const orch = new Orchestrator({
         registry: new Map([["deleg", adapter]]),
@@ -15035,20 +15234,40 @@ describe("delegation belt injection (D32)", () => {
         inPlace,
       });
 
-      expect(res.lifecycle).toBe("failed");
-      expect(existsSync(join(repo, "LEAK.bin"))).toBe(false);
-      expect(existsSync(join(res.runDir, "final", "patch.diff"))).toBe(false);
-      expect(existsSync(join(res.runDir, "attempts", "a01", "patch.diff"))).toBe(false);
+      expect(res.lifecycle).toBe("succeeded");
+      // In-place bytes stay; an isolated candidate was never applied to the project.
+      expect(existsSync(join(repo, "LEAK.bin"))).toBe(inPlace);
+      if (inPlace) expect(readFileSync(join(repo, "LEAK.bin")).equals(bytes)).toBe(true);
+      for (const rel of [
+        ["final", "patch.diff"],
+        ["attempts", "a01", "patch.diff"],
+      ]) {
+        const saved = readFileSync(join(res.runDir, ...rel), "utf8");
+        expect(saved).toContain("diff --git a/LEAK.bin b/LEAK.bin");
+        expect(saved).toContain("GIT binary patch\n# Claudexor: binary payload withheld");
+        expect(saved).not.toMatch(/^literal \d+$/m);
+      }
+      const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
+      expect(workProduct).toMatch(/binary_paths:\n\s+- LEAK\.bin/);
+      expect(workProduct).toContain("persisted_patch: redacted");
       expect(treeContainsBytes(res.runDir, secret)).toBe(false);
-      expect(gitObjectStoreContains(repo, secret)).toBe(false);
-      expect(readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8")).toContain(
-        "phase: artifact_security",
-      );
-      expect(existsSync(join(res.runDir, "final", "work_product.yaml"))).toBe(inPlace);
+      // Isolated: nothing reached the user's object store. In-place: the bytes
+      // are in place, and the post-turn snapshot holds the same bytes as the tree.
+      if (!inPlace) expect(gitObjectStoreContains(repo, secret)).toBe(false);
+      // The private exact object still carries the applyable payload.
+      const digest = /patch_sha256: (sha256:[0-9a-f]{64})/.exec(workProduct)?.[1] ?? "";
+      const exact = readRevertAnchor(repo, digest);
+      expect(exact).toMatch(/^literal \d+$/m);
+      expect(exact).not.toContain("payload withheld");
+      const fresh = reapMk(join(tmpdir(), "claudexor-v4c-exact-apply-"));
+      execFileSync("git", ["clone", "-q", repo, fresh]);
+      if (inPlace) rmSync(join(fresh, "LEAK.bin"), { force: true });
+      execFileSync("git", ["-C", fresh, "apply", "--binary", "-"], { input: exact });
+      expect(readFileSync(join(fresh, "LEAK.bin")).equals(bytes)).toBe(true);
     },
   );
 
-  it("reports manual cleanup when an in-place Delegate stages secret bytes", async () => {
+  it("keeps staged secret-like bytes of a failed in-place Delegate without a cleanup receipt", async () => {
     const repo = await initRepo();
     const secret = `sk-${"e".repeat(24)}`;
     const adapter = delegatingAdapter(
@@ -15081,17 +15300,21 @@ describe("delegation belt injection (D32)", () => {
     });
 
     expect(res.lifecycle).toBe("failed");
-    expect(existsSync(join(repo, "LEAK.txt"))).toBe(false);
+    // Neither the worktree file nor the agent's index entry is touched.
+    expect(readFileSync(join(repo, "LEAK.txt"), "utf8")).toBe(`${secret}\n`);
     expect(execFileSync("git", ["-C", repo, "show", ":LEAK.txt"]).toString()).toContain(secret);
     const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
-    expect(workProduct).toContain("secret_recovery: manual_cleanup");
+    expect(workProduct).toContain("persisted_patch: redacted");
     expect(workProduct).toContain("apply_state: applied_review_blocked");
+    expect(workProduct).not.toContain("capture_recovery");
     const failure = readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8");
-    expect(failure).toContain("Inspect and clean the state named in the recovery receipt");
+    expect(failure).toContain("phase: delegation_runtime");
+    expect(failure).not.toContain("Inspect and clean the state named in the recovery receipt");
+    expect(failure).not.toContain("inspect Git index");
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
   });
 
-  it("exactly reverts a secret-bearing non-Git in-place convergence attempt", async () => {
+  it("keeps a secret-like non-Git in-place convergence attempt and saves a redacted copy", async () => {
     const repo = reapMk(join(tmpdir(), "claudexor-secret-nongit-"));
     writeFileSync(join(repo, "README.md"), "# test\n");
     const secret = `sk-${"g".repeat(24)}`;
@@ -15119,16 +15342,80 @@ describe("delegation belt injection (D32)", () => {
       inPlace: true,
     });
 
-    expect(res.lifecycle).toBe("failed");
-    expect(existsSync(join(repo, "LEAK.txt"))).toBe(false);
+    // No rollback of a non-Git folder either: the file stays, the run converges.
+    expect(res.lifecycle).toBe("succeeded");
+    expect(readFileSync(join(repo, "LEAK.txt"), "utf8")).toBe(`${secret}\n`);
     expect(existsSync(join(repo, ".git"))).toBe(false);
-    expect(readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8")).toContain(
-      "secret_recovery: reverted",
+    const saved = readFileSync(join(res.runDir, "final", "patch.diff"), "utf8");
+    expect(saved).toContain("+[redacted]");
+    const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
+    expect(workProduct).toContain("persisted_patch: redacted");
+    expect(workProduct).toContain("apply_state: applied");
+    // The convergence patch lane keeps the answer and discloses in its summary.
+    expect(readFileSync(join(res.runDir, "final", "answer.md"), "utf8")).toContain("Implemented.");
+    expect(readFileSync(join(res.runDir, "final", "summary.md"), "utf8")).toContain(
+      "- Secret-like strings: 1 in 1 changed file(s) (LEAK.txt)",
     );
+    // Reviewer packets, findings and prompts included.
+    expect(existsSync(join(res.runDir, "reviews"))).toBe(true);
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
   });
 
-  it("refuses a secret-bearing non-Git binary output without persisting it", async () => {
+  it("keeps an isolated convergence result with secret-like strings applyable from the exact object", async () => {
+    const repo = await initRepo();
+    const secret = `sk-${"k".repeat(24)}`;
+    const adapter = delegatingAdapter(
+      "deleg",
+      true,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      [],
+      undefined,
+      (cwd) => writeFileSync(join(cwd, "LEAK.txt"), `${secret}\n`),
+      `Wrote the value ${secret} to LEAK.txt.`,
+    );
+    const orch = new Orchestrator({
+      registry: new Map([["deleg", adapter]]),
+      reviewers: reviewers(),
+    });
+    const res = await orch.run({
+      repoRoot: repo,
+      prompt: "x",
+      mode: "agent",
+      harnesses: ["deleg"],
+      attempts: 2,
+    });
+
+    expect(res.lifecycle).toBe("succeeded");
+    // Isolated: the project is untouched until an explicit Apply.
+    expect(existsSync(join(repo, "LEAK.txt"))).toBe(false);
+    const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
+    expect(workProduct).toContain("apply_state: not_applied");
+    expect(workProduct).toContain("persisted_patch: redacted");
+    // The answer is kept for a convergence patch result, with its match hidden
+    // and counted once (before the first redaction).
+    expect(readFileSync(join(res.runDir, "final", "answer.md"), "utf8")).toBe(
+      "Wrote the value [redacted] to LEAK.txt.",
+    );
+    expect(workProduct).toContain("answer_matches: 1");
+    expect(workProduct).toContain("total_matches: 2");
+    expect(readFileSync(join(res.runDir, "final", "summary.md"), "utf8")).toContain(
+      "- Secret-like strings: 1 in 1 changed file(s) (LEAK.txt) — kept in the changed files, hidden in saved copies; 1 hidden in the answer",
+    );
+    expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+    expect(gitObjectStoreContains(repo, secret)).toBe(false);
+    // The envelope is gone, yet the exact bytes survive in the private object
+    // whose id is the recorded digest, and they apply cleanly.
+    const digest = /patch_sha256: (sha256:[0-9a-f]{64})/.exec(workProduct)?.[1] ?? "";
+    expect(workProduct).toContain(`exact_patch_object: ${digest}`);
+    const exact = readRevertAnchor(repo, digest);
+    execFileSync("git", ["-C", repo, "apply", "-"], { input: exact });
+    expect(readFileSync(join(repo, "LEAK.txt"), "utf8")).toBe(`${secret}\n`);
+  });
+
+  it("keeps a non-Git binary output with secret-like bytes and names it in the disclosure", async () => {
     const repo = reapMk(join(tmpdir(), "claudexor-secret-nongit-binary-"));
     writeFileSync(join(repo, "README.md"), "# test\n");
     const secret = `sk-${"i".repeat(24)}`;
@@ -15160,17 +15447,19 @@ describe("delegation belt injection (D32)", () => {
       inPlace: true,
     });
 
-    expect(res.lifecycle).toBe("failed");
+    expect(res.lifecycle).toBe("succeeded");
     expect(existsSync(join(repo, "LEAK.bin"))).toBe(true);
-    expect(existsSync(join(res.runDir, "final", "patch.diff"))).toBe(false);
-    expect(existsSync(join(res.runDir, "attempts", "a01", "patch.diff"))).toBe(false);
-    expect(readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8")).toContain(
-      "secret_recovery: manual_cleanup",
+    // A plain diff carries no binary payload: the saved copy is the exact stub.
+    expect(readFileSync(join(res.runDir, "final", "patch.diff"), "utf8")).toContain(
+      "Binary files a/LEAK.bin and b/LEAK.bin differ",
     );
+    const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
+    expect(workProduct).toMatch(/binary_paths:\n\s+- LEAK\.bin/);
+    expect(workProduct).not.toContain("capture_refused");
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
   });
 
-  it("fails closed when non-Git binary output is unreadable during capture", async () => {
+  it("names an uncapturable non-Git output as a capture refusal, not a secret refusal", async () => {
     const repo = reapMk(join(tmpdir(), "claudexor-secret-nongit-unreadable-"));
     writeFileSync(join(repo, "README.md"), "# test\n");
     const secret = `sk-${"j".repeat(24)}`;
@@ -15202,18 +15491,27 @@ describe("delegation belt injection (D32)", () => {
       inPlace: true,
     });
 
+    // `diff` could not read the file, so nothing was captured: an honest
+    // workspace-phase failure. The answer is still on the attempt record.
     expect(res.lifecycle).toBe("failed");
     expect(existsSync(join(res.runDir, "final", "patch.diff"))).toBe(false);
     expect(existsSync(join(res.runDir, "attempts", "a01", "patch.diff"))).toBe(false);
-    expect(readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8")).toContain(
-      "secret_recovery: manual_cleanup",
+    const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
+    expect(workProduct).toContain("capture_refused: true");
+    expect(workProduct).toContain("capture_recovery: manual_cleanup");
+    expect(workProduct).not.toContain("secret_");
+    const failure = readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8");
+    expect(failure).toContain("phase: workspace");
+    expect(failure).toContain("could not be captured as a complete patch");
+    expect(readFileSync(join(res.runDir, "attempts", "a01", "attempt.yaml"), "utf8")).toContain(
+      "capture_refusal:",
     );
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
     chmodSync(join(repo, "LEAK.bin"), 0o600);
   });
 
   it.each(["replace", "delete"] as const)(
-    "refuses a binary patch whose $case reverse payload contains a secret",
+    "keeps a binary patch whose reverse payload holds secret-like bytes (%s) and withholds it from the saved copy",
     async (operation) => {
       const repo = await initRepo();
       const secret = `sk-${"c".repeat(24)}`;
@@ -15254,15 +15552,26 @@ describe("delegation belt injection (D32)", () => {
         harnesses: ["deleg"],
       });
 
-      expect(res.lifecycle).toBe("failed");
-      expect(existsSync(join(res.runDir, "final", "patch.diff"))).toBe(false);
-      expect(existsSync(join(res.runDir, "attempts", "a01", "patch.diff"))).toBe(false);
+      // The preimage is where the secret-like bytes live; the binary delta would
+      // let a reader reconstruct them, so the saved copy has no payload at all.
+      expect(res.lifecycle).toBe("succeeded");
+      for (const rel of [
+        ["final", "patch.diff"],
+        ["attempts", "a01", "patch.diff"],
+      ]) {
+        const saved = readFileSync(join(res.runDir, ...rel), "utf8");
+        expect(saved).toContain("GIT binary patch\n# Claudexor: binary payload withheld");
+        expect(saved).not.toMatch(/^(?:literal|delta) \d+$/m);
+      }
+      expect(readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8")).toMatch(
+        /binary_paths:\n\s+- BASE\.bin/,
+      );
       expect(treeContainsBytes(res.runDir, secret)).toBe(false);
     },
   );
 
   it.each(["owned artifact", "ignored markdown link"] as const)(
-    "refuses secret-bearing raster output from an $source",
+    "does not save a secret-like raster from an %s but keeps the run and its clean outputs (V4C T5)",
     async (source) => {
       const repo = await initRepo();
       grantFullAccess(repo);
@@ -15316,15 +15625,25 @@ describe("delegation belt injection (D32)", () => {
         browser: true,
       });
 
-      expect(res.lifecycle).toBe("failed");
+      // One unsavable image no longer fails the run or drops its answer.
+      expect(res.lifecycle).toBe("succeeded");
+      expect(existsSync(join(res.runDir, "final", "failure.yaml"))).toBe(false);
+      expect(existsSync(join(res.runDir, "final", "answer.md"))).toBe(true);
       expect(treeContainsBytes(res.runDir, secret)).toBe(false);
-      expect(existsSync(join(res.runDir, "final", "patch.diff"))).toBe(false);
-      expect(existsSync(join(res.runDir, "attempts", "a01", "patch.diff"))).toBe(false);
-      expect(existsSync(join(res.runDir, "attempts", "a01", "produced"))).toBe(false);
+      const attempt = readFileSync(join(res.runDir, "attempts", "a01", "attempt.yaml"), "utf8");
+      const withheld = source === "owned artifact" ? "shot.png" : "preview.png";
+      expect(attempt).toMatch(new RegExp(`media_withheld:\\n\\s+- \\S*${withheld}`));
+      // The clean sibling of the owned artifact is still preserved for the user.
+      const produced = /produced_files:\n((?:\s+- .*\n)*)/.exec(attempt)?.[1] ?? "";
+      expect(produced).not.toContain(withheld);
+      if (source === "owned artifact") expect(produced).toContain("clean.png");
+      expect(readFileSync(join(res.runDir, "final", "summary.md"), "utf8")).toContain(
+        "1 image(s) not saved",
+      );
     },
   );
 
-  it("turns an unreadable raster into a sanitized artifact-security refusal", async () => {
+  it("discloses an unreadable raster as not saved instead of failing the run", async () => {
     const repo = await initRepo();
     writeFileSync(join(repo, ".gitignore"), "unreadable.png\n");
     execFileSync("git", ["-C", repo, "add", ".gitignore"]);
@@ -15363,18 +15682,19 @@ describe("delegation belt injection (D32)", () => {
       harnesses: ["deleg"],
     });
 
-    expect(res.lifecycle).toBe("failed");
-    expect(readFileSync(join(res.runDir, "attempts", "a01", "attempt.yaml"), "utf8")).toContain(
-      "secret_diff_refusal:",
-    );
-    expect(readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8")).toContain(
-      "phase: artifact_security",
-    );
+    expect(res.lifecycle).toBe("succeeded");
+    const attempt = readFileSync(join(res.runDir, "attempts", "a01", "attempt.yaml"), "utf8");
+    expect(attempt).toMatch(/secret_like:\n[\s\S]*media_withheld:\n\s+- unreadable\.png/);
+    expect(attempt).not.toContain("capture_refusal");
+    expect(existsSync(join(res.runDir, "final", "failure.yaml"))).toBe(false);
     expect(existsSync(join(res.runDir, "attempts", "a01", "produced"))).toBe(false);
+    expect(readFileSync(join(res.runDir, "final", "answer.md"), "utf8")).toContain(
+      "![preview](unreadable.png)",
+    );
   });
 
   it.each(["oversized", "unreadable"] as const)(
-    "emits a truthful manual-cleanup receipt for an $state in-place raster",
+    "treats an %s in-place raster as an unsaved image or an honest capture failure, never a secret refusal",
     async (state) => {
       const repo = reapMk(join(tmpdir(), `claudexor-raster-${state}-`));
       writeFileSync(join(repo, "README.md"), "# test\n");
@@ -15389,7 +15709,7 @@ describe("delegation belt injection (D32)", () => {
         undefined,
         [],
         undefined,
-        (_cwd, spec) => {
+        (cwd, spec) => {
           if (!spec.browser?.output_dir) throw new Error("missing browser output");
           const output = join(spec.browser.output_dir, "preview.png");
           raster = output;
@@ -15401,6 +15721,7 @@ describe("delegation belt injection (D32)", () => {
               : Buffer.from([0x89, 0x50, 0x4e, 0x47]),
           );
           if (state === "unreadable") chmodSync(output, 0o000);
+          writeFileSync(join(cwd, "CHANGED.txt"), "change\n");
         },
       );
       const orch = new Orchestrator({
@@ -15419,26 +15740,49 @@ describe("delegation belt injection (D32)", () => {
         browser: true,
       });
 
-      expect(res.lifecycle).toBe("failed");
-      expect(existsSync(join(res.runDir, "final", "patch.diff"))).toBe(false);
+      // Either way the agent's text change is still in the folder.
+      expect(readFileSync(join(repo, "CHANGED.txt"), "utf8")).toBe("change\n");
       const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
-      expect(workProduct).toContain("secret_recovery: manual_cleanup");
-      expect(workProduct.replace(/\s+/g, " ")).toContain(
-        "could not be proven secret-safe or captured as an exact reversible patch",
-      );
-      expect(workProduct).not.toContain("later user edits");
-      const refusalSurface = [
+      const surface = [
         res.summary,
-        readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8"),
+        readFileSync(join(res.runDir, "final", "summary.md"), "utf8"),
         readFileSync(join(res.runDir, "attempts", "a01", "attempt.yaml"), "utf8"),
+        workProduct,
       ].join("\n");
-      expect(refusalSurface).toContain("could not be proven secret-safe");
-      expect(refusalSurface).not.toContain("contains secret-like token");
+      expect(surface).not.toContain("could not be proven secret-safe");
+      expect(surface).not.toContain("contains secret-like token");
+      if (state === "oversized") {
+        // The text change is a normal reviewed result; only the image is unsaved.
+        expect(res.lifecycle).toBe("succeeded");
+        expect(readFileSync(join(res.runDir, "final", "patch.diff"), "utf8")).toContain(
+          "CHANGED.txt",
+        );
+        expect(workProduct).toMatch(/media_withheld:\n\s+- \S*preview\.png/);
+        expect(workProduct).not.toContain("capture_refused");
+        expect(workProduct).not.toContain("persisted_patch");
+        expect(surface).toContain("1 image(s) not saved");
+        expect(existsSync(join(res.runDir, "final", "failure.yaml"))).toBe(false);
+      } else {
+        // A non-Git capture runs `diff` over the whole folder; a file it cannot
+        // read means the capture itself is incomplete. That stays a refusal under
+        // its honest name and phase, with nothing rolled back.
+        expect(res.lifecycle).toBe("failed");
+        expect(existsSync(join(res.runDir, "final", "patch.diff"))).toBe(false);
+        expect(workProduct).toContain("capture_refused: true");
+        expect(workProduct).toContain("capture_recovery: manual_cleanup");
+        expect(workProduct.replace(/\s+/g, " ")).toContain(
+          "could not be captured as a complete patch",
+        );
+        expect(workProduct).not.toContain("later user edits");
+        expect(readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8")).toContain(
+          "phase: workspace",
+        );
+      }
       if (state === "unreadable" && raster && existsSync(raster)) chmodSync(raster, 0o600);
     },
   );
 
-  it("excludes a discarded secret candidate so its clean best-of sibling can win", async () => {
+  it("reviews a candidate with secret-like strings like any other in a best-of race (V4C T6)", async () => {
     const repo = await initRepo();
     const secret = `sk-${"q".repeat(24)}`;
     const leaky = delegatingAdapter(
@@ -15479,14 +15823,40 @@ describe("delegation belt injection (D32)", () => {
     });
 
     expect(res.lifecycle).toBe("succeeded");
-    expect(res.candidates.find((candidate) => candidate.attemptId === res.winner)?.harnessId).toBe(
-      "clean",
-    );
-    expect(readFileSync(join(res.runDir, "final", "patch.diff"), "utf8")).toContain("CLEAN.txt");
+    expect(res.winner).not.toBeNull();
+    const leakyAttempt =
+      res.candidates.find((candidate) => candidate.harnessId === "leaky")?.attemptId ?? "";
+    // The secret-like candidate was neither discarded nor skipped by the panel:
+    // it has its own review record and a reviewer packet with the SAVED copy.
+    expect(existsSync(join(res.runDir, "reviews", `${leakyAttempt}.yaml`))).toBe(true);
+    const packets = execFileSync("find", [join(res.runDir, "reviews"), "-name", "DIFF.patch"], {
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    const leakyPackets = packets.filter((path) => readFileSync(path, "utf8").includes("LEAK.txt"));
+    expect(leakyPackets.length).toBeGreaterThan(0);
+    for (const path of leakyPackets) {
+      const packet = readFileSync(path, "utf8");
+      expect(packet).toContain("+[redacted]");
+      expect(packet).toContain("a reviewer workspace copy omits files with secret-like content");
+    }
+    // The reviewer's own workspace copy never receives the secret-bearing file.
+    expect(
+      execFileSync("find", [join(res.runDir, "reviews"), "-name", "LEAK.txt"], {
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("");
+    // reviews/** (packets, prompts, findings yaml), attempts, events, final.
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+    expect(gitObjectStoreContains(repo, secret)).toBe(false);
+    const finalPatch = readFileSync(join(res.runDir, "final", "patch.diff"), "utf8");
+    if (res.winner === leakyAttempt) expect(finalPatch).toContain("+[redacted]");
+    else expect(finalPatch).toContain("CLEAN.txt");
   });
 
-  it("keeps an all-secret best-of race as an artifact-security hard failure", async () => {
+  it("lets a best-of race whose every candidate holds secret-like strings pick a winner", async () => {
     const repo = await initRepo();
     const secret = `sk-${"s".repeat(24)}`;
     const leaky = (id: string) =>
@@ -15508,12 +15878,16 @@ describe("delegation belt injection (D32)", () => {
       n: 2,
     });
 
-    expect(res.lifecycle).toBe("failed");
-    expect(res.winner).toBeNull();
-    expect(readFileSync(join(res.runDir, "final", "failure.yaml"), "utf8")).toContain(
-      "phase: artifact_security",
-    );
+    expect(res.lifecycle).toBe("succeeded");
+    expect(res.winner).not.toBeNull();
+    expect(existsSync(join(res.runDir, "final", "failure.yaml"))).toBe(false);
+    const finalPatch = readFileSync(join(res.runDir, "final", "patch.diff"), "utf8");
+    expect(finalPatch).toContain("+[redacted]");
+    const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
+    expect(workProduct).toContain("persisted_patch: redacted");
+    expect(workProduct).toMatch(/exact_patch_object: sha256:[0-9a-f]{64}/);
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+    expect(gitObjectStoreContains(repo, secret)).toBe(false);
   });
 
   it("keeps harness commits inside the disposable candidate clone", async () => {
@@ -15553,7 +15927,15 @@ describe("delegation belt injection (D32)", () => {
       harnesses: ["deleg"],
     });
 
-    expect(res.lifecycle).toBe("failed");
+    // The candidate is kept (its patch survives as a redacted copy plus the
+    // private exact object), yet the user's repository still gains no object
+    // and no ref from a commit the harness made inside its clone.
+    expect(res.lifecycle).toBe("succeeded");
+    expect(readFileSync(join(res.runDir, "final", "patch.diff"), "utf8")).toContain("+[redacted]");
+    expect(existsSync(join(repo, "LEAK.txt"))).toBe(false);
+    expect(
+      execFileSync("git", ["-C", repo, "log", "--all", "--format=%s"], { encoding: "utf8" }),
+    ).not.toContain("candidate");
     expect(gitObjectStoreContains(repo, secret)).toBe(false);
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
   });
@@ -15701,7 +16083,7 @@ describe("delegation belt injection (D32)", () => {
     );
   });
 
-  it("lets an unrecovered belt failure dominate a discarded secret sibling", async () => {
+  it("lets an unrecovered belt failure dominate a sibling whose patch holds secret-like strings", async () => {
     const repo = await initRepo();
     const secret = `sk-${"t".repeat(24)}`;
     const orch = new Orchestrator({

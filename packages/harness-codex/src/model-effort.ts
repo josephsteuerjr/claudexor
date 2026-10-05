@@ -1,4 +1,4 @@
-import { effortRankLadder, resolveEffortEvidence } from "@claudexor/core";
+import { effortLadders, resolveEffortEvidence } from "@claudexor/core";
 import type { ModelCatalogEntry } from "@claudexor/schema";
 
 /** Codex's typed Ultra selector owns automatic delegation in the native agent.
@@ -22,10 +22,12 @@ export function codexModelEffortResolution(
 ) {
   // Re-project historical operation-local catalogs too: their verified array
   // may still contain the native selector, but remains vendor ordering evidence.
+  // The account's verified per-model orders rank first; the shared preference
+  // order (merged from the same raw lists) only places a word none of them list.
   const resolution = resolveEffortEvidence(
     requested,
     codexModelEfforts(model.reasoningEfforts).reasoningEfforts,
-    effortRankLadder(
+    effortLadders(
       models
         .filter((entry) => entry.reasoningEffortsVerified === true)
         .map((entry) => entry.reasoningEffortPreferenceOrder ?? entry.reasoningEfforts),
@@ -39,9 +41,12 @@ export function codexModelEffortResolution(
     (model.reasoningEffortPreferenceOrder ?? model.reasoningEfforts).includes(requested) &&
     resolution.resolution === "downward"
   ) {
+    // A receipt reason on a downward result is the shared-order placement note;
+    // keep it behind the session-Ultra explanation rather than overwrite it.
     resolution.reason =
       "Raw model calls do not execute Codex's Ultra automatic-delegation mode; " +
-      "the preference resolves to the strongest supported generation effort within the vendor order.";
+      "the preference resolves to the strongest supported generation effort" +
+      (resolution.reason ? `. ${resolution.reason}` : " within the vendor order.");
   }
   return resolution;
 }

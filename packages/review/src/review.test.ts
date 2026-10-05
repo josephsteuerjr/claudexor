@@ -4531,3 +4531,113 @@ describe("reviewer preserve set uses the shared quote-aware diff parser (INV-050
     expect([...__testExtractDiffPostimagePaths(diff)]).toEqual(["new.txt"]);
   });
 });
+
+describe("reviewer dispatch consumes ONE prepared result (model-id effort carrier)", () => {
+  it("--model == processing.submittedNative == prepared model; the effort receipt lands in the reviewer artifact once", async () => {
+    const { cwd, evidenceDir } = makeReviewWorkspace("claudexor-review-effort-variant-");
+    const artifactsDir = reapMk(join(tmpdir(), "claudexor-review-effort-variant-artifacts-"));
+    initGitFixture(cwd);
+    const seen: Array<{ model: string | null; effort: string | null; sent: string | null }> = [];
+    const adapter: HarnessAdapter = {
+      id: "variant-reviewer",
+      effortParameter: "--model",
+      async discover() {
+        throw new Error("not used");
+      },
+      async doctor() {
+        throw new Error("not used");
+      },
+      async prepareProcessing(spec) {
+        // The adapter's preparation: level first (max → the listed xhigh), one result.
+        expect(spec).toMatchObject({ model: "grok-4.7-high", effort: "max" });
+        return {
+          model: "grok-4.7-xhigh",
+          receipt: {
+            requested: null,
+            submitted: null,
+            submittedNative: "grok-4.7-xhigh",
+            observed: "unknown",
+            observedNative: [],
+            reason: null,
+            source: "fixture_account_inventory",
+          },
+          costBasis: { nativeMode: "grok-4.7-xhigh", kind: "unknown", source: "fixture" },
+          effort: {
+            requested: "max",
+            submitted: "xhigh",
+            resolution: "downward",
+            source: "account_catalog",
+            parameter: "--model",
+            observed: null,
+            observedSource: null,
+            reason: "fixture: max placed on grok-4.7 → xhigh",
+          },
+        };
+      },
+      async *run(spec) {
+        // What a real adapter sends: the receipt's final id, never the hint.
+        seen.push({
+          model: spec.model_hint ?? null,
+          effort: spec.effort_hint ?? null,
+          sent: spec.processing?.submittedNative ?? spec.model_hint ?? null,
+        });
+        const ts = new Date().toISOString();
+        yield {
+          type: "started",
+          session_id: spec.session_id,
+          ts,
+          observed_model: "grok-4.7-xhigh",
+        };
+        yield { type: "message", session_id: spec.session_id, ts, text: "[]" };
+        yield { type: "completed", session_id: spec.session_id, ts };
+      },
+    };
+    try {
+      const result = await reviewCandidate({
+        candidateLabel: "Variant candidate",
+        diff: "diff --git a/a.ts b/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+        evidenceDir,
+        artifactsDir,
+        cwd,
+        reviewers: [
+          {
+            adapter,
+            providerFamily: "cursor",
+            requestedModel: "grok-4.7-high",
+            requestedEffort: "max",
+          },
+        ],
+      });
+      expect(seen).toEqual([{ model: "grok-4.7-high", effort: "max", sent: "grok-4.7-xhigh" }]);
+      const dir = join(artifactsDir, "01-variant-reviewer");
+      const metadata = JSON.parse(readFileSync(join(dir, "metadata.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(metadata["requested_model"]).toBe("grok-4.7-high");
+      expect(metadata["requested_effort"]).toBe("max");
+      expect(metadata["effort_resolution"]).toMatchObject({
+        requested: "max",
+        submitted: "xhigh",
+        resolution: "downward",
+        parameter: "--model",
+      });
+      expect(metadata["ignored_settings"]).toEqual([
+        expect.stringContaining("effort=max: downward; submitted=xhigh"),
+      ]);
+      const stream = readFileSync(join(dir, "raw-normalized-stream.jsonl"), "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { effort_resolution?: unknown; type: string });
+      expect(stream.filter((event) => event.effort_resolution)).toHaveLength(1);
+      // Requested vs observed stay distinct facts on the route proof.
+      expect(result.routeProofs[0]).toMatchObject({
+        requested: { model_hint: "grok-4.7-high" },
+        observed: { model_id: "grok-4.7-xhigh" },
+      });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(artifactsDir, { recursive: true, force: true });
+    }
+  });
+});

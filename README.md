@@ -31,7 +31,7 @@ with a vendor usage source (Antigravity, Claude, and Codex); Cursor has none
 yet. Everything runs on your machine, files are the source of truth, and there
 is no telemetry.
 
-Current status: **v3.20.1**. See "Stability at 2.0" below for what is a stable
+Current status: **v3.21.0**. See "Stability at 2.0" below for what is a stable
 contract and what remains experimental; retired verbs and mode ids hard-error
 with the new spelling instead of silently aliasing.
 
@@ -401,7 +401,9 @@ primary first); `--n` on a plan is legal ONLY with `--council`. Degradation is
 honest: a failed member is disclosed (event + `council/membership.yaml`) and the
 merge proceeds with the usable inputs (one input still merges). A useful draft
 with a contradictory `completed` plus `required_inputs` report is retained as
-explicitly unverified input, while its original attempt remains failed. The
+explicitly unverified input, while its original attempt remains failed (where
+the report footer is only requested, as on Cursor, the attempt does not fail and
+the draft is accepted with an unverified work state). The
 merger prefers an accepted draft's lane, then an eligible unverified lane; no
 eligible input is a typed failure. The final plan must still pass its own checks. Run
 detail carries a `council` projection (membership + per-member status + who

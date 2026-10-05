@@ -942,7 +942,7 @@
                           "incomplete",
                           "unverified"
                         ],
-                        "description": "Folded work state: the WorkReport state, or unverified when no report was obtainable (transport unsupported / lane gated)."
+                        "description": "Folded work state: the WorkReport state, or unverified when no valid report was obtained (transport unsupported / lane gated, or an instructed footer missing or broken)."
                       },
                       "source": {
                         "type": "string",
@@ -998,6 +998,19 @@
                         },
                         "maxItems": 16,
                         "description": "Carried through from a needs_input/incomplete WorkReport for honest disclosure."
+                      },
+                      "unverified_reason": {
+                        "type": "string",
+                        "enum": [
+                          "footer_missing",
+                          "footer_not_json",
+                          "footer_not_object",
+                          "report_missing",
+                          "report_malformed",
+                          "report_contradictory",
+                          "legacy_output_invalid"
+                        ],
+                        "description": "Present only with state unverified on a validated (instructed footer) source: the disclosed cause of the missing report."
                       }
                     },
                     "required": [

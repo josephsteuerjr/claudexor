@@ -1,5 +1,17 @@
 # @claudexor/event-log
 
+## 3.21.0
+
+### Patch Changes
+
+- Updated dependencies [7c541ba]
+- Updated dependencies [f0ab916]
+- Updated dependencies [83bc0da]
+- Updated dependencies [9ccd45d]
+- Updated dependencies [a4ff572]
+  - @claudexor/schema@3.21.0
+  - @claudexor/util@3.21.0
+
 ## 3.20.1
 
 ### Patch Changes

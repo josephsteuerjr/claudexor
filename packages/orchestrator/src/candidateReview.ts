@@ -213,7 +213,9 @@ export async function reviewCandidateRuns(
         hasDiff && reviewers.length > 0 && (reviewLease?.granted ?? true)
           ? await deps.reviewScoped({
               candidateLabel: run.label,
-              diff: run.diff,
+              // The reviewer packet is a SAVED artifact: it carries the copy with
+              // secret-like strings hidden (INV-062), never the exact bytes.
+              diff: run.persistedDiff ?? run.diff,
               ...(directoryReview ? { candidatePaths: directoryReview.paths } : {}),
               evidenceDir: candidateEvidenceDir,
               artifactsDir: join(paths.reviewsDir, `${run.attemptId}-reviewers`),

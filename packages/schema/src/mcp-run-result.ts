@@ -20,6 +20,50 @@ export const RunDetailProblem = z
 export type RunDetailProblem = z.infer<typeof RunDetailProblem>;
 
 /**
+ * INV-062 disclosure for a run whose output held secret-like strings: the
+ * changes were kept and only Claudexor's saved/served copies hide them. Paths,
+ * rule ids and counts — never a matched value.
+ */
+export const SecretLikeDisclosure = z
+  .object({
+    totalMatches: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe("Strings hidden across patch and answer."),
+    answerMatches: z.number().int().nonnegative().describe("Strings hidden in the answer."),
+    files: z
+      .array(
+        z
+          .object({
+            path: z.string().describe("Changed file whose saved diff hides strings."),
+            matches: z.number().int().nonnegative().describe("Strings hidden in that file's diff."),
+            kinds: z.array(z.string()).describe("Content-rule ids that matched."),
+          })
+          .strict(),
+      )
+      .describe("Changed files with hidden strings in the saved patch copy."),
+    binaryPaths: z.array(z.string()).describe("Binary files whose payload the saved patch omits."),
+    mediaWithheld: z.array(z.string()).describe("Images that were not saved as produced outputs."),
+    persistedPatch: z
+      .enum(["exact", "redacted"])
+      .describe(
+        "Whether the saved final/patch.diff is byte-exact or a display-only redacted copy.",
+      ),
+    exactPatchRecorded: z
+      .boolean()
+      .nullable()
+      .describe(
+        "For a redacted copy: whether the private exact patch object was recorded (false = deferred Apply answers patch_exact_bytes_unavailable); null for an exact copy.",
+      ),
+  })
+  .strict()
+  .describe(
+    "What a run's saved copies hide: secret-like strings kept in the work, hidden on disk.",
+  );
+export type SecretLikeDisclosure = z.infer<typeof SecretLikeDisclosure>;
+
+/**
  * The structured result shape MCP run tools return (structuredContent).
  * Text content mirrors it for hosts without structured-output support.
  */
@@ -177,6 +221,12 @@ export const McpRunHandleResult = z
       .default(null)
       .describe(
         "Typed post-terminal detail-read problem (the durable run handle survives); null when the detail read succeeded.",
+      ),
+    /** The answer-first `summary` of run_result would otherwise drop this fact. */
+    secretLike: SecretLikeDisclosure.nullable()
+      .default(null)
+      .describe(
+        "INV-062 disclosure: secret-like strings kept in the work but hidden in saved copies (paths and counts only); null when nothing was hidden.",
       ),
   })
   .strict()

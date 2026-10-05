@@ -19,6 +19,7 @@ import { dirname, extname, join, relative as pathRelative, resolve, sep } from "
 import type { ArtifactStore } from "@claudexor/artifact-store";
 import { CLAUDEXOR_ARTIFACT_DIR, summarizeDiffPaths } from "@claudexor/core";
 import { containsSecretLikeToken } from "@claudexor/util";
+import { assertPersistableText, persistedPatchCopy } from "./persistedPatch.js";
 
 const RASTER_OUTPUT_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -372,19 +373,25 @@ export function writeCandidateAttemptArtifacts(input: {
   attemptDir: string;
   worktreePath: string;
   artifactRelativeDir: string | null;
+  /** The EXACT candidate diff: diffstat and changed paths are computed on it. */
   diff: string;
-  /** False when no candidate patch may be retained (readonly or secret-refused):
+  /** The saved copy when it differs from the exact diff (secret-like strings
+   * hidden); `patch.diff` never holds anything else (INV-062). */
+  persistedDiff?: string;
+  /** False when no candidate patch may be retained (readonly or uncaptured):
    * even an empty patch.diff would falsely imply an inspectable patch exists. */
   persistPatch?: boolean;
-  /** False for a secret-refused candidate: no answer-adjacent or artifact-dir
-   * media is retained, even when an individual raster is otherwise safe. */
+  /** False for an uncaptured candidate: no answer-adjacent or artifact-dir
+   * media is retained. An individual secret-like raster is skipped either way. */
   persistProducedMedia?: boolean;
   answerText?: string;
   record: Record<string, unknown>;
 }): string[] {
   const persistPatch = input.persistPatch !== false;
   if (persistPatch) {
-    input.store.writeText(join(input.attemptDir, "patch.diff"), input.diff);
+    const saved = input.persistedDiff ?? persistedPatchCopy(input.diff, []).text;
+    assertPersistableText("attempt patch copy", saved);
+    input.store.writeText(join(input.attemptDir, "patch.diff"), saved);
   }
   const stats = summarizeDiffPaths(input.diff);
   // Build one candidate path set before the first filesystem write. A raster

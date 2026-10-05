@@ -1,8 +1,7 @@
 import { spawnProcess, type ChildStdin, type SpawnOptions } from "@claudexor/core";
-import type { HarnessEvent, HarnessRunSpec } from "@claudexor/schema";
+import type { EffortHint, HarnessEvent, HarnessRunSpec } from "@claudexor/schema";
 import { CLAUDEXOR_VERSION, nowIso, redactSecrets } from "@claudexor/util";
 import { codexAppServerInput } from "./attachments.js";
-import type { CodexEffortCatalog } from "./effort-probe.js";
 import {
   asObject,
   CodexAppServerController,
@@ -16,7 +15,13 @@ import {
   type CodexThreadLifecycle,
   type JsonObject,
 } from "./app-server-protocol.js";
-import { parseCodexEvent, parseCodexStderrFailure, type CodexParseState } from "./parse.js";
+import { CodexCancellation } from "./app-server-cancel.js";
+import {
+  CodexSubagentThreads,
+  codexTerminalEvents,
+  ownsNotification,
+} from "./app-server-threads.js";
+import { parseCodexStderrFailure, type CodexParseState } from "./parse.js";
 import { parseCodexRpcError } from "./rpc-error.js";
 
 export { CodexAppServerController } from "./app-server-protocol.js";
@@ -28,7 +33,8 @@ export interface CodexAppServerRunInput {
   env: Record<string, string | null | undefined>;
   spawn?: typeof spawnProcess;
   controller?: CodexAppServerController;
-  effortCatalog?: CodexEffortCatalog;
+  /** The run's ONE effort receipt (`submitted`); resolved from the snapshot when absent. */
+  effort?: EffortHint | null;
   pollIntervalMs?: number;
   cancelDeadlineMs?: number;
   /** Bound on the vendor's `turn/steer` answer (default 30 s); see createCodexSteer. */
@@ -54,9 +60,25 @@ export async function* runCodexAppServer(
   let nextId = 1;
   let processFailure: Error | null = null;
   let processStopped = false;
-  let nativeThreadId: string | null = null;
+  let nativeThreadId: string | null = input.spec.resume_session_id ?? null;
+  // Ownership binds a resumed root up front; cancellation RPCs wait for the reply.
+  let threadConfirmed = false;
   let activeTurnId: string | null = null;
   const ownedCommandItemIds = new Set<string>();
+  const subagents = new CodexSubagentThreads();
+  // Declared before the transport so its state is readable from the process
+  // teardown; the request/lifecycle/stop seams below are reached lazily.
+  const cancellation = new CodexCancellation({
+    spawned,
+    threadId: () => (threadConfirmed ? nativeThreadId : null),
+    activeTurnId: () => activeTurnId,
+    request: (method, params) => request(method, params),
+    readLifecycle: () => readLifecycle(),
+    stopProcess: () => stopProcess(),
+    processFailure: () => processFailure,
+    pollIntervalMs: input.pollIntervalMs ?? 250,
+    cancelDeadlineMs: input.cancelDeadlineMs ?? 5_000,
+  });
   const stderrRing: string[] = [];
   let launchAdvisory: string | null = null;
   let launchAdvisoryShown = false;
@@ -64,9 +86,6 @@ export async function* runCodexAppServer(
   let harnessReportedError = false;
   let terminationUnconfirmed: { survivors: number[]; unresolved: JsonObject[] } | null = null;
   let nativeSystemError = false;
-  let cancellationRequested = false;
-  let cancellationQuiescent = false;
-  let cancellationFailure: Error | null = null;
   const requiredMcpStatuses = new Map<
     string,
     { status: "starting" | "ready" | "failed" | "cancelled"; error?: string }
@@ -86,6 +105,44 @@ export async function* runCodexAppServer(
   const rejectPending = (error: Error): void => {
     for (const request of pending.values()) request.reject(error);
     pending.clear();
+  };
+  // Root-thread state only (app-server-threads.ts): a sub-agent thread's frames
+  // never move the active turn, the owned command set, or the thread's health.
+  const observeOwnNotification = (notification: JsonObject): void => {
+    const method = notification["method"];
+    const params = asObject(notification["params"]);
+    if (!ownsNotification(params, nativeThreadId)) return;
+    if (method === "turn/started") {
+      const turn = asObject(params?.["turn"]);
+      if (typeof turn?.["id"] === "string") activeTurnId = turn["id"];
+    } else if (method === "turn/completed") {
+      const turn = asObject(params?.["turn"]);
+      if (!turn || turn["id"] === activeTurnId) activeTurnId = null;
+    } else if (method === "item/started") {
+      const item = asObject(params?.["item"]);
+      if (item?.["type"] === "commandExecution" && typeof item["id"] === "string")
+        ownedCommandItemIds.add(item["id"]);
+    } else if (method === "thread/status/changed") {
+      if (asObject(params?.["status"])?.["type"] === "systemError") nativeSystemError = true;
+    } else if (method === "mcpServer/startupStatus/updated") {
+      const name = params?.["name"];
+      const status = params?.["status"];
+      if (
+        typeof name === "string" &&
+        requiredMcpStatuses.has(name) &&
+        (status === "starting" ||
+          status === "ready" ||
+          status === "failed" ||
+          status === "cancelled")
+      ) {
+        const error = params?.["error"] ?? params?.["failureReason"];
+        requiredMcpStatuses.set(name, {
+          status,
+          ...(typeof error === "string" ? { error } : {}),
+        });
+        if (status === "failed" || status === "cancelled") harnessReportedError = true;
+      }
+    }
   };
   const onMessage = (message: unknown): void => {
     const object = asObject(message);
@@ -109,38 +166,7 @@ export async function* runCodexAppServer(
       return;
     }
     if (typeof object["method"] === "string") {
-      const params = asObject(object["params"]);
-      if (object["method"] === "turn/started") {
-        const turn = asObject(params?.["turn"]);
-        if (typeof turn?.["id"] === "string") activeTurnId = turn["id"];
-      } else if (object["method"] === "turn/completed") {
-        const turn = asObject(params?.["turn"]);
-        if (!turn || turn["id"] === activeTurnId) activeTurnId = null;
-      } else if (object["method"] === "item/started") {
-        const item = asObject(params?.["item"]);
-        if (item?.["type"] === "commandExecution" && typeof item["id"] === "string")
-          ownedCommandItemIds.add(item["id"]);
-      } else if (object["method"] === "thread/status/changed") {
-        if (asObject(params?.["status"])?.["type"] === "systemError") nativeSystemError = true;
-      } else if (object["method"] === "mcpServer/startupStatus/updated") {
-        const name = params?.["name"];
-        const status = params?.["status"];
-        if (
-          typeof name === "string" &&
-          requiredMcpStatuses.has(name) &&
-          (status === "starting" ||
-            status === "ready" ||
-            status === "failed" ||
-            status === "cancelled")
-        ) {
-          const error = params?.["error"] ?? params?.["failureReason"];
-          requiredMcpStatuses.set(name, {
-            status,
-            ...(typeof error === "string" ? { error } : {}),
-          });
-          if (status === "failed" || status === "cancelled") harnessReportedError = true;
-        }
-      }
+      observeOwnNotification(object);
       steer.observeEcho(object);
       notifications.push(object);
       notificationWaiter.wake?.();
@@ -192,7 +218,7 @@ export async function* runCodexAppServer(
     } finally {
       processStopped = true;
       if (abort.signal.aborted)
-        rejectPending(cancellationFailure ?? new Error("Codex app-server stopped"));
+        rejectPending(cancellation.failure ?? new Error("Codex app-server stopped"));
       notificationWaiter.wake?.();
       notificationWaiter.wake = undefined;
     }
@@ -223,29 +249,46 @@ export async function* runCodexAppServer(
     sessionId: input.spec.session_id,
     threadId: () => nativeThreadId,
     activeTurnId: () => activeTurnId,
-    live: () => !cancellationRequested && !processStopped,
+    live: () => !cancellation.requested && !processStopped,
     send: (method, params) => rpcProvenance(request(method, params, false)),
     responseDeadlineMs: input.steerDeadlineMs ?? 30_000,
   });
-  const nextNotification = async (method: string): Promise<JsonObject> => {
+  const nextNotification = async (
+    method: string,
+    accept: (params: JsonObject | null) => boolean = () => true,
+    consume = true,
+  ): Promise<JsonObject> => {
     for (;;) {
-      const index = notifications.findIndex((item) => item["method"] === method);
-      if (index >= 0) return notifications.splice(index, 1)[0]!;
+      const index = notifications.findIndex(
+        (item) => item["method"] === method && accept(asObject(item["params"])),
+      );
+      if (index >= 0) return consume ? notifications.splice(index, 1)[0]! : notifications[index]!;
       if (processFailure) throw processFailure;
       await new Promise<void>((resolve) => {
         notificationWaiter.wake = resolve;
       });
     }
   };
-  const takeNotification = async (): Promise<JsonObject> => {
+  /** Next queued notification; with `timeoutMs`, `null` once the wait lapses in silence. */
+  const takeNotification = async (timeoutMs?: number): Promise<JsonObject | null> => {
     for (;;) {
       const next = notifications.shift();
       if (next) return next;
       if (processFailure) throw processFailure;
-      if (processStopped) throw cancellationFailure ?? new Error("Codex app-server disconnected");
-      await new Promise<void>((resolve) => {
-        notificationWaiter.wake = resolve;
+      if (processStopped) throw cancellation.failure ?? new Error("Codex app-server disconnected");
+      const woke = await new Promise<boolean>((resolve) => {
+        let timer: NodeJS.Timeout | undefined;
+        notificationWaiter.wake = () => {
+          if (timer) clearTimeout(timer);
+          resolve(true);
+        };
+        if (timeoutMs !== undefined)
+          timer = setTimeout(() => {
+            notificationWaiter.wake = undefined;
+            resolve(false);
+          }, timeoutMs);
       });
+      if (!woke) return null;
     }
   };
   const waitForRequiredMcp = async (): Promise<void> => {
@@ -290,84 +333,7 @@ export async function* runCodexAppServer(
   };
   const readLifecycle = (): Promise<CodexThreadLifecycle> =>
     readCodexLifecycle(request, nativeThreadId, ownedCommandItemIds);
-  let cancelPromise: Promise<void> | null = null;
-  const cancel = (): Promise<void> => {
-    if (cancelPromise) return cancelPromise;
-    cancellationRequested = true;
-    cancelPromise = (async () => {
-      try {
-        const cooperative = async (): Promise<void> => {
-          await spawned;
-          if (!nativeThreadId) return;
-          const interruptedTurnIds = new Set<string>();
-          for (;;) {
-            const goalResult = await request("thread/goal/get", { threadId: nativeThreadId });
-            if (asObject(goalResult["goal"])?.["status"] === "active")
-              await request("thread/goal/set", { threadId: nativeThreadId, status: "paused" });
-            const turnId = activeTurnId;
-            if (turnId && !interruptedTurnIds.has(turnId)) {
-              try {
-                await request("turn/interrupt", { threadId: nativeThreadId, turnId });
-                interruptedTurnIds.add(turnId);
-              } catch (error) {
-                const lifecycle = await readLifecycle();
-                if (!lifecycle.threadSettled && activeTurnId === turnId) throw error;
-              }
-            }
-            let lifecycle = await readLifecycle();
-            for (const terminal of lifecycle.ownedBackground) {
-              if (typeof terminal["processId"] !== "string") continue;
-              try {
-                await request("thread/backgroundTerminals/terminate", {
-                  threadId: nativeThreadId,
-                  processId: terminal["processId"],
-                });
-              } catch (error) {
-                const fresh = await readLifecycle();
-                if (
-                  fresh.ownedBackground.some(
-                    (candidate) => candidate["processId"] === terminal["processId"],
-                  )
-                )
-                  throw error;
-                lifecycle = fresh;
-              }
-            }
-            if (lifecycle.ownedBackground.length) lifecycle = await readLifecycle();
-            if (
-              lifecycle.threadSettled &&
-              !lifecycle.goalActive &&
-              lifecycle.ownedBackground.length === 0
-            ) {
-              cancellationQuiescent = true;
-              return;
-            }
-            await new Promise<void>((resolve) => setTimeout(resolve, input.pollIntervalMs ?? 250));
-          }
-        };
-        let timer: NodeJS.Timeout | undefined;
-        try {
-          await Promise.race([
-            cooperative(),
-            new Promise<never>((_resolve, reject) => {
-              timer = setTimeout(
-                () => reject(new Error("Codex cooperative cancellation was not acknowledged")),
-                input.cancelDeadlineMs ?? 5_000,
-              );
-            }),
-          ]);
-        } finally {
-          if (timer) clearTimeout(timer);
-        }
-      } catch (error) {
-        cancellationFailure = error instanceof Error ? error : new Error(String(error));
-      } finally {
-        await stopProcess();
-        if (processFailure) cancellationFailure ??= processFailure;
-      }
-    })();
-    return cancelPromise;
-  };
+  const { cancel } = cancellation;
   input.controller?.bind(cancel);
   input.controller?.bindSteer(steer.send);
   const onAbort = (): void => void cancel();
@@ -387,27 +353,47 @@ export async function* runCodexAppServer(
       input.spec.resume_session_id ? "thread/resume" : "thread/start",
       input.spec.resume_session_id
         ? {
-            ...codexAppServerThreadParams(input.spec, input.effortCatalog),
+            ...codexAppServerThreadParams(input.spec, input.effort),
             threadId: input.spec.resume_session_id,
           }
-        : codexAppServerThreadParams(input.spec, input.effortCatalog),
+        : codexAppServerThreadParams(input.spec, input.effort),
     );
     const thread = asObject(threadResult["thread"]);
     const threadId = thread?.["id"];
     if (typeof threadId !== "string") throw new Error("Codex app-server omitted thread id");
+    const rootWasUnknown = nativeThreadId === null;
     nativeThreadId = threadId;
+    threadConfirmed = true;
+    // Nothing has consumed this queue yet. Classify startup state effects in
+    // arrival order now that start named the root; resume was bound upfront.
+    if (rootWasUnknown) notifications.forEach(observeOwnNotification);
     await waitForRequiredMcp();
-    await request("turn/start", {
+    const turnResult = await request("turn/start", {
       threadId,
       input: codexAppServerInput(input.spec),
       ...(input.spec.output_schema !== undefined && input.spec.output_schema !== null
         ? { outputSchema: input.spec.output_schema }
         : {}),
     });
-    const started = await nextNotification("turn/started");
-    const params = asObject(started["params"]);
-    const turn = asObject(params?.["turn"]);
-    const turnId = turn?.["id"];
+    // The turn THIS run started is the RPC result's turn; the root thread's
+    // matching `turn/started` is awaited so the adapter state (activeTurnId)
+    // is primed. A sub-agent turn queued meanwhile (a resumed plan-review
+    // thread may re-engage an earlier child) never satisfies the wait.
+    const requestedTurnId = asObject(turnResult["turn"])?.["id"];
+    const started = await nextNotification(
+      "turn/started",
+      (params) =>
+        ownsNotification(params, threadId) &&
+        (typeof requestedTurnId !== "string" ||
+          asObject(params?.["turn"])?.["id"] === requestedTurnId),
+      // Keep the start in timeline order: an earlier root completion must see
+      // the new turn queued before it can become the terminal candidate.
+      false,
+    );
+    const turnId =
+      typeof requestedTurnId === "string"
+        ? requestedTurnId
+        : asObject(asObject(started["params"])?.["turn"])?.["id"];
     if (typeof turnId !== "string") throw new Error("Codex app-server omitted active turn id");
     yield {
       type: "started",
@@ -438,44 +424,59 @@ export async function* runCodexAppServer(
     }
     let pendingTerminal: JsonObject | null = null;
     for (;;) {
-      const notification = await takeNotification();
-      const method = notification["method"];
-      const params = asObject(notification["params"]);
-      if (method === "turn/started") {
-        pendingTerminal = null;
-        parseState.lastAgentMessage = undefined;
-        continue;
-      }
-      const mapped =
-        steer.deliveredEvents(notification) ??
-        codexAppServerEvents(notification, input.spec.session_id, parseState);
-      if (mapped) {
-        for (const event of mapped) {
-          if (event.type === "error") harnessReportedError = true;
-          yield event;
+      // Once the root turn completed, "thread settled" is re-checked on ANY
+      // notification and, as a safety net, after the poll interval even in
+      // silence (how Codex reports the root status while sub-agents still
+      // run is not verified).
+      const notification = pendingTerminal
+        ? await takeNotification(input.pollIntervalMs ?? 250)
+        : await takeNotification();
+      if (notification) {
+        const method = notification["method"];
+        const params = asObject(notification["params"]);
+        if (!ownsNotification(params, nativeThreadId)) {
+          // A sub-agent thread: timeline and usage only, never finality.
+          const mapped = subagents.events(notification, input.spec.session_id);
+          if (mapped) for (const event of mapped) yield event;
+          else droppedUnrecognizedEvents += 1;
+          if (!pendingTerminal) continue;
+        } else if (method === "turn/started") {
+          pendingTerminal = null;
+          parseState.lastAgentMessage = undefined;
+          continue;
+        } else {
+          const mapped =
+            steer.deliveredEvents(notification) ??
+            codexAppServerEvents(notification, input.spec.session_id, parseState);
+          if (mapped) {
+            for (const event of mapped) {
+              if (event.type === "error") harnessReportedError = true;
+              yield event;
+            }
+          } else if (
+            method !== "turn/completed" &&
+            method !== "thread/status/changed" &&
+            method !== "mcpServer/startupStatus/updated"
+          ) {
+            droppedUnrecognizedEvents += 1;
+          }
+          if (method === "turn/completed") {
+            pendingTerminal = asObject(params?.["turn"]);
+          } else if (method === "thread/status/changed" && nativeSystemError && !pendingTerminal) {
+            pendingTerminal = {
+              id: activeTurnId,
+              status: "failed",
+              error: { message: "Codex app-server thread settled in systemError" },
+            };
+          } else if (!pendingTerminal) {
+            continue;
+          }
         }
-      } else if (
-        method !== "turn/completed" &&
-        method !== "thread/status/changed" &&
-        method !== "mcpServer/startupStatus/updated"
-      ) {
-        droppedUnrecognizedEvents += 1;
-      }
-      if (method === "turn/completed") {
-        pendingTerminal = asObject(params?.["turn"]);
-      } else if (method === "thread/status/changed" && nativeSystemError && !pendingTerminal) {
-        pendingTerminal = {
-          id: activeTurnId,
-          status: "failed",
-          error: { message: "Codex app-server thread settled in systemError" },
-        };
-      } else if (!pendingTerminal) {
-        continue;
       }
 
       for (;;) {
         const current =
-          cancellationRequested && cancellationQuiescent
+          cancellation.requested && cancellation.quiescent
             ? {
                 threadStatus: "idle",
                 threadSettled: true,
@@ -483,7 +484,14 @@ export async function* runCodexAppServer(
                 ownedBackground: [],
               }
             : await readLifecycle();
-        if (!nativeSystemError && notifications.some((item) => item["method"] === "turn/started"))
+        if (
+          !nativeSystemError &&
+          notifications.some(
+            (item) =>
+              item["method"] === "turn/started" &&
+              ownsNotification(asObject(item["params"]), nativeThreadId),
+          )
+        )
           break;
         const systemError = nativeSystemError || current.threadStatus === "systemError";
         if (!current.threadSettled || current.goalActive || current.ownedBackground.length) {
@@ -498,38 +506,16 @@ export async function* runCodexAppServer(
           if (!systemError) break;
         }
         const status = pendingTerminal?.["status"];
-        const terminalEvents: HarnessEvent[] = [];
-        if (status === "failed") {
-          const error = asObject(pendingTerminal?.["error"]);
-          const failed = parseCodexEvent(
-            { type: "turn.failed", error: { message: error?.["message"] ?? "turn failed" } },
-            input.spec.session_id,
-            parseState,
-          );
-          if (failed) {
-            harnessReportedError = failed.some((event) => event.type === "error");
-            terminalEvents.push(...failed);
-          }
-        } else if (systemError) {
-          harnessReportedError = true;
-          terminalEvents.push({
-            type: "error",
-            session_id: input.spec.session_id,
-            ts: nowIso(),
-            error: "Codex app-server thread settled in systemError",
-            payload: { code: "codex_app_server_failure" },
-          });
-        } else if (status === "completed") {
-          const final = parseCodexEvent(
-            { type: "turn.completed", usage: {} },
-            input.spec.session_id,
-            parseState,
-          );
-          if (final) terminalEvents.push(...final.filter((event) => event.type !== "usage"));
-        }
+        const terminal = codexTerminalEvents({
+          pendingTerminal,
+          systemError,
+          sessionId: input.spec.session_id,
+          parseState,
+        });
+        if (terminal.reportedError !== null) harnessReportedError = terminal.reportedError;
         await stopProcess();
         if (processFailure) throw processFailure;
-        for (const event of terminalEvents) yield event;
+        for (const event of terminal.events) yield event;
         yield {
           type: "completed",
           session_id: input.spec.session_id,
@@ -537,7 +523,9 @@ export async function* runCodexAppServer(
           ...(status === "interrupted" ? { aborted: true } : {}),
           payload: terminalPayload({
             native_session_id: threadId,
+            // The last ROOT turn: sub-agent turns never become the terminal.
             native_turn_id: pendingTerminal?.["id"] ?? activeTurnId,
+            ...(subagents.count ? { subagent_threads: subagents.count } : {}),
           }),
         };
         return;
@@ -545,8 +533,13 @@ export async function* runCodexAppServer(
     }
   } catch (error) {
     await stopProcess();
-    if (processFailure && cancellationRequested) cancellationFailure ??= processFailure;
-    if (cancellationRequested && cancellationQuiescent && !cancellationFailure && !processFailure) {
+    if (processFailure && cancellation.requested) cancellation.failure ??= processFailure;
+    if (
+      cancellation.requested &&
+      cancellation.quiescent &&
+      !cancellation.failure &&
+      !processFailure
+    ) {
       yield {
         type: "completed",
         session_id: input.spec.session_id,
@@ -556,15 +549,15 @@ export async function* runCodexAppServer(
       };
       return;
     }
-    const aborted = cancellationRequested;
-    const failure = processFailure ?? cancellationFailure ?? error;
+    const aborted = cancellation.requested;
+    const failure = processFailure ?? cancellation.failure ?? error;
     const requestRefusal = codexRequestRefusal(failure);
     const code =
-      cancellationFailure || terminationUnconfirmed
+      cancellation.failure || terminationUnconfirmed
         ? "codex_control_loss"
         : "codex_app_server_failure";
     const nativeError =
-      !requestRefusal && failure !== processFailure && !cancellationFailure
+      !requestRefusal && failure !== processFailure && !cancellation.failure
         ? parseCodexStderrFailure(errorText(failure), input.spec.session_id, parseState)
         : null;
     if (nativeError) harnessReportedError = true;

@@ -699,7 +699,7 @@ describe("raw-api typed patch producer", () => {
     );
   });
 
-  it("refuses token-like patch content before emitting a patch event", async () => {
+  it("emits a patch event for token-like content: keep-and-mask replaces the early refusal (INV-062)", async () => {
     process.env.OPENAI_API_KEY = "sk-test";
     const tokenLike = `ghp_${"x".repeat(24)}`;
     const patch = [
@@ -750,12 +750,20 @@ describe("raw-api typed patch producer", () => {
         }),
       ),
     );
-    expect(events.some((event) => event.type === "patch_produced")).toBe(false);
-    expect(events.find((event) => event.type === "error")).toMatchObject({
-      refusal_code: "raw_patch_sensitive_content",
-      error: "raw-api implement patch refused by sensitive-content policy",
-    });
-    expect(JSON.stringify(events)).not.toContain(tokenLike);
+    // The proposal is no longer refused for its content. The exact patch rides
+    // the memory-only patch event (the engine never logs it) so the engine can
+    // keep the bytes and mask only its saved copies; scope, preimage and digest
+    // evidence are still enforced when the envelope is consumed.
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const produced = events.find((event) => event.type === "patch_produced");
+    expect(produced?.patch_envelope?.patch).toBe(patch);
+    expect(produced?.patch_envelope?.touched_paths).toEqual([
+      { path: "a.txt", expected_blob_oid: "blob" },
+    ]);
+    // No other event (message, usage, completed) echoes the token.
+    expect(JSON.stringify(events.filter((event) => event.type !== "patch_produced"))).not.toContain(
+      tokenLike,
+    );
   });
 });
 

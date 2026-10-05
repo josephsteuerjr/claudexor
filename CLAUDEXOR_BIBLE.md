@@ -181,17 +181,16 @@ invariant or operator decision before proceeding.
   If an explicitly in-place lane already wrote the live tree, the failed turn
   instead records those unavoidable bytes as `adopted:true` plus
   `applied_review_blocked`, emits the WorkProduct event before the terminal, and
-  preserves a revert anchor; it never misreports the tree as untouched. INV-062
-  is the narrow exception: a secret-bearing in-place diff is never persisted as
-  a patch or anchor and is immediately reverse-applied through the exact
-  postimage check. The diff owner scans immutable binary preimages and
-  postimages as well as text before deleting its private capture; non-Git
-  binary stubs scan the live postimage through a bounded no-follow descriptor
-  and fail closed when it cannot be proven safe. A Git-backed
-  in-place refusal remains a sanitized `adopted:true`/
-  `applied_review_blocked` manual-cleanup receipt even when worktree rollback
-  succeeds, because harness-written index, ref, or object state cannot be
-  proven absent after the fact; it never claims false revertability. A later
+  preserves a revert anchor; it never misreports the tree as untouched.
+  Secret-like output takes no exception here: the live bytes stay where the
+  harness wrote them, the WorkProduct and its revert anchor are recorded as
+  for any other turn, and INV-062 hides the matches only in persisted copies.
+  The diff owner still inspects immutable binary preimages and postimages as
+  well as text (non-Git binary stubs through a bounded no-follow descriptor),
+  but only to decide what a saved copy must hide. A capture that could not
+  observe the live changes at all remains a sanitized `adopted:true`/
+  `applied_review_blocked` receipt with no patch and no anchor; nothing is
+  rolled back and it never claims false revertability. A later
   success recovers only the same invocation: tool + kind
   + target must match, and matching non-null tool-use ids are additionally
   required when both sides carry them; the tuple remains the compatibility key
@@ -259,9 +258,10 @@ invariant or operator decision before proceeding.
   file bytes in a digest-bound manifest; a text diff is only a preview. Copied
   file results retain the selected baseline and complete output bytes for exact
   delivery, while direct effects disclose any unknown preimages. Captured diffs must round-trip:
-  what the engine records as the work product must `git apply` cleanly to
+  the exact patch object recorded as the work product must `git apply` cleanly to
   the base it was captured against (no silent corruption — CRLF, quoted
-  paths, binary — between capture and delivery). verify: workspace diff
+  paths, binary — between capture and delivery); persisted copies may be masked
+  under INV-062 and are display-only. verify: workspace diff
   tests incl. the CRLF and binary round-trip cases (byte-faithful raw
   capture; `git diff --binary`).
 - **INV-042** Reviews are trusted only when reviewer output is parseable,
@@ -374,13 +374,27 @@ invariant or operator decision before proceeding.
   account Auto keeps a suitable preferred profile then uses the existing pool;
   pin never rotates or falls back to an API credential.
 - **INV-062** Raw secrets must not appear in run params, the command journal, task
-  contracts, events, summaries, patches, PR text, logs, or docs. The PROMPT
+  contracts, events, summaries, persisted patch copies, PR text, logs, or
+  docs. The PROMPT
   is included: a secret-like value inside the prompt text is hard-blocked at
   every ingress surface (CLI, POST /runs, thread turns, MCP, ACP, daemon
   enqueue) with a typed `inline_secret_rejected` error and remediation —
   prompts are durable artifacts and there is deliberately NO bypass flag.
+  Agent OUTPUT is a different axis: it is not rolled back, discarded or
+  failed for containing secret-like text. The changed files keep the exact
+  bytes; persisted and served copies hide the matches; the run discloses
+  paths and counts, never values. A redacted copy is display-only — apply
+  binds to the digest of the exact bytes and reads the private exact patch
+  object or refuses typed (`patch_exact_bytes_unavailable`). `pr` delivery
+  never publishes secret-like text. A capture that cannot observe the
+  changes is the only capture-time refusal, under its own name.
   verify: secret-scan CI step; redaction tests; inline-secret rejection
-  tests; canary `[INV-062:prompt-secret-block]`.
+  tests; canary `[INV-062:prompt-secret-block]`; keep-and-mask tests
+  (`packages/orchestrator/src/persistedPatch.test.ts`,
+  `packages/orchestrator/src/secretDiff.test.ts`, the orchestrator in-place,
+  isolated, binary, raster and best-of runs, the delivery exact-digest and
+  `pr` refusal tests, the Control API exact-object Apply and
+  `patch_exact_bytes_unavailable` tests, the thread delivery tests).
   Model-purpose request/response resources are the narrow content boundary:
   caller-supplied conversation bytes pass without secret-like-text filtering,
   just as on a model API. They cannot be used as ordinary Agent attachments.
@@ -632,8 +646,11 @@ invariant or operator decision before proceeding.
   and the CLI serves a bundled default list when its remote fetch times out;
   cursor: `--list-models` is a fail-soft menu blind to routing variants;
   agy: the account menu can omit newer models) means
-  presence still admits while absence decides nothing: the EXPLICIT model is
-  forwarded byte-identical, the vendor accepts or refuses it, and the consumer
+  presence still admits while absence decides nothing: on a model-id effort
+  carrier (Cursor, Antigravity), an effort preference selects the listed level
+  variant of the requested id's family from the running account's list (owner
+  decision 2026-10-05 «2. B»); otherwise the EXPLICIT model is forwarded
+  byte-identical. The vendor accepts or refuses it, and the consumer
   that admitted it says so once — the settings read-back carries `notes`, the
   readiness row carries the note in its detail, the per-spawn gate discloses a
   status event. Hint ids count as present. No list is ever substituted for
@@ -662,9 +679,13 @@ invariant or operator decision before proceeding.
   family stays disclosed as unknown and never borrows another family's limit.
 - **INV-105** Per-harness knobs a manifest does not support are disclosed as
   `ignored_settings` on `harness.started` — never silently dropped. This
-  covers max_turns, tool lists, and effort (an empty declared ladder); an
-  explicit MODEL reaches a route only where its truth source could not refuse
-  it (INV-104), and then the run says so: the per-spawn gate discloses the
+  covers max_turns, tool lists, and effort (an empty declared ladder), except
+  that on a model-id effort carrier (Cursor, Antigravity) an effort preference
+  selects the listed level variant of the requested id's family from the running
+  account's list (owner decision 2026-10-05 «2. B»); otherwise the setting is
+  recorded as before. An explicit MODEL reaches a route only where its truth
+  source could not refuse it (INV-104), and then the run says so: the per-spawn
+  gate discloses the
   unverified model, and the effort a model absent from the probed list resolves
   against the sibling ladders is sent verbatim, clamped-and-disclosed, or
   dropped-and-disclosed — never silently changed. verify: knob

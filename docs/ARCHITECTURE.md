@@ -115,15 +115,14 @@ Git-backed in-place lane already changed the live tree, the failure first emits 
 a revert anchor, then emits the failed terminal; this records unavoidable live
 bytes honestly without treating them as reviewed success. Direct directory
 effects instead use the [file-result contract](#directory-execution), with no
-unproved revert anchor. A secret-bearing
-in-place diff takes the INV-062 exception before any candidate artifact or Git
-post-snapshot: the engine attempts an exact checked reverse apply from the
-  transient diff after scanning immutable binary preimages/postimages and textual
-  patch bytes. Non-Git binary stubs are scanned from a bounded no-follow live
-  descriptor and fail closed. Git-backed in-place output remains `applied_review_blocked` plus
-manual cleanup even after a successful worktree rollback because vendor-written
-index/ref/object state cannot be disproved post hoc; the engine never persists
-the patch or anchor and never claims false revertability. In a mixed
+unproved revert anchor. Secret-like output takes no exception on this path:
+the live bytes stay where the harness wrote them, the WorkProduct and its revert
+anchor are recorded as for any other turn, and INV-062 hides the matches only in
+the persisted and served copies (see
+[Secret-like output: keep and mask](#secret-like-output-keep-and-mask)). The one
+remaining capture-time refusal is a capture that could not observe the changes
+at all; it is recorded as `capture_refused` with `applied_review_blocked` and no
+anchor, never as a rollback. In a mixed
 pool, a capable lane keeps the run `effective:true`, while any selected lane
 that continued before injection makes the run reason `partially_degraded` and
 keeps the prominent warning; per-lane requirement receipts preserve its cause.
@@ -451,8 +450,8 @@ Reasoning effort is an OPEN vocabulary, mirroring the vendors: codex types its
 own `ReasoningEffort` as any non-empty value the model advertises, and Claude
 Code's ladder belongs to the INSTALLED binary (2.1.89 stops at `max`; 2.1.165
 adds `xhigh`). So `EffortHint` is a bounded lowercase slug rather than an
-enum, and the ORDERING AUTHORITY is the vendor's own advertised sequence —
-there is no static rank table. Vendors return their levels already ordered
+enum, and the PRIMARY ORDERING AUTHORITY is the vendor's own advertised
+sequence. Vendors return their levels already ordered
 weakest→strongest (codex `app-server` `model/list` →
 `supportedReasoningEfforts` per model; the `--effort` line of `claude --help`),
 so a model's ladder is its own ordered list, a harness's ladder is the
@@ -461,7 +460,25 @@ positional merge of its models' lists (`mergeEffortLadders`; the Swift
 a level's rank is its position in that merged order — which is what lets a
 brand-new vendor level sort correctly with no code change. Should two models
 advertise contradictory or incomparable orders, the resolver refuses
-cross-model substitutions rather than treating display order as rank. Adapters
+cross-model substitutions rather than treating display order as rank.
+
+`EFFORT_PREFERENCE_ORDER` (`none < minimal < low < medium < high < xhigh < max <
+ultra`, the one row every Claudexor client speaks) is NOT a second rank table
+and never replaces the vendor's order. The resolver consults it only to PLACE a
+requested word that the route's own ladder does not list at all: `ultra` on a
+Claude binary that stops at `max` resolves downward to `max`, and `none` or
+`minimal` on a ladder that starts at `low` resolve to that known minimum. A word
+the vendor ladder does list is always ranked by the vendor (`ultra` on gpt-5.5
+clamps to `xhigh` because a sibling Codex model lists it, with no shared-order
+claim). Placing a word declares neither that the vendor supports it nor that two
+vendors' levels of the same name are of equal quality: only a level the final
+route itself advertises is ever submitted, and the receipt's `reason` states
+that the shared order did the placing. The fallback merges the shared words
+from the same RAW vendor lists (`effortLadders`), so contradictory orders among
+comparable words disable it instead of being masked. Extra vendor-only words
+do not disable placement onto the advertised/shared intersection: `ultra` on
+`low, medium, high, turbo` resolves downward to `high`, never to the unranked
+`turbo`; a floor uses the weakest comparable advertised level. Adapters
 discover what is really advertised at discovery time and fall back to a
 recorded snapshot (stamped vendor data, kept in its captured order) when a
 probe cannot answer, so a probe failure costs freshness, never the run; both
@@ -476,23 +493,58 @@ model on the native session surface. The shared normalizer passes an accepted le
 resolves a known unadvertised preference to the strongest supported level not
 above the request. Only when every supported level exceeds the request may the
 known minimum be used. Display tie-breaking between incomparable vendor chains
-is not rank evidence; unknown order never authorizes a guessed substitution. WHICH LAYER clamps is part
+is not rank evidence; unknown order never authorizes a guessed substitution.
+ONE resolution result per route feeds everything downstream: the arg builder
+sends the receipt's `submitted`, the disclosure event describes the same
+receipt, and `downward`/`floor` are judged on the order that actually chose the
+level — so the native flag and the recorded receipt cannot disagree. WHICH LAYER clamps is part
 of the contract: `discover()` probes the DEFAULT native harness home, so the
 manifest carries the default account's ladders, while codex advertises per
 ACCOUNT and every credential profile and API-key route runs under its own
-`CODEX_HOME`. Run preflight (`governRouteEffort`) therefore forwards the original
-preference even when default-account discovery lacks it. Native effort adapters
-resolve only after the account, model and harness are bound. Settings writes and
-reviewer admission preserve these preferences too; a separate effort on an
-adapter without that carrier retains its typed validation rule. Compound
-Cursor/Antigravity model ids are route identities and are never rewritten by
-effort resolution. Claude uses the installed binary's accepted list and its
-recorded same-provider vendor order for known gaps; historical ordering cannot
-authorize submitting a value absent from the current accepted list. Snapshot
+`CODEX_HOME`. Run preflight therefore forwards the original preference
+unchanged even when default-account discovery lacks it. Native effort adapters
+(Claude, Codex, the ACP client) resolve only after the account, model and
+harness are bound. Settings writes and reviewer admission preserve these
+preferences too. On an adapter without any effort carrier a settings WRITE
+keeps its typed validation (a refusal before anything is stored, never lost
+paid work), while a run or a review is never lost to it: a harness that
+declares no effort controls keeps the preference in the receipt as `omitted`
+and discloses it — an unknown word included, which is noted as outside the
+shared order rather than refused — and only a reviewer ladder that exists and
+cannot place the word still refuses an explicit panel entry or drops an
+automatic one with disclosure. Cursor and Antigravity carry the level inside
+the compound model id and declare `--model` as their effort carrier: given an
+effort preference, `prepareProcessing` selects the listed variant of the
+requested model's family from the inventory of the account that will run (the
+family is the id with exactly one shared-order level token removed; `fast`,
+`thinking` and every other token stay in the key; a family exists only when
+that account lists two or more levels; the level is placed by the shared
+preference order alone, the vendor's list order being a menu, never a ladder),
+so `grok-4.7-high` + `max` runs the listed `grok-4.7-xhigh` and
+`gemini-3.8-flash-low` + `max` runs `gemini-3.8-flash-high`. Without a
+preference the id is sent as written. The requested id stays in
+`spec.model_hint` / `attempts[].requested_model`; the final id is the
+processing receipt's `submittedNative` (the `--model` argument, the native
+truth gate's second check and the telemetry `model_mismatch` baseline); the
+level receipt is that preparation's `EffortResolution` (`parameter: --model`,
+`source: account_catalog`, `submitted` = level token), recorded once by the
+engine's spawn gate or the reviewer dispatch — never a second `omitted`. An
+ambiguous id (two level tokens), a family-less id, an unknown word, an empty or
+unread account list (Antigravity: no pinned account; the static hint list never
+authorizes a rewrite) keep the id unchanged with an `omitted` receipt and a
+note; nothing refuses. The level choice never crosses fast/standard: the
+existing fast-pair and paid policy run after it on the selected id. A settings
+write accepts the preference for these routes like any flag carrier. Claude
+uses the installed binary's accepted list and its
+recorded same-provider vendor order for known gaps, and the shared preference
+order for a word neither lists; no ordering can authorize submitting a value
+absent from the current accepted list. Snapshot
 fallback authorizes values only on its recorded CLI version. An unverifiable
 knob uses the current vendor default with an explicit omission receipt; known
-absence and unknown capability remain distinct. An unrankable request against
-an available nonempty ladder refuses before generation. The CLI help, the MCP tool
+absence and unknown capability remain distinct. A request that neither order
+can place against an available nonempty ladder refuses before generation; the
+ACP client refuses it before spawn instead of forwarding a flag the vendor CLI
+would reject. The CLI help, the MCP tool
 schema and the macOS picker's ordering all derive from that single source. `doctor` validates each
 harness's CONFIGURED default model against the truth source, so a broken
 default (e.g. a model the CLI cannot run) is reported honestly instead of
@@ -514,7 +566,8 @@ Runs record it as `attempts[].effort_resolution` in
 attempt retains the final native execution's receipt after account rotation.
 Codex model results obtain observation only from Responses' `reasoning.effort`;
 `appliedOptions` keeps its existing provider-echo meaning. Session adapters do
-not claim an observed value. Adaptation disclosures are status/log events and
+not claim an observed value. Adaptation disclosures, including an exact effort
+selection that changes a `--model` id, are status/log events and
 never injected assistant messages. These fields add no operation, generation,
 retry, account-selection or budget authority. A rejected final-route preference
 ends that attempt without account rotation, model/harness fallback or repair retry;
@@ -528,6 +581,8 @@ The existing preference resolver chooses the strongest accepted generation effor
 not above the original request in that vendor order (currently `ultra` → `max`
 for Astra), with a downward receipt and no claim of native delegation. It does
 not copy the CLI's underlying per-agent effort or invent a replacement ladder.
+A word no verified catalog model lists is placed by the shared preference order
+exactly as on session routes, and the receipt says so.
 Both public catalog views project the internal order out, preserving their object
 shapes. Native session Ultra remains unchanged and is implemented by the CLI.
 
@@ -673,6 +728,29 @@ terminal exists. Native thread/turn ids are control handles, not durable engine
 truth; the daemon journal remains authoritative. Stop pauses an active goal,
 interrupts the exact stored turn id, terminates only background terminals whose
 item ids were observed in that run, verifies quiescence, then reaps app-server.
+Finality belongs to the ROOT thread (`app-server-threads.ts`): Codex may spawn
+native sub-agents whose threads emit their own `turn/started`, items, token
+usage and `turn/completed` on the same stdio stream, so a notification is the
+run's own only when its `threadId` is absent or equal to the thread
+`thread/start`/`thread/resume` returned (per thread, never per turn: a goal
+continuation runs several root turns). Resume binds the requested thread id
+before sending the RPC. Start buffers notification state effects until its reply
+identifies the root, then classifies them in arrival order. Only root frames move
+the active turn, the owned command set, the thread's health (`systemError`), the pending final
+and the terminal candidate; `started.native_turn_id` is the `turn/start` RPC
+result's turn and `completed.native_turn_id` the last root turn. Sub-agent
+frames are not dropped: tool calls/results, thinking, file changes and token
+usage stay on the timeline tagged `payload.native_thread_id` /
+`native_turn_id` / `subagent: true` (their tokens stay in the run's usage), a
+sub-agent's agent TEXT is re-emitted as a `status` event
+(`code: subagent_message`) and never as a `message` (the same rule the claude
+adapter applies to `parent_tool_use_id` frames), its plan progress never
+overwrites the root's, and its lifecycle frames are recognized without
+becoming finality; the terminal discloses `subagent_threads`. After the root
+turn completed, "thread settled" is re-checked on any notification and, in
+silence, after the poll interval. A sub-agent's failed command therefore stays
+tool-warning evidence beside the root's delivered final instead of escalating
+through the deliverable-less tool-error exception.
 Native in-turn retry notices use the existing nonterminal `api_retry` status;
 their wire mapping is documented in INTEGRATIONS' Harness Stream Reference.
 Adapters without a verified prompt transport retain their vendor-specific path.
@@ -1265,6 +1343,83 @@ wire-patchable as `profileLimitAction` on `GET/POST /v2/settings` (the app's
 tri-state auto-switch control: Off=`fail` / Auto / On=`rotate`); rotation
 order and headroom keep their stored values.
 
+### Secret-like output: keep and mask
+
+INV-062 separates two things that used to be one check. A secret-like value in
+an INPUT (prompt, run params, instructions) is still hard-blocked at every
+ingress. A secret-like string in agent OUTPUT is no longer a reason to roll
+back, discard or fail anything: the content policy
+(`sensitiveResourcePolicy`, one rule set for redaction and detection) is a
+persistence classifier.
+
+- **Exact bytes are untouched.** The changed files (in-place tree or candidate
+  envelope), the in-memory candidate diff, the patch a race adopts, the
+  synthesis input and every digest keep the bytes the agent wrote. The check
+  never mutates the project.
+- **Saved copies hide the matches.** `attempts/<a>/patch.diff`,
+  `final/patch.diff` and the reviewer packet `DIFF.patch` are written from
+  `persistedPatchCopy`: each absorbed content line of a match becomes `[redacted]`
+  with its diff prefix and line ending preserved, and diff structure lines
+  (file headers, `@@` hunk headers, the no-newline marker) stay verbatim, so
+  the copy keeps its file records and hunk counts; the payload of a
+  binary file whose pre- or postimage holds (or cannot be proven free of)
+  secret-like bytes is withheld, and the copy opens with a one-line notice.
+  A copy with nothing to hide is byte-identical to the exact diff and carries
+  no notice. A reviewer workspace copy still omits files with secret-like
+  content; the reviewer judges the saved diff. Events, retained output, gate
+  tails, reviewer artifacts and the answer are redacted as before; the answer
+  is always kept.
+- **Images.** A raster that matches the policy, cannot be read or exceeds the
+  size cap is not copied into `produced/`; the run continues.
+- **Disclosure, never values.** `attempts/<a>/attempt.yaml` and
+  `final/work_product.yaml` meta carry `secret_like`: per-file `path`,
+  `matches` and rule `kinds`, `binary_paths`, `media_withheld`,
+  `answer_matches` (counted before the first redaction) and `total_matches`.
+  `final/summary.md` adds one line, and the MCP read tools project the same
+  record as `secretLike`. Read-only Ask, Plan and their reducers use the same
+  pre-redaction answer counter: the selected final answer supplies the count,
+  or the sum of the retained scouts when deep-scan returns a raw bundle.
+- **Apply binds to the exact digest.** `meta.patch_sha256` is always the digest
+  of the exact patch, so a redacted copy cannot pass the apply gate on any
+  route. When the saved copy differs, meta records `persisted_patch: redacted`
+  and `exact_patch_object` (the digest), and the exact bytes are stored in the
+  private per-project object store that also holds revert anchors
+  (`<project runtime>/anchors/objects`, mode 0600, never listed or served). One
+  resolver serves deferred Apply, apply/check, `accept_clean_patch`, the
+  `accept_risk` digest binding, thread contribution checks and RunFacts
+  eligibility. A missing, unrecorded or corrupt object answers the typed 409
+  `patch_exact_bytes_unavailable` before any tree is touched. The gate checks
+  work-product integrity before the override-pending permission. An isolated
+  candidate's object is written while its envelope still exists; if that write
+  fails the envelope is kept rather than deleted.
+- **Leaving the machine.** Local `apply`, `branch` and `commit` are allowed.
+  `pr` is refused by `verifyAndDeliver` for a text match or a recorded blob-only
+  binary finding, before the fresh verifier, the caller's authorization and
+  any push.
+- **Served files.** Text artifacts are redacted when served. Media and other
+  binaries from run artifacts, `/v2/projects/:id/outputs` and
+  `/v2/runs/:id/produced` pass the same content policy; a matching file answers
+  409 `secret_like_content_withheld`. A raw patch artifact that still matches
+  answers 409 as before.
+- **Raw API.** A raw patch proposal with secret-like content is no longer
+  refused early; scope, preimage and digest evidence are enforced unchanged and
+  the proposal reaches saved artifacts only through the same capture.
+- **Capture refusal.** A capture that cannot observe the changes (a thrown
+  capture, a non-Git folder without a baseline, a `diff` that cannot read a
+  file) remains a refusal under its own name: `capture_refusal` on the attempt,
+  phase `workspace`, `manual_cleanup` for live effects, nothing rolled back.
+
+Deliberate limits. A real secret an agent wrote stays in the tree or is applied
+exactly: the agent already had a shell there, and the disclosure names the
+files. The exact object and the post-turn snapshot hold the same bytes as the
+tree; the object store has no garbage collection, so the object of an isolated
+candidate that later loses its race stays there unreferenced. Applying `final/patch.diff` outside Claudexor applies `[redacted]`; the
+notice says so. Directory results still fail closed on their content scan
+(their manifest has no per-file `withheld` form). A token split across two
+events is redacted per event, vendor session transcripts are outside this
+boundary, and a host that keeps its own exact patch copy of a delegated child
+owns that copy.
+
 ## 6. Main Execution Paths
 
 Every public CLI mode (`ask`, `plan`, `agent`) and the
@@ -1515,9 +1670,12 @@ reviews/revalidates findings when requested, optionally synthesizes a new checke
 and arbitrates. Best-of requests review; ordinary Single and `--create` do not
 unless explicitly enabled. `--create` runs the same envelope pipeline with the
 create-from-scratch intent (the CLI verb `claudexor create` maps here).
-An isolated candidate refused by the secret fence is excluded when another
-safe working candidate survives; an all-refused race, an in-place cleanup
-receipt, or an injected Delegate-belt failure remains terminal for the race.
+A candidate whose patch holds secret-like strings is an ordinary working
+candidate: it is gated, reviewed on its saved copy and arbitrated like any other
+(INV-062). A candidate whose changes could not be captured is excluded when
+another working candidate survives; an all-uncaptured race, an uncaptured
+in-place candidate, or an injected Delegate-belt failure remains terminal for
+the race.
 
 ### Agent --attempts / --until-clean
 
@@ -2244,9 +2402,12 @@ merge attempt, with a `council/membership.yaml` projection served on
 `ControlRunDetail.council` (requested/drafted/degraded/mergedBy + per-member
 role and status) and mirrored on the MCP run/read structured results so a host
 can machine-verify the roster without reading local artifacts. Degradation is
-disclosed, not silent. A nonempty draft whose otherwise valid WorkReport says
+disclosed, not silent. On a native WorkReport channel a nonempty draft whose
+otherwise valid WorkReport says
 `completed` with nonempty `required_inputs` may reach the merger as explicitly
-UNVERIFIED input, with its original report and failure preserved. Real harness,
+UNVERIFIED input, with its original report and failure preserved (on an
+instructed-footer route that attempt does not fail: the draft is an ordinary
+accepted input whose `work_state` is `unverified`). Real harness,
 required-web, cancellation and terminal context failures are not eligible for
 this retention path. The planner attempt stays failed and cannot become a
 successful draft merely because the same lane later merges. `drafted` counts
@@ -3180,8 +3341,12 @@ fence (Bible INV-113); an unlisted mutation path is a release blocker:
    defers only a missing per-run final verifier, because turns may already be
    adopted into the isolated thread workspace. Review intent, independent
    checks, work completion, patch hashes and original-root binding still gate
-   every contribution. A secret-like-token scan refuses the patch; delivery
-   reuses `verifyAndDeliver` with a fresh
+   every contribution. Secret-like content is not a refusal: the thread
+   delivers its live worktree capture, so `apply`, `branch` and `commit` carry
+   the exact bytes the agent wrote; only `pr` refuses, inside
+   `verifyAndDeliver`, for a text match or a blob-only binary finding, before
+   the fresh verifier and any push (INV-062). Delivery reuses
+   `verifyAndDeliver` with a fresh
    verifier and exact target preimage. Success advances the persistent thread
    branch and watermark with journaled thread state.
 5. **Automatic git init** — a NON-GIT project folder is initialized before a
@@ -3231,14 +3396,13 @@ fence (Bible INV-113); an unlisted mutation path is a release blocker:
    admission is determined independently by the semantic run-shape predicate
    above. A bridge failure never fails the run (it is a convenience, not a
    precondition).
-8. **Secret-diff quarantine rollback** — when an in-place candidate contains
-   secret-like bytes, the orchestrator reverse-applies only that candidate's
-   transient patch. The workspace rollback verifies the exact postimage before
-   mutation and refuses if concurrent/user bytes diverged; Git object writes
-   use the isolated scratch object database. A refusal or unproven scratch
-   cleanup becomes a typed manual-cleanup receipt, never a broader reset. This
-   path does not yet take the repository mutation lease; that hardening remains
-   a separately owned follow-up rather than an undocumented mutation.
+8. **No secret-diff rollback** — the engine performs no mutation on behalf of
+   the secret-like check. The reverse apply that used to remove an in-place
+   candidate's bytes (and ran without the repository mutation lease) is gone:
+   secret-like output is kept and only its saved and served copies are masked
+   (see [Secret-like output: keep and mask](#secret-like-output-keep-and-mask)).
+   The only extra write is the private exact patch object beside the revert
+   anchors, outside the project tree and the run directory.
 9. **In-place browser artifact cleanup** — when Browser is effective, workspace
    prep lazily creates one unique `.claudexor-artifacts/<envelope-id>` child and
    persists an envelope-id-bound ownership marker outside the live tree. Only
@@ -3675,8 +3839,10 @@ as evidence and do not enter accepted-answer or retry predicates. The event-log
 package projects this ordered stream into `final/retained-output.md`, separating
 attempts and physical `session_id` values while retaining explicit delta bytes.
 It excludes reasoning, tool output and status prose, and collapses only exact
-adjacent delta/flush/final repetitions. Missing WorkReport still means unverified
-contract failure; no additional generation is performed to repair the format.
+adjacent delta/flush/final repetitions. A missing WorkReport still means an
+unverified work state (a contract failure on the native channels, a disclosed
+`unverified` on the instructed fence); no additional generation is performed to
+repair the format.
 A final-only successful answer without captured files needs no duplicate retained
 document. Captured media references are added from the existing attempt capture, using distinct
 attempt-scoped handles; the original text remains intact. The full retained
@@ -3715,21 +3881,41 @@ wraps the markdown deliverable as `output: string`; a `side_tool` route
 (claude's `--json-schema` materializes a StructuredOutput tool) arms a
 `{work_report}`-ONLY schema so the prose final stays the deliverable and the
 report rides the tool payload (the adapter surfaces it on the final message's
-`work_report_side_tool` payload); a `validated` route (cursor, no native
-schema) INSTRUCTS the model to write its complete markdown answer normally and
+`work_report_side_tool` payload); a `validated` route (cursor, agy, acp — no
+native schema) ASKS the model to write its complete markdown answer normally and
 end with a fenced `{work_report}` metadata block that the finalizer validates
 off the last fenced block. Historical fence-only `{work_report, output}` replies
 remain readable through a compatibility fallback; a nonempty markdown prefix
 is always canonical, and legacy `output` is consulted only when that prefix is
 empty. The three tiers
 are one resolver (`resolveWorkReportEnvelope`) and one unwrap
-(`unwrapWorkReportEnvelope`, keyed on the envelope `channel`). The unified
-attempt finalizer removes the transport beside `finalizeStructuredOutput` —
-`answer.md` persists the deliverable, never the envelope/footer — and validates the
-model-authored `WorkReport { state, required_inputs }`. A missing/malformed
-report on a constrained OR validated route is a typed `work_report_contract`
-failure (never a prose success); a valid `needs_input`/`incomplete` report
-becomes a `work_state` veto.
+(`unwrapWorkReportEnvelope`, keyed on the envelope `channel`;
+`workReportEnvelope.ts`). The unified
+attempt finalizer (`attemptFinalize.ts`) removes the transport beside
+`finalizeStructuredOutput` — `answer.md` persists the deliverable, never a
+valid envelope/footer — and validates the model-authored
+`WorkReport { state, required_inputs }`. On the two NATIVE channels
+(`constrained_json`, `side_tool`) a missing/malformed report is a typed
+`work_report_contract` failure (never a prose success): there the envelope is
+the only witness that the final is the model's own. On the INSTRUCTED fence
+(owner decision 2026-10-05, partially revising the 2026-10-04 strict reading)
+nothing enforces the footer, so any footer problem — no fence, a last fence that
+is not JSON or not an object, an object without `work_report`, a malformed or
+contradictory report (completed with `required_inputs`, needs_input without
+any), a historical fence-only envelope with a non-string `output` — is a CLEAN
+outcome: the lifecycle succeeds, `work_state` is
+`{state: unverified, source: validated, unverified_reason}` (the typed reason
+rides attempt telemetry and the run's outcome facts, and the shared outcome
+banner renders `work state unverified: <reason>`), and the deliverable is
+the COMPLETE answer text with nothing cut: a trailing fence that is the
+consumer's own JSON or code stays, and so does a broken footer attempt, so a
+malformed `needs_input` claim cannot veto but remains readable in the answer.
+Only a VALID report is metadata and leaves the deliverable. The contradiction
+claim is also retained as evidence (`reportProblem`) and a Council draft with it
+is an ordinary accepted draft. A valid `needs_input`/`incomplete` report still
+becomes a `work_state` veto on every channel; on the instructed fence it also
+outranks an unusable historical `output` slot. The canary
+`[INV-116:work-report-contract]` pins the native-channel failure.
 
 Claude API-error results retain the originating attempt's vendor message and
 nullable machine code as opaque failure evidence. A native stdout error result
@@ -4612,11 +4798,12 @@ code touching one of these areas must honor it or change it explicitly here.
   cannot be classified — is refused with the typed `git_boundary_root_refused`
   error before any mutation instead of being initialized (INV-075 exception);
   ordinary non-git roots keep the announced auto-init only for Git-backed shapes.
-  If exact capture or reversal cannot be proven for a legacy in-place patch run,
-  Claudexor fails closed with a sanitized `manual_cleanup` receipt; it never
-  substitutes an empty diff and asks reviewers to trust the live tree.
-  Presentation remains capped at 200 kB only after the full text diff has crossed
-  the secret fence.
+  If the capture cannot observe a legacy in-place patch run's changes (no copied
+  baseline, a failed `diff`), Claudexor records a capture refusal: a sanitized
+  `manual_cleanup` receipt in phase `workspace`, with nothing rolled back; it
+  never substitutes an empty diff and asks reviewers to trust the live tree.
+  The non-Git text diff is bounded to 200 kB, and the saved copy and its match
+  counts are built from that bounded projection.
 - Isolated-thread worktrees are pinned by persistent `claudexor/thread-*`
   branches. Journal SHA is a checked cache; successful apply advances the
   branch, and explicit trash/restore/purge owns its retention lifecycle.
