@@ -4037,7 +4037,14 @@ whose work is unfinished — non-success lifecycles and succeeded runs whose
 work state is `needs_input`/`incomplete` — carries `resumable` on its
 terminal event and in `final/resumable.yaml` (cause, `resetsAt`, window and
 evidence, the carriers still usable, the native session and the workspace),
-decided by the work outcome, never by the lifecycle word. Live plan checklists ride typed
+decided by the work outcome, never by the lifecycle word. Completed harness tries
+also retain continuation facts when gates, review or arbitration leave acted work
+unfinished (`cause: other`). Cancellation includes these facts for Ask as well as
+Agent. An in-place or read-only execution root is `workspace: in_place`; an
+isolated envelope is `none` in this release. Limit fields belong only to the
+terminal limit cause and its try; pool exhaustion uses the pool's earliest typed
+reset. A mid-stream hard budget cap ends the attempt without preparing another
+try. Live plan checklists ride typed
 `HarnessEvent.plan_progress` (codex `todo_list` items; claude
 TaskCreate/TaskUpdate accumulation — TodoWrite kept for older CLIs), forwarded
 as last-wins `plan.progress` run events and projected on the run detail as

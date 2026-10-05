@@ -16,8 +16,10 @@ import {
   type HarnessEvent,
   type HarnessRunSpec,
   type RunEvent,
+  type QuotaSnapshot,
 } from "@claudexor/schema";
 import { Orchestrator, type RunInput } from "./orchestrator.js";
+import type { ReviewerSpec } from "@claudexor/review";
 import { readSessionCapsule } from "./session-capsule.js";
 
 const roots: string[] = [];
@@ -46,6 +48,8 @@ interface Scenario {
   /** The run's requested model; null = none (the harness default). */
   model?: string | null;
   input?: Partial<RunInput>;
+  snapshots?: QuotaSnapshot[];
+  reviewers?: ReviewerSpec[];
 }
 
 export const RESET = "2026-10-06T21:00:00.000Z";
@@ -187,7 +191,8 @@ export async function run(scenario: Scenario) {
   const events: RunEvent[] = [];
   const result = await new Orchestrator({
     registry: new Map([["fake", adapter]]),
-    reviewers: [],
+    reviewers: scenario.reviewers ?? [],
+    quotaSnapshots: () => scenario.snapshots ?? [],
   }).run({
     repoRoot: root,
     ...(scenario.mode === "agent" ? { inPlace: true } : {}),

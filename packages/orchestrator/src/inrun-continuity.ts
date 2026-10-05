@@ -60,6 +60,7 @@ import { readSessionCapsule, writeSessionCapsule } from "./session-capsule.js";
 
 import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-continuity-types.js";
 import { discloseContinuedTry } from "./inrun-continuity-thread.js";
+import type { ContinuityTerminalFacts } from "./continuity-terminal.js";
 import { RetainedAttemptOutput } from "./inrun-retained-output.js";
 
 const TYPED_REFUSALS = new Set(["auth_failed", "capability_refused", "config_error"]);
@@ -97,6 +98,8 @@ export class InRunContinuity {
 
   /** The loop calls this before each try spawns; `abort` is THIS try's controller. */
   beginTry(runSpec: HarnessRunSpec, nativeTry: number, abort: AbortController): void {
+    this.limit = null;
+    this.terminalCode = null;
     this.tryIndex = nativeTry;
     this.tryAbort = abort;
     this.tryStarted = false;
@@ -204,6 +207,7 @@ export class InRunContinuity {
     this.emitReceipt(facts.runSpec);
     this.previousTryUnstarted =
       !this.tryStarted && this.tryIndex === 0 ? this.deps.workOrder : null;
+    if (facts.budgetStopped) return this.breakWith("other");
     if (!facts.harnessErrored || facts.aborted) return { kind: "break" };
     if (facts.requestRefused) return this.breakWith("other");
     if (facts.telemetry.contextExhausted) return this.breakWith("context_exhausted");
@@ -228,6 +232,7 @@ export class InRunContinuity {
   async finish(input: {
     runSpec: HarnessRunSpec;
     errored: boolean;
+    nonSuccess?: boolean;
     aborted: boolean;
     cancelReason: string | null;
     workState: WorkState | null | undefined;
@@ -238,7 +243,13 @@ export class InRunContinuity {
     await this.relocate(input.runSpec);
     const vetoed =
       input.workState?.state === "needs_input" || input.workState?.state === "incomplete";
-    if (!input.errored && !input.aborted && !vetoed) return null;
+    if (
+      !input.errored &&
+      !input.aborted &&
+      !vetoed &&
+      (!input.nonSuccess || (!this.acted && !this.capsule))
+    )
+      return null;
     const cause: ResumableCause = vetoed
       ? input.workState?.state === "needs_input"
         ? "input_required"
@@ -247,8 +258,16 @@ export class InRunContinuity {
         ? input.cancelReason === "wall_clock_exceeded"
           ? "wall_clock"
           : "cancelled"
-        : (this.lastCause ?? "other");
+        : input.errored
+          ? (this.lastCause ?? "other")
+          : "other";
     return this.resumable(cause);
+  }
+
+  /** Keep a snapshot for gates/review/arbitration that can fail after this try completed. */
+  terminalFacts(resumable: RunResumable | null): ContinuityTerminalFacts {
+    if (resumable) return { resumable };
+    return this.acted || this.capsule ? { resumableOnFailure: this.resumable("other") } : {};
   }
 
   resumable(cause: ResumableCause): RunResumable {
@@ -260,7 +279,20 @@ export class InRunContinuity {
       acted: this.acted,
       limit: this.limit,
       terminalCode: this.terminalCode,
+      workspace: this.deps.workspace,
     });
+  }
+
+  private poolTerminal(error: Error): AfterTryVerdict {
+    this.lastCause = "pool_exhausted";
+    this.terminalCode = codeOf(error);
+    const resetsAt = (error as { resetsAt?: unknown }).resetsAt;
+    this.limit = {
+      resetsAt: typeof resetsAt === "string" ? resetsAt : null,
+      constraintId: this.limit?.constraintId ?? null,
+      retryDelayMs: this.limit?.retryDelayMs ?? null,
+    };
+    return { kind: "terminal", error };
   }
 
   private breakWith(cause: ResumableCause): AfterTryVerdict {
@@ -273,9 +305,7 @@ export class InRunContinuity {
   private async legacy(facts: TryFacts): Promise<AfterTryVerdict> {
     const rotated = await this.rotate(facts, false);
     if (rotated && "poolExhausted" in rotated) {
-      this.lastCause = "pool_exhausted";
-      this.terminalCode = codeOf(rotated.poolExhausted);
-      return { kind: "terminal", error: rotated.poolExhausted };
+      return this.poolTerminal(rotated.poolExhausted);
     }
     if (rotated) {
       this.hopped(rotated);
@@ -332,9 +362,7 @@ export class InRunContinuity {
       return this.breakWith("vendor_limit");
     const rotated = await this.rotate(facts, true);
     if (rotated && "poolExhausted" in rotated) {
-      this.lastCause = "pool_exhausted";
-      this.terminalCode = codeOf(rotated.poolExhausted);
-      return { kind: "terminal", error: rotated.poolExhausted };
+      return this.poolTerminal(rotated.poolExhausted);
     }
     if (!rotated) return this.breakWith("vendor_limit");
     this.hopped(rotated);
@@ -366,9 +394,7 @@ export class InRunContinuity {
     if (packetDiedUnused) {
       const rotated = await this.rotate(facts, true);
       if (rotated && "poolExhausted" in rotated) {
-        this.lastCause = "pool_exhausted";
-        this.terminalCode = codeOf(rotated.poolExhausted);
-        return { kind: "terminal", error: rotated.poolExhausted };
+        return this.poolTerminal(rotated.poolExhausted);
       }
       if (!rotated) return { kind: "break" };
       this.hopped(rotated);

@@ -15,6 +15,7 @@ import {
 } from "@claudexor/schema";
 import { redactSecrets } from "@claudexor/util";
 import type { OrchestratorResult } from "./orchestrator.js";
+import { resumableTerminal, type ContinuityTerminalFacts } from "./continuity-terminal.js";
 import { terminalOutcomeFacts } from "./terminalOutcome.js";
 
 export function writeFailure(
@@ -250,6 +251,7 @@ export function failTerminally(
     rawDetailRef?: string;
     nextActions?: string[];
     priorFacts?: RunOutcomeFacts;
+    continuity?: readonly ContinuityTerminalFacts[];
   } = {},
 ): OrchestratorResult {
   const budget =
@@ -291,6 +293,7 @@ export function failTerminally(
     phase,
     error: message,
     failure_ref: "final/failure.yaml",
+    ...resumableTerminal(store, paths, failureMeta.continuity ?? [], true),
   });
   return {
     runId,

@@ -232,8 +232,11 @@ export function resumableBlock(input: {
   acted: boolean;
   limit: LimitEvidenceState | null;
   terminalCode: string | null;
+  workspace: RunResumable["workspace"];
 }): RunResumable {
-  const { deps, limit } = input;
+  const { deps } = input;
+  const limitCause = ["vendor_limit", "pinned_limit", "pool_exhausted"].includes(input.cause);
+  const limit = limitCause ? input.limit : null;
   const session = input.capsule && !input.nativeRejected ? input.capsule : null;
   const carriers: RunResumable["carriers"] = [];
   if (session) {
@@ -247,7 +250,7 @@ export function resumableBlock(input: {
     limitWindow: limit?.constraintId ?? null,
     limitEvidence: limit ? (limit.resetsAt || limit.constraintId ? "window" : "unspecified") : null,
     carriers,
-    limitCode: input.terminalCode ?? (limit ? "vendor_limit_rejected" : null),
+    limitCode: limitCause ? (input.terminalCode ?? (limit ? "vendor_limit_rejected" : null)) : null,
     session: session
       ? {
           harness: session.harness,
@@ -255,7 +258,7 @@ export function resumableBlock(input: {
           holderProfileId: session.holderProfileId,
         }
       : null,
-    workspace: deps.inPlace ? { kind: "in_place", root: deps.cwd } : { kind: "none", root: null },
+    workspace: input.workspace,
   };
 }
 

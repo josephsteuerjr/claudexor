@@ -8,22 +8,44 @@
  */
 import { join } from "node:path";
 import type { ArtifactStore, RunPaths } from "@claudexor/artifact-store";
-import type { RunResumable } from "@claudexor/schema";
+import type { ResumableCause, RunResumable } from "@claudexor/schema";
+
+export interface ContinuityTerminalFacts {
+  resumable?: RunResumable;
+  /** Internal snapshot used only if gates/review/arbitration later leave work unfinished. */
+  resumableOnFailure?: RunResumable;
+}
+
+/** Execution roots without an isolated envelope survive this run (Agent and Ask). */
+export function continuityWorkspace(
+  envelope: { worktree_path: string; repo_root: string } | null,
+  cwd: string,
+): RunResumable["workspace"] {
+  return !envelope || envelope.worktree_path === envelope.repo_root
+    ? { kind: "in_place", root: cwd }
+    : { kind: "none", root: null };
+}
 
 /** The first attempt that declared continuation facts speaks for the run. */
 export function resumableOf(
-  items: ReadonlyArray<{ resumable?: RunResumable }>,
+  items: ReadonlyArray<ContinuityTerminalFacts>,
+  cause?: ResumableCause,
 ): RunResumable | null {
-  return items.find((item) => item.resumable)?.resumable ?? null;
+  const declared = items.find((item) => item.resumable)?.resumable;
+  if (declared) return declared;
+  if (!cause) return null;
+  const completed = items.find((item) => item.resumableOnFailure)?.resumableOnFailure;
+  return completed ? { ...completed, cause } : null;
 }
 
 /** Write `final/resumable.yaml` when present and return the terminal payload fragment. */
 export function resumableTerminal(
   store: ArtifactStore,
   paths: Pick<RunPaths, "finalDir">,
-  items: ReadonlyArray<{ resumable?: RunResumable }>,
+  items: ReadonlyArray<ContinuityTerminalFacts>,
+  nonSuccess = false,
 ): { resumable: RunResumable } | Record<never, never> {
-  const resumable = resumableOf(items);
+  const resumable = resumableOf(items, nonSuccess ? "other" : undefined);
   if (!resumable) return {};
   store.writeYaml(join(paths.finalDir, "resumable.yaml"), resumable);
   return { resumable };

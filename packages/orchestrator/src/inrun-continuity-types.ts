@@ -5,6 +5,7 @@ import type {
   HarnessRunSpec,
   QuotaSnapshot,
   RunEventType,
+  RunResumable,
 } from "@claudexor/schema";
 import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
 import type { AttemptTelemetry, TransientFailureObservation } from "./attemptTelemetry.js";
@@ -24,10 +25,7 @@ export interface InRunContinuityDeps {
   attemptDir: string;
   /** Execution root the child runs in. */
   cwd: string;
-  inPlace: boolean;
-  /** The isolated envelope's scoped HOME, or null in place: a located session
-   * file under it does not survive dispose and is never published to a thread. */
-  isolatedHomeDir: string | null;
+  workspace: RunResumable["workspace"];
   /** The caller's original prompt (the work order), for the evidence index. */
   workOrder: string;
   /** The first try's full prompt (engine constraints included) — the packet carrier resends it. */
@@ -83,6 +81,7 @@ export interface TryFacts {
   nativeTry: number;
   harnessErrored: boolean;
   aborted: boolean;
+  budgetStopped?: boolean;
   requestRefused: boolean;
   newTransients: readonly TransientFailureObservation[];
   sawTypedLimit: boolean;
