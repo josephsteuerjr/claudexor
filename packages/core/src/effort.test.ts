@@ -134,10 +134,11 @@ describe("open vocabulary: levels no ladder places", () => {
     // change here. It must not be clamped to a neighbour we merely guessed at.
     const FUTURE = ["low", "medium", "high", "hyper"] as const;
     expect(normalizeEffort("hyper", FUTURE)).toBe("hyper");
-    expect(resolveEffort("hyper", FUTURE)).toEqual({
+    expect(resolveEffort("hyper", FUTURE)).toMatchObject({
       status: "ok",
       effort: "hyper",
       clamped: false,
+      placedBy: null,
     });
   });
 

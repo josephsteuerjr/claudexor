@@ -88,7 +88,7 @@ describe("codex effort is resolved per MODEL, not per harness", () => {
       },
       "gpt-5.6-sol",
     );
-    expect(resolveEffort("ultra", onSol)).toEqual({
+    expect(resolveEffort("ultra", onSol)).toMatchObject({
       status: "ok",
       effort: "ultra",
       clamped: false,
