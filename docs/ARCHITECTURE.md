@@ -4020,7 +4020,9 @@ the lane binding. A packet continuation updates the thread disclosure to `packet
 including a preceding lane switch. The next turn hydrates that lane through the
 existing thread packet. Retained assistant evidence spans all accepted tries;
 identity-mismatched tries contribute no assistant output, and their stream stops
-at the mismatch. Only begun continued tries settle with a
+at the mismatch. The evidence index pairs tool results by try and tool-use id,
+includes pending edit calls, filters steering by attempt, and preserves full
+evidence paths and tool counts when prose is truncated. Only begun continued tries settle with a
 `run.continuity` receipt (try index, carrier, cause, from/to profiles, memory
 full/partial/unknown, instructions as_sent/vendor_snapshot, re-ingested
 tokens, this try's observed model and mismatch, identity check, input

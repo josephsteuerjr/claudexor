@@ -466,7 +466,11 @@ export class InRunContinuity {
         acted: this.acted,
         nativeRejected: this.nativeRejected,
         tryIndex: this.tryIndex,
-        uncertainInput: uncertainInputFor(this.deps.runDir, this.previousTryUnstarted),
+        uncertainInput: uncertainInputFor(
+          this.deps.runDir,
+          this.previousTryUnstarted,
+          this.deps.attemptId,
+        ),
         retainedOutput: this.retainedOutput.text(),
       },
       facts,

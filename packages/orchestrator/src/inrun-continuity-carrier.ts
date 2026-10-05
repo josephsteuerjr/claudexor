@@ -179,10 +179,11 @@ export async function composeContinuedTry(
 export function uncertainInputFor(
   runDir: string,
   previousTryUnstarted: string | null,
+  attemptId: string,
 ): string | null {
   const parts: string[] = [];
   if (previousTryUnstarted) parts.push(previousTryUnstarted.slice(0, 2048));
-  for (const message of steeringFromRunLog(runDir))
+  for (const message of steeringFromRunLog(runDir, attemptId))
     if (message.delivery === "uncertain") parts.push(message.text.slice(0, 2048));
   return parts.length ? parts.join("\n\n") : null;
 }

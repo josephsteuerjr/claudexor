@@ -188,3 +188,14 @@ describe("prepareCarrier (I/O ladder walk)", () => {
     expect(p2).toMatchObject({ carrier: "native", resumeRef: { nativeSessionId: "sid-1" } });
   });
 });
+
+it("builds the packet floor even when a supplied ladder is exhausted", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cx-planner-"));
+  roots.push(dir);
+  const f = facts();
+  const prepared = await prepareCarrier({ ...decideCarrier(f), ladder: [] }, io(f, dir));
+  expect(prepared).toMatchObject({
+    carrier: "packet",
+    packet: { markdown: expect.stringContaining("partial answer") },
+  });
+});

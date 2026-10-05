@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   EVIDENCE_SECTION_BUDGET_BYTES,
+  EVIDENCE_TOTAL_BUDGET_BYTES,
   EVIDENCE_TOOL_ROWS,
   buildEvidenceIndex,
   type EvidenceIndexInput,
@@ -89,7 +90,7 @@ describe("evidence index (pure)", () => {
 });
 
 describe("evidence collector (I/O)", () => {
-  it("pairs tool results to the oldest open call and reads steering delivery from the run log", () => {
+  it("pairs legacy rows without ids and reads steering delivery from the run log", () => {
     const dir = mkdtempSync(join(tmpdir(), "cx-evidence-"));
     roots.push(dir);
     const row = (type: string, payload: Record<string, unknown>) =>
@@ -166,5 +167,92 @@ describe("evidence collector (I/O)", () => {
       diffStatFromPatch("diff --git a/src/a.ts b/src/a.ts\n+x\ndiff --git a/b.md b/b.md\n"),
     ).toBe("- src/a.ts\n- b.md");
     expect(diffStatFromPatch("")).toBeNull();
+  });
+});
+
+describe("evidence review regressions", () => {
+  it("pairs results by use id within a try and retains unresolved edit calls", () => {
+    const calls = toolCallIndex([
+      { session_id: "try-1", type: "file_change", tool: { name: "Write", use_id: "first" } },
+      { session_id: "try-1", type: "tool_call", tool: { name: "Read", use_id: "second" } },
+      { session_id: "try-1", type: "tool_result", tool: { use_id: "second" } },
+      { session_id: "try-2", type: "tool_result", tool: { use_id: "first" } },
+      { session_id: "try-1", type: "file_change", tool: { name: "Edit", use_id: "edit" } },
+    ]);
+    expect(calls).toEqual([
+      { name: "Write", target: null, resolved: false },
+      { name: "Read", target: null, resolved: true },
+      { name: "Edit", target: null, resolved: false },
+    ]);
+  });
+
+  it("leaves unmatched and ambiguous ids unresolved, with oldest-open fallback only for idless results", () => {
+    const rows = [
+      { type: "tool_call", tool: { name: "Write", use_id: "duplicate" } },
+      { type: "tool_call", tool: { name: "Read", use_id: "duplicate" } },
+      { type: "tool_result", tool: { use_id: "missing" } },
+      { type: "tool_result", tool: { use_id: "duplicate" } },
+    ];
+    expect(toolCallIndex(rows).map((c) => c.resolved)).toEqual([false, false]);
+    expect(
+      toolCallIndex([...rows, { type: "tool_result", tool: {} }]).map((c) => c.resolved),
+    ).toEqual([true, false]);
+  });
+
+  it("preserves absolute paths and tool counts when the whole index is truncated", () => {
+    const index = buildEvidenceIndex(
+      input({
+        workOrder: "w".repeat(8100),
+        steering: [
+          { text: "s".repeat(8100), delivery: "confirmed" },
+          { text: "t".repeat(8100), delivery: "uncertain" },
+        ],
+        retainedOutput: "r".repeat(8100),
+        toolCalls: [{ name: "Write", target: "pending.txt", resolved: false }],
+        artifacts: {
+          eventsLog: "/fixture/events.jsonl",
+          attemptDir: "/fixture/attempts/a01",
+          patch: "/fixture/attempts/a01/patch.diff",
+        },
+      }),
+    );
+    expect(index.summarized).toBe(true);
+    expect(index.markdown).toContain("/fixture/events.jsonl");
+    expect(index.markdown).toContain("/fixture/attempts/a01/patch.diff");
+    expect(index.markdown).toContain("Tool calls: 1; unresolved: 1.");
+    expect(index.bytes).toBeLessThanOrEqual(EVIDENCE_TOTAL_BUDGET_BYTES);
+  });
+
+  it("filters steering by attempt when the log carries an attempt id", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cx-evidence-"));
+    roots.push(dir);
+    writeFileSync(
+      join(dir, "events.jsonl"),
+      [
+        {
+          type: "message.accepted",
+          payload: { attempt_id: "a01", message_id: "one", text: "mine" },
+        },
+        {
+          type: "message.accepted",
+          payload: { attempt_id: "a02", message_id: "two", text: "other attempt" },
+        },
+        {
+          type: "message.delivered",
+          payload: { attempt_id: "a02", message_id: "two", text: "other attempt" },
+        },
+        { type: "message.accepted", payload: { message_id: "global", text: "run steering" } },
+      ]
+        .map((r) => JSON.stringify(r))
+        .join("\n"),
+    );
+    const collected = collectEvidenceIndexInput(
+      { runDir: dir, attemptId: "a01", workOrder: "W", steering: [] },
+      { cause: "transport", retainedOutput: "", diffStat: null },
+    );
+    expect(collected.steering).toEqual([
+      { text: "mine", delivery: "uncertain" },
+      { text: "run steering", delivery: "uncertain" },
+    ]);
   });
 });

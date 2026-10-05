@@ -162,17 +162,19 @@ export async function prepareCarrier(
         capsule,
       };
     }
-    if (rung === "packet") {
-      const input = collectEvidenceIndexInput(io.evidence, {
-        cause: facts.cause,
-        retainedOutput: io.retainedOutput ?? "",
-        diffStat: io.diffStat ?? null,
-      });
-      return { carrier: "packet", packet: buildEvidenceIndex(input) };
-    }
+    if (rung === "packet") return preparePacket(io);
     if (rung === "fresh") return { carrier: "fresh" };
   }
-  return { carrier: facts.acted ? "packet" : "fresh" } as CarrierPrepared;
+  return facts.acted ? preparePacket(io) : { carrier: "fresh" };
+}
+
+function preparePacket(io: CarrierIo): CarrierPrepared {
+  const input = collectEvidenceIndexInput(io.evidence, {
+    cause: io.facts.cause,
+    retainedOutput: io.retainedOutput ?? "",
+    diffStat: io.diffStat ?? null,
+  });
+  return { carrier: "packet", packet: buildEvidenceIndex(input) };
 }
 
 /** Locate through the adapter: the refreshed capsule, "miss", or "unverified"
