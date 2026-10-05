@@ -2938,8 +2938,10 @@ describe("Orchestrator", () => {
       expect(saved).not.toContain(secret);
       expect(saved.startsWith("# Claudexor: secret-like strings are replaced")).toBe(true);
     }
-    // The whole run directory — events, attempts, reviews, final — holds no match.
+    // The whole run directory — events, attempts, reviews, final — holds no match,
+    // and an isolated candidate adds no blob to the user's repository either.
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+    expect(gitObjectStoreContains(repo, secret)).toBe(false);
     const workProduct = readFileSync(join(res.runDir, "final", "work_product.yaml"), "utf8");
     expect(workProduct).toContain("persisted_patch: redacted");
     expect(workProduct).toMatch(/secret_like:\n[\s\S]*path: \.env\n\s+matches: 1/);
@@ -15233,6 +15235,9 @@ describe("delegation belt injection (D32)", () => {
       expect(workProduct).toMatch(/binary_paths:\n\s+- LEAK\.bin/);
       expect(workProduct).toContain("persisted_patch: redacted");
       expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+      // Isolated: nothing reached the user's object store. In-place: the bytes
+      // are in place, and the post-turn snapshot holds the same bytes as the tree.
+      if (!inPlace) expect(gitObjectStoreContains(repo, secret)).toBe(false);
       // The private exact object still carries the applyable payload.
       const digest = /patch_sha256: (sha256:[0-9a-f]{64})/.exec(workProduct)?.[1] ?? "";
       const exact = readRevertAnchor(repo, digest);
@@ -15384,6 +15389,7 @@ describe("delegation belt injection (D32)", () => {
       "- Secret-like strings: 1 in 1 changed file(s) (LEAK.txt) — kept in the changed files, hidden in saved copies; 1 hidden in the answer",
     );
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+    expect(gitObjectStoreContains(repo, secret)).toBe(false);
     // The envelope is gone, yet the exact bytes survive in the private object
     // whose id is the recorded digest, and they apply cleanly.
     const digest = /patch_sha256: (sha256:[0-9a-f]{64})/.exec(workProduct)?.[1] ?? "";
@@ -15828,6 +15834,7 @@ describe("delegation belt injection (D32)", () => {
     ).toBe("");
     // reviews/** (packets, prompts, findings yaml), attempts, events, final.
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+    expect(gitObjectStoreContains(repo, secret)).toBe(false);
     const finalPatch = readFileSync(join(res.runDir, "final", "patch.diff"), "utf8");
     if (res.winner === leakyAttempt) expect(finalPatch).toContain("+[redacted]");
     else expect(finalPatch).toContain("CLEAN.txt");
@@ -15864,6 +15871,7 @@ describe("delegation belt injection (D32)", () => {
     expect(workProduct).toContain("persisted_patch: redacted");
     expect(workProduct).toMatch(/exact_patch_object: sha256:[0-9a-f]{64}/);
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
+    expect(gitObjectStoreContains(repo, secret)).toBe(false);
   });
 
   it("keeps harness commits inside the disposable candidate clone", async () => {
@@ -15912,6 +15920,7 @@ describe("delegation belt injection (D32)", () => {
     expect(
       execFileSync("git", ["-C", repo, "log", "--all", "--format=%s"], { encoding: "utf8" }),
     ).not.toContain("candidate");
+    expect(gitObjectStoreContains(repo, secret)).toBe(false);
     expect(treeContainsBytes(res.runDir, secret)).toBe(false);
   });
 
