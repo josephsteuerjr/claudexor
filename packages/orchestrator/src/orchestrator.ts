@@ -731,8 +731,6 @@ export interface RoutedAdapter {
 }
 const LABELS = "ABCDEFGHIJ".split("");
 const NO_PROJECT_ROOT = noProjectRepoRoot();
-/** Default wait for one interactive answer before a benign decline. */
-const DEFAULT_INTERACTION_TIMEOUT_MS = 900_000;
 
 export class Orchestrator {
   private readonly gateway: HarnessGateway;
@@ -2962,30 +2960,6 @@ export class Orchestrator {
     };
   }
 
-  private interactionChannelFor(
-    input: RunInput,
-    log: EventLog,
-    runId: string,
-    taskId: string,
-    attemptId: string,
-    harnessId: string,
-    // REQUIRED (no default): every call site must state the routed manifest's
-    // `interactive` capability, or a future site would silently bypass the gate.
-    supportsInteractive: boolean,
-  ): InteractionChannel | undefined {
-    // Thin delegate — the channel mechanics live in interaction.ts.
-    return interactionChannelFor(
-      input,
-      log,
-      runId,
-      taskId,
-      attemptId,
-      harnessId,
-      supportsInteractive,
-      DEFAULT_INTERACTION_TIMEOUT_MS,
-    );
-  }
-
   private async runRace(
     input: RunInput,
     mode: ModeKind,
@@ -3318,7 +3292,7 @@ export class Orchestrator {
           this.candidateIntent(input),
           log,
           effectiveWeb,
-          this.interactionChannelFor(
+          interactionChannelFor(
             input,
             log,
             runId,
@@ -3448,7 +3422,7 @@ export class Orchestrator {
                   this.candidateIntent(input),
                   log,
                   effectiveWeb,
-                  this.interactionChannelFor(
+                  interactionChannelFor(
                     input,
                     log,
                     runId,
@@ -3888,7 +3862,7 @@ export class Orchestrator {
             "synthesize",
             log,
             effectiveWeb,
-            this.interactionChannelFor(
+            interactionChannelFor(
               input,
               log,
               runId,
@@ -4935,7 +4909,7 @@ export class Orchestrator {
             "repair",
             log,
             effectiveWeb,
-            this.interactionChannelFor(
+            interactionChannelFor(
               input,
               log,
               runId,
@@ -5699,7 +5673,7 @@ export class Orchestrator {
         spec.extra["abortSignal"] = input.signal
           ? AbortSignal.any([input.signal, plannerAbort.signal])
           : plannerAbort.signal;
-        const planInteraction = this.interactionChannelFor(
+        const planInteraction = interactionChannelFor(
           input,
           log,
           runId,
@@ -6554,7 +6528,7 @@ export class Orchestrator {
               : null) ?? roHome.env,
         });
         this.credentials.stampProfileSelection(spec, input, adapter.id);
-        const reportInteraction = this.interactionChannelFor(
+        const reportInteraction = interactionChannelFor(
           input,
           log,
           runId,

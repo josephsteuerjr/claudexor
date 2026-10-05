@@ -158,6 +158,8 @@ export function formatRunEventLine(ev: Record<string, unknown>): string | null {
       return `[${String(p["from_attempt"] ?? "?")}] continuing in a fresh session (${String(
         p["cause"] ?? "context exhausted",
       )}, continuation ${String(p["continuation_count"] ?? "?")})`;
+    case "workspace.retained":
+      return `[${String(p["attempt_id"] ?? "?")}] stopped work kept for continueFrom`;
     case "run.continuation.denied":
       return `[${String(p["from_attempt"] ?? "?")}] continuation refused — budget lease denied (${String(
         p["reason"] ?? "budget",

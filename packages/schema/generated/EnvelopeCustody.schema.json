@@ -163,6 +163,18 @@
             "null"
           ],
           "description": "When custody became retained; null while live."
+        },
+        "bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Disk use measured when retained (the kept envelope is not written to); null while live or unmeasured."
         }
       },
       "required": [
@@ -172,7 +184,8 @@
         "holder_run_dir",
         "envelope",
         "cause",
-        "retained_at"
+        "retained_at",
+        "bytes"
       ],
       "additionalProperties": false,
       "description": "Durable custody record of an isolated envelope (live or retained for continuation)."
