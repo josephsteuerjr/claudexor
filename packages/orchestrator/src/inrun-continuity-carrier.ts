@@ -197,7 +197,8 @@ export async function composeContinuedTry(
 
 /** The predecessor's input that may not be in the vendor history: the last
  * caller-authored work order if the first try died before `started`, plus unconfirmed
- * steering messages (`message.accepted` with no `message.delivered`). */
+ * steering messages (`message.accepted` with no `message.delivered`), the chain's
+ * included while no newer run has started. */
 export function uncertainInputFor(
   runDir: string,
   previousInputs: readonly UncertainInput[],
@@ -211,7 +212,8 @@ export function uncertainInputFor(
   const steering = steeringFromRunLog(runDir, attemptId)
     .filter((message) => message.delivery === "uncertain")
     .reverse()
-    .map(({ text }) => ({ text, runDir }));
+    .map(({ text }) => ({ text, runDir }))
+    .filter((message) => !inputs.some((i) => i.runDir === runDir && i.text === message.text));
   inputs.splice(sameRun < 0 ? inputs.length : sameRun, 0, ...steering);
   let remaining = 2048;
   const parts = inputs.map((input) => {

@@ -6,6 +6,7 @@ import { readRunEvents } from "@claudexor/event-log";
 import { RunContinuityReceipt, type ContinuationSources } from "@claudexor/schema";
 import { readContinuationSources } from "@claudexor/workspace";
 import { readTextSafe } from "@claudexor/util";
+import { steeringFromRunLog } from "./continuation-evidence-io.js";
 
 export interface UncertainInput {
   text: string;
@@ -30,10 +31,26 @@ export function completeInputPath(input: UncertainInput, currentRunDir: string):
 /** Reference only: the notice tells the next process to reconcile, never replay blindly. */
 export function unconfirmedContinuationInputs(sources: ContinuationSources): UncertainInput[] {
   const uncertain: UncertainInput[] = [];
+  // A newer run of the chain whose process started was handed these inputs in its notice.
+  let newerStarted = false;
   for (const [index, source] of sources.entries()) {
+    const { events } = readRunEvents(join(source.runDir, "events.jsonl"));
+    const startedHere = events.some(
+      (event) => event.type === "harness.event" && event.payload["type"] === "started",
+    );
+    // A stopped run's admitted steering without delivery proof is newer than its caller text.
+    // The live run's own steering is read per attempt by `uncertainInputFor`.
+    if (!newerStarted && source.state !== "running") {
+      uncertain.push(
+        ...steeringFromRunLog(source.runDir)
+          .filter((message) => message.delivery === "uncertain")
+          .reverse()
+          .map(({ text }) => ({ text, runDir: source.runDir })),
+      );
+    }
+    newerStarted ||= startedHere;
     if (index === sources.length - 1 && readContinuationSources(source.runDir).length === 0)
       continue;
-    const { events } = readRunEvents(join(source.runDir, "events.jsonl"));
     const text = events.find((event) => event.type === "run.created")?.payload["prompt"];
     if (typeof text !== "string" || !text.trim()) continue;
     const settled = events

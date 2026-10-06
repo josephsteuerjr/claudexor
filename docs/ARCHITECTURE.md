@@ -2176,7 +2176,9 @@ Endpoint semantics beyond the inventory:
   confirmed first-try delivery is carried as an uncertain reference to reconcile,
   never blindly replay; the receipt reports `inputDelivery: "uncertain"`.
   Each uncertain input stays separate across run successors and unstarted
-  in-run retries. Inline quotes share a 2,048-character
+  in-run retries, including a stopped ancestor's admitted steering message
+  without delivery proof, until a newer run of the chain has started a process
+  with it. Inline quotes share a 2,048-character
   budget filled newest first; every cut gives the shown and complete character
   counts and an absolute path to the complete text. The engine reuses the saved
   work order when it contains that text, otherwise it saves a context file.

@@ -820,6 +820,137 @@ describe("continueFrom through an unadopted head", () => {
   );
 });
 
+describe("continueFrom: an ancestor's steering without delivery proof", () => {
+  const STEERING = "Steering correction: preserve the public migration API.";
+  /** The row the live-message route leaves after an `accepted` outcome, before the terminal. */
+  function leaveUnconfirmedSteering(runDir: string): void {
+    const file = join(runDir, "events.jsonl");
+    const rows = readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const terminal = rows.findIndex((row) =>
+      ["run.failed", "run.completed", "run.blocked"].includes(String(row["type"])),
+    );
+    const first = rows[0]!;
+    rows.splice(terminal, 0, {
+      ts: first["ts"],
+      run_id: first["run_id"],
+      task_id: first["task_id"],
+      type: "message.accepted",
+      payload: { message_id: "steer-1", attempt_id: "a01", text: STEERING },
+    });
+    rows.forEach((row, index) => (row["seq"] = index + 1));
+    writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  }
+
+  it("keeps it through an unstarted in-run native retry of the successor", async () => {
+    let f!: Fixture;
+    const predScript = editThenLimit(() => f);
+    f = fixture(["a"], function* (ctx) {
+      if (ctx.phase === "predecessor") return yield* predScript(ctx);
+      if (ctx.nth === 1) return yield* crash(ctx.emit);
+      yield* finishing(ctx.emit, ctx.cwd, "sid-A");
+    });
+    const { succ } = await chain(f, {
+      successor: { prompt: "Finish it" },
+      between: leaveUnconfirmedSteering,
+    });
+    expect(succ.result.lifecycle, succ.result.summary).toBe("succeeded");
+    const tries = f.spawns.filter((spawn) => spawn.phase === "successor");
+    expect(tries).toHaveLength(2);
+    expect(tries.map((spawn) => spawn.resume)).toEqual(["sid-A", "sid-A"]);
+    for (const spawn of tries) expect(spawn.prompt).toContain(STEERING);
+    expect(succ.receipts.at(-1)).toMatchObject({ carrier: "native", inputDelivery: "uncertain" });
+  });
+
+  it("keeps it for the next run after a successor exhausts its unstarted tries", async () => {
+    let f!: Fixture;
+    const predScript = editThenLimit(() => f);
+    f = fixture(["a"], function* (ctx) {
+      if (ctx.phase === "predecessor") return yield* predScript(ctx);
+      if (ctx.nth <= 3) return yield* crash(ctx.emit);
+      yield* finishing(ctx.emit, ctx.cwd, "sid-A");
+    });
+    const { pred, succ: failed } = await chain(f, {
+      successor: { prompt: "Finish it" },
+      between: leaveUnconfirmedSteering,
+    });
+    expect(failed.result.lifecycle).toBe("failed");
+    const records = [
+      { ...pred.result, params: { prompt: WORK_ORDER }, state: pred.result.lifecycle },
+      {
+        ...failed.result,
+        params: { prompt: "Finish it", continueFrom: pred.result.runId },
+        state: failed.result.lifecycle,
+      },
+    ];
+    const next = await runOnce(f, {
+      inPlace: true,
+      prompt: "Continue now",
+      continuation: continuationForRun(
+        ControlRunStartRequest.parse({
+          prompt: "Continue now",
+          continueFrom: failed.result.runId,
+          scope: { kind: "project", root: f.root },
+          execution: { isolation: "live" },
+        }),
+        { all: () => [{ records: () => records }] },
+      ),
+    });
+    expect(next.result.lifecycle, next.result.summary).toBe("succeeded");
+    expect(next.receipts[0]).toMatchObject({ carrier: "native", inputDelivery: "uncertain" });
+    expect(f.spawns.at(-1)!.prompt).toContain(STEERING);
+  });
+
+  it("is not repeated once a successor's process started with it", async () => {
+    let f!: Fixture;
+    const predScript = editThenLimit(() => f);
+    f = fixture(["a"], function* (ctx) {
+      if (ctx.phase === "predecessor") return yield* predScript(ctx);
+      if (ctx.nth === 1) {
+        yield ctx.emit({
+          type: "started",
+          observed_model: "m1",
+          payload: { native_session_id: "sid-A" },
+        });
+        return yield* limit(ctx.emit);
+      }
+      yield* finishing(ctx.emit, ctx.cwd, "sid-A");
+    });
+    const { pred, succ: stopped } = await chain(f, {
+      successor: { prompt: "Finish it" },
+      between: leaveUnconfirmedSteering,
+    });
+    expect(stopped.result.lifecycle).not.toBe("succeeded");
+    expect(f.spawns.filter((spawn) => spawn.phase === "successor")[0]!.prompt).toContain(STEERING);
+    const records = [
+      { ...pred.result, params: { prompt: WORK_ORDER }, state: pred.result.lifecycle },
+      {
+        ...stopped.result,
+        params: { prompt: "Finish it", continueFrom: pred.result.runId },
+        state: stopped.result.lifecycle,
+      },
+    ];
+    const next = await runOnce(f, {
+      inPlace: true,
+      prompt: "Continue now",
+      continuation: continuationForRun(
+        ControlRunStartRequest.parse({
+          prompt: "Continue now",
+          continueFrom: stopped.result.runId,
+          scope: { kind: "project", root: f.root },
+          execution: { isolation: "live" },
+        }),
+        { all: () => [{ records: () => records }] },
+      ),
+    });
+    expect(next.result.lifecycle, next.result.summary).toBe("succeeded");
+    expect(f.spawns.at(-1)).toMatchObject({ resume: "sid-A" });
+    expect(f.spawns.at(-1)!.prompt).not.toContain(STEERING);
+  });
+});
+
 describe("continueFrom model selection", () => {
   it.each([
     { mode: "agent", inheritModel: true },
