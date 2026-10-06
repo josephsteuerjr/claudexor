@@ -15,15 +15,13 @@ import { paramsRecord, type DaemonFacadeClient } from "./run-record.js";
 
 /** What a continuation needs to find its carrier and workspace: the work's
  * kind, project and execution tree, harness and model. Nothing else is
- * inherited implicitly; an explicit value in the request always wins. */
-const INHERITED_KEYS = [
-  "mode",
-  "scope",
-  "execution",
-  "harnesses",
-  "primaryHarness",
-  "model",
-  "models",
+ * inherited implicitly. Either explicit key replaces its whole related group. */
+const INHERITED_GROUPS = [
+  ["mode"],
+  ["scope"],
+  ["execution"],
+  ["harnesses", "primaryHarness"],
+  ["model", "models"],
 ] as const;
 
 /**
@@ -37,6 +35,9 @@ export async function resolveContinuationBody(
   daemon: Pick<DaemonFacadeClient, "list">,
   body: unknown,
 ): Promise<unknown> {
+  if (body && typeof body === "object" && "continueModelInherited" in body) {
+    throw Object.assign(new Error("continueModelInherited is server-owned"), { status: 400 });
+  }
   const from = continuedRunOf(body);
   if (from === null || !body || typeof body !== "object" || Array.isArray(body)) return body;
   const predecessor = continuationPredecessor(from, await daemon.list({ id: from }));
@@ -44,9 +45,14 @@ export async function resolveContinuationBody(
   const raw = body as Record<string, unknown>;
   const inherited = paramsRecord(predecessor);
   const resolved: Record<string, unknown> = { ...raw, continueFrom: predecessor.runId };
-  for (const key of INHERITED_KEYS) {
-    if (!(key in raw) && inherited[key] !== undefined) resolved[key] = inherited[key];
+  for (const group of INHERITED_GROUPS) {
+    if (group.some((key) => key in raw)) continue;
+    for (const key of group) {
+      if (inherited[key] !== undefined) resolved[key] = inherited[key];
+    }
   }
+  // Preserve caller intent through durable request normalization and settings defaults.
+  resolved["continueModelInherited"] = !("model" in raw || "models" in raw);
   return resolved;
 }
 

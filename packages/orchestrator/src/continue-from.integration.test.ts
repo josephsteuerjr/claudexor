@@ -154,7 +154,7 @@ function fixture(profiles: string[], script: Script): Fixture {
           repair: true,
           explain: true,
           audit: true,
-          known_models: ["m1"],
+          known_models: ["m1", "m2"],
         },
         auth_modes: ["local_session"],
         access_profiles_supported: ["workspace_write", "readonly"],
@@ -181,7 +181,7 @@ function fixture(profiles: string[], script: Script): Fixture {
       };
     },
     async models() {
-      return [{ id: "m1", label: null, context_window: null, routes: null }];
+      return ["m1", "m2"].map((id) => ({ id, label: null, context_window: null, routes: null }));
     },
     async *run(spec) {
       const profile = spec.credential_profile!.profile_id;
@@ -250,6 +250,7 @@ async function chain(
     preference?: "auto" | "packet";
     between?: (runDir: string) => void;
     adopt?: boolean;
+    inheritModel?: boolean;
   } = {},
 ) {
   const pred = await runOnce(f, {
@@ -273,6 +274,7 @@ async function chain(
         state: pred.result.lifecycle,
         workOrder: WORK_ORDER,
         preference: opts.preference ?? "auto",
+        inheritModel: opts.inheritModel,
       },
     },
   });
@@ -603,6 +605,49 @@ describe("continueFrom through an unadopted head", () => {
       expect(readFileSync(join(c.result.runDir, "final", "patch.diff"), "utf8")).toContain(
         "first half",
       );
+    },
+  );
+});
+
+describe("continueFrom model selection", () => {
+  it.each([true, false])(
+    "distinguishes an inherited hint from a caller choice (inherited: %s)",
+    async (inheritModel) => {
+      let f!: Fixture;
+      const predScript = editThenLimit(() => f);
+      f = fixture(["a"], function* (ctx) {
+        if (ctx.phase === "predecessor") return yield* predScript(ctx);
+        yield* finishing(ctx.emit, ctx.cwd, "sid-A");
+      });
+      const { succ } = await chain(f, { successor: { models: { fake: "m2" } }, inheritModel });
+      expect(succ.result.lifecycle, succ.result.summary).toBe("succeeded");
+      expect(f.spawns.find((s) => s.phase === "successor")!.model).toBe(inheritModel ? "m1" : "m2");
+      expect(succ.receipts[0]).toMatchObject({ observedModel: "m1", modelMismatch: !inheritModel });
+    },
+  );
+  it.each(["auto", "packet"] as const)(
+    "pins the attested model across settings drift (%s)",
+    async (preference) => {
+      let f!: Fixture;
+      const predScript = editThenLimit(() => f);
+      f = fixture(["a"], function* (ctx) {
+        if (ctx.phase === "predecessor") return yield* predScript(ctx);
+        yield* finishing(ctx.emit, ctx.cwd, preference === "packet" ? "sid-new" : "sid-A");
+      });
+      const { succ } = await chain(f, {
+        preference,
+        predecessor: { models: undefined },
+        successor: { models: undefined },
+        between: () => {
+          const path = join(process.env.CLAUDEXOR_CONFIG_DIR!, "config.yaml");
+          const config = JSON.parse(readFileSync(path, "utf8"));
+          config.harnesses.fake.default_model = "m2";
+          writeFileSync(path, JSON.stringify(config));
+        },
+      });
+      expect(succ.result.lifecycle, succ.result.summary).toBe("succeeded");
+      expect(f.spawns.find((s) => s.phase === "successor")!.model).toBe("m1");
+      expect(succ.receipts[0]).toMatchObject({ observedModel: "m1", modelMismatch: false });
     },
   );
 });

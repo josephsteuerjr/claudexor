@@ -182,9 +182,6 @@ export const ControlRunStartRequest = z
       .describe(
         "Plan strategy: N harnesses draft plans in parallel, the primary merges into one unified plan + one question set. Plan mode only.",
       ),
-    /** Best-of-N synthesis policy. `auto` (default) only synthesizes a 3rd
-     * candidate when n>=3 and candidates genuinely complement; `always`/`never`
-     * force it. Threaded to the orchestrator's decideSynthesis. */
     synthesis: z
       .enum(["auto", "always", "never"])
       .optional()
@@ -245,6 +242,10 @@ export const ControlRunStartRequest = z
     continueCarrier: ContinueCarrierPreference.optional().describe(
       "Carrier preference for continueFrom; omitted = auto.",
     ),
+    continueModelInherited: z
+      .boolean()
+      .optional()
+      .describe("Internal continuation model provenance; direct POST /runs rejects it."),
     /** When set, this turn implements an approved plan (mode is forced to
      * agent); the plan is DELIVERED AS A FILE (planRef), never re-embedded
      * into the prompt text. */

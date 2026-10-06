@@ -84,6 +84,7 @@ export function continuationForRun(
         .join("\n\n"),
       ancestors: sources.slice(1),
       preference: p.continueCarrier ?? "auto",
+      inheritModel: p.continueModelInherited ?? (p.model === undefined && p.models === undefined),
     },
   };
 }

@@ -2143,8 +2143,13 @@ Endpoint semantics beyond the inventory:
   Exact Retry and `rerun_with_feedback` replay the original request, so for a
   successor that ran they answer the same `continuation_superseded`: the
   caller continues the head instead. Omitted `mode`, `scope`, `execution`, `harnesses`, `primaryHarness`, `model`
-  and `models` come from the predecessor (resolved before request defaults;
-  explicit values win; nothing else is inherited), and `prompt` is the
+  and `models` come from the predecessor before request defaults. Setting either
+  `harnesses` or `primaryHarness` inherits neither; setting either `model` or
+  `models` inherits neither. With no caller model choice, the first try pins the
+  predecessor's attested model only when the target route lists that id, ahead
+  of a changed settings default; otherwise the inherited request/default applies.
+  The receipt discloses the actual `observedModel`. Nothing else is inherited;
+  `prompt` is the
   caller's continuation text — empty only here. The first try of the
   successor's first candidate attempt is planned through the in-run
   continuation planner from the predecessor's session capsule and terminal

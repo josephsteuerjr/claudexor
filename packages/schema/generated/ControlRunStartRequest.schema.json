@@ -452,6 +452,10 @@
           ],
           "description": "Carrier preference for continueFrom; omitted = auto."
         },
+        "continueModelInherited": {
+          "type": "boolean",
+          "description": "Internal continuation model provenance; direct POST /runs rejects it."
+        },
         "planRunId": {
           "$ref": "#/definitions/ControlRunStartRequest/properties/threadId",
           "description": "Internal daemon handoff only; rejected (400) on POST /runs. When set, the turn implements an approved plan from that run."

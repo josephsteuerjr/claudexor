@@ -44,6 +44,7 @@ import { collectEvidenceIndexInput, diffStatFromPatch } from "./continuation-evi
 import { continuationNotice, packetContinuationPrompt } from "./continuity-notice.js";
 import { InRunContinuity } from "./inrun-continuity.js";
 import type { InRunContinuityDeps } from "./inrun-continuity-types.js";
+import { routeListsModel } from "./modelGovernance.js";
 import { uncertainInputFor, type ContinuedTry } from "./inrun-continuity-carrier.js";
 import {
   readSessionCapsule,
@@ -64,6 +65,8 @@ export interface ContinueFromSource {
   preference: CarrierPreference;
   /** Earlier chain links, newest first; a refused head may own no carrier yet. */
   ancestors?: ContinuationSources;
+  /** Captured before inheritance/defaults; a caller-selected model always wins. */
+  inheritModel?: boolean;
 }
 
 const WORK_ORDER_FILE = join("context", "work-order.md");
@@ -211,6 +214,13 @@ export async function openContinuity(
   if (!continuation || !from) return { continuity: new InRunContinuity(deps), spec };
   continuation.from = null;
   const pred = readPredecessor(store, from);
+  const model =
+    from.inheritModel &&
+    pred.observedModel &&
+    deps.route &&
+    (await routeListsModel(deps.route, spec, pred.observedModel))
+      ? pred.observedModel
+      : spec.model_hint;
   const callerText = deps.workOrder;
   const workOrder = [pred.workOrder.trim(), callerText.trim()].filter(Boolean).join("\n\n");
   store.writeText(join(deps.runDir, WORK_ORDER_FILE), `${workOrder}\n`);
@@ -263,6 +273,7 @@ export async function openContinuity(
     const followUp = pred.resumable === null && from.state === "succeeded" && callerText.trim();
     composed = HarnessRunSpecSchema.parse({
       ...spec,
+      model_hint: model,
       resume_session_id: prepared.resumeRef.nativeSessionId,
       prompt: followUp
         ? withNote(callerText)
@@ -286,8 +297,7 @@ export async function openContinuity(
     composed = HarnessRunSpecSchema.parse({
       ...spec,
       resume_session_id: null,
-      // A null model hint must not re-resolve to another default on a new session (§7.1).
-      model_hint: spec.model_hint ?? facts.effectiveModel,
+      model_hint: model,
       prompt: packetContinuationPrompt({
         originalPrompt: spec.prompt,
         notice: continuationNotice({ cause: pred.cause, uncertainInput, callerText: withNote("") }),
