@@ -127,6 +127,66 @@ describe("unfinished terminal facts", () => {
   });
 });
 
+it("a succeeded best-of run carries no losing candidate's continuation facts", async () => {
+  const o = await run({
+    mode: "agent",
+    profiles: ["a"],
+    input: {
+      n: 2,
+      review: true,
+      paidBudget: { kind: "finite", maxUsd: 10 },
+      tests: [{ program: "sh", args: ["-c", "test -f good.txt"], envAllowlist: [] }],
+    },
+    reviewers: [
+      {
+        providerFamily: "openai",
+        adapter: {
+          id: "clean-reviewer",
+          async discover() {
+            return HarnessManifest.parse({
+              id: "clean-reviewer",
+              display_name: "clean reviewer",
+              kind: "local_cli",
+              provider_family: "openai",
+              capabilities: { review: true },
+            });
+          },
+          async doctor() {
+            return ConformanceReport.parse({
+              harness_id: "clean-reviewer",
+              status: "ok",
+              enabled_intents: ["review"],
+            });
+          },
+          async *run(spec) {
+            const base = { session_id: spec.session_id, ts: new Date().toISOString() };
+            yield { ...base, type: "started", credential_route: "managed_api_key" };
+            yield { ...base, type: "message", text: "[]" };
+            yield {
+              ...base,
+              type: "usage",
+              credential_route: "managed_api_key",
+              usage: { cost_usd: 0.001 },
+            };
+            yield { ...base, type: "completed" };
+          },
+        },
+      },
+    ],
+    script: function* ({ emit, spec, tryOfProfile }) {
+      yield emit({ type: "started", payload: { native_session_id: `sid-cand-${tryOfProfile}` } });
+      const file = tryOfProfile === 1 ? "bad.txt" : "good.txt";
+      writeFileSync(join(spec.cwd, file), "candidate\n");
+      yield emit({ type: "file_change", payload: { path: file } });
+      yield emit({ type: "message", text: "done", final: true });
+      yield emit({ type: "completed" });
+    },
+  });
+  expect(o.result.lifecycle, o.result.summary).toBe("succeeded");
+  expect(o.resumable).toBeUndefined();
+  expect(existsSync(join(o.result.runDir, "final", "resumable.yaml"))).toBe(false);
+});
+
 it("pool-exhausted resumable uses the same folded earliest reset as failure.yaml", async () => {
   const snapshots: QuotaSnapshot[] = [];
   const early = "2026-10-07T10:00:00.000Z",

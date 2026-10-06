@@ -4411,7 +4411,7 @@ export class Orchestrator {
         lifecycle: facts.lifecycle,
         facts,
         reason: facts.reason,
-        ...resumableTerminal(store, paths, runs, isFailureTerminal),
+        ...resumableTerminal(store, paths, winnerRun ? [winnerRun] : runs, isFailureTerminal),
       });
     } else if (facts.lifecycle === "succeeded") {
       // needsDecision at terminal — the event's phase must agree with
