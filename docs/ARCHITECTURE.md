@@ -4111,7 +4111,9 @@ resume keeps the id; codex compares the `thread/resume` reply before
 session) and the adapter's typed rejection of carried state. "Acted" is a
 sticky fact of the attempt (an accepted answer, agent progress, a file change
 or a diff in any try). An attempt that did not act keeps the rotation and
-transient rules above byte for byte. After progress: a typed vendor limit on an
+transient rules above byte for byte, except that a context exhaustion ends the
+attempt with `resumable` cause `context_exhausted` instead of a structural
+rotation (another account has the same window). After progress: a typed vendor limit on an
 unpinned `rotate` route hops to the next eligible account and the next try
 carries the work — `native_moved` when the adapter's `continuity` located the
 session and moved it into the target store (claude: `<sid>.jsonl` + `<sid>/`
