@@ -1,5 +1,7 @@
 # @claudexor/util
 
+## 3.22.0
+
 ## 3.21.0
 
 ### Patch Changes

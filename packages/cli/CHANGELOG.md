@@ -1,5 +1,40 @@
 # @claudexor/cli
 
+## 3.22.0
+
+### Minor Changes
+
+- 51578d4: Continue a stopped run instead of restarting it: `POST /v2/runs {continueFrom: <runId>, continueCarrier?: "auto" | "packet"}` starts the next run of a continuation chain. Admission is one daemon-atomic rule shared by every ingress (`predecessor_unknown`, `predecessor_live`, `continue_from_with_thread`, `continue_from_unsupported`, `continuation_superseded` with the chain `head`): the accepted successor command is the durable claim, so a predecessor has exactly one accepted successor, also across restarts and concurrent requests. Omitted mode, scope, execution, harness and model come from the predecessor, and the prompt is the caller's continuation text (it may be empty). The successor's first try is planned through the in-run continuation planner from the predecessor's session capsule and terminal facts — the same account resumes the vendor session by id, another account resumes the moved session, otherwise a fresh session is briefed with the evidence index — and is disclosed by a `run.continuity` receipt naming the predecessor and whether it runs in the same root. A stopped isolated Agent run now keeps its envelope (tree and scoped home, Claudexor-seeded auth removed) under a durable custody record until a successor adopts it, its result is applied or it is discarded; the crash sweep and disk retention keep it, and a run interrupted by a daemon restart with changes is kept the same way. `GET /v2/runs/:id` projects `resumable` (derived as `host_restart` for runs the daemon found running at its restart), the per-try `continuity` receipts, `retainedEnvelope` (disk use) and `continueFrom`; `continueFrom` is advertised in `runControlKeys`.
+
+### Patch Changes
+
+- Updated dependencies [51578d4]
+- Updated dependencies [785bba7]
+  - @claudexor/schema@3.22.0
+  - @claudexor/daemon@3.22.0
+  - @claudexor/control-api@3.22.0
+  - @claudexor/orchestrator@3.22.0
+  - @claudexor/workspace@3.22.0
+  - @claudexor/core@3.22.0
+  - @claudexor/harness-claude@3.22.0
+  - @claudexor/harness-codex@3.22.0
+  - @claudexor/acp-server@3.22.0
+  - @claudexor/config@3.22.0
+  - @claudexor/delivery@3.22.0
+  - @claudexor/gateway@3.22.0
+  - @claudexor/harness-acp@3.22.0
+  - @claudexor/harness-agy@3.22.0
+  - @claudexor/harness-cursor@3.22.0
+  - @claudexor/harness-fake@3.22.0
+  - @claudexor/harness-opencode@3.22.0
+  - @claudexor/harness-raw-api@3.22.0
+  - @claudexor/mcp-server@3.22.0
+  - @claudexor/review@3.22.0
+  - @claudexor/artifact-store@3.22.0
+  - @claudexor/journal@3.22.0
+  - @claudexor/secrets@3.22.0
+  - @claudexor/util@3.22.0
+
 ## 3.21.0
 
 ### Patch Changes
