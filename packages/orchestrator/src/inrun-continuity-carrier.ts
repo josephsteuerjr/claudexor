@@ -91,6 +91,7 @@ export async function composeContinuedTry(
   delayMs: number,
 ): Promise<ComposedContinuedTry> {
   const { deps } = ctx;
+  const completed = deps.seed?.completed;
   const from = facts.runSpec.credential_profile?.profile_id ?? null;
   const to = base.credential_profile?.profile_id ?? null;
   const effectiveModel = facts.telemetry.observedModel ?? base.model_hint ?? null;
@@ -121,6 +122,7 @@ export async function composeContinuedTry(
     targetCwd: base.cwd,
     retainedOutput: ctx.retainedOutput,
     diffStat: facts.currentDiff ? diffStatFromPatch(facts.currentDiff) : null,
+    completed,
   });
   if (prepared.carrier === "fresh") {
     return {
@@ -131,6 +133,7 @@ export async function composeContinuedTry(
   }
   const notice = continuationNotice({
     cause,
+    completed,
     uncertainInput: ctx.uncertainInput,
     callerText: null,
   });
@@ -166,6 +169,7 @@ export async function composeContinuedTry(
         notice,
         evidencePath,
         evidenceMarkdown: prepared.packet.markdown,
+        completed,
       }),
     });
     return { verdict: { kind: "continue", spec, delayMs }, continued, capsule: null };

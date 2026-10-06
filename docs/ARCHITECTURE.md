@@ -2166,7 +2166,8 @@ Endpoint semantics beyond the inventory:
   resends the original prompt: the continuation notice (cause, any undelivered
   input) plus the caller's text is the user prompt, and a follow-up on
   finished work uses the caller's text alone when delivery is certain; an empty
-  follow-up gets a neutral continue notice, including with a packet carrier.
+  follow-up gets a neutral continue notice, including with a packet carrier
+  and when a rejected native first try falls back to a later in-run packet.
   A different-root notice includes the predecessor's saved `final/patch.diff`
   path when available. If no capsule/workspace recorded a root, the predecessor's
   inherited project scope root is the comparison baseline. The chain's work order

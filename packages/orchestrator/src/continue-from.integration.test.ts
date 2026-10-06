@@ -883,23 +883,40 @@ describe("continueFrom root and completed-work notices", () => {
     expect(f.spawns.at(-1)!.prompt).not.toContain("different working tree");
   });
 
-  it.each(["auto", "packet"] as const)(
+  it.each(["auto", "packet", "later-packet"] as const)(
     "uses a neutral notice for an empty follow-up to succeeded work (%s)",
     async (preference) => {
       let f!: Fixture;
       f = fixture(["a"], function* (ctx) {
         if (ctx.phase === "predecessor") seedSession(f.stores[ctx.profile]!, "sid-A");
+        if (ctx.phase === "successor" && preference === "later-packet" && ctx.nth === 1) {
+          yield ctx.emit({ type: "started", payload: { native_session_id: "sid-other" } });
+          yield ctx.emit({ type: "completed", aborted: true });
+          return;
+        }
         yield* finishing(
           ctx.emit,
           ctx.cwd,
-          ctx.phase === "successor" && preference === "packet" ? "sid-new" : "sid-A",
+          ctx.phase === "successor" && preference !== "auto" ? "sid-new" : "sid-A",
         );
       });
-      const { pred, succ } = await chain(f, { preference, successor: { prompt: "" } });
+      const { pred, succ } = await chain(f, {
+        preference: preference === "later-packet" ? "auto" : preference,
+        successor: { prompt: "" },
+      });
       expect(pred.result.lifecycle, pred.result.summary).toBe("succeeded");
       expect(pred.resumable).toBeUndefined();
       expect(succ.result.lifecycle, succ.result.summary).toBe("succeeded");
-      const prompt = f.spawns.find((s) => s.phase === "successor")!.prompt;
+      if (preference === "later-packet") {
+        expect(succ.receipts.map((receipt) => receipt["carrier"])).toEqual(["native", "packet"]);
+        const packet = readFileSync(
+          join(attemptDirOf(succ.result.runDir), "continuation", "evidence-index-try1.md"),
+          "utf8",
+        );
+        expect(packet).toContain("# Evidence index of the previous work");
+        expect(packet).not.toContain("previous process stopped");
+      }
+      const prompt = f.spawns.at(-1)!.prompt;
       expect(prompt).not.toContain("previous process stopped");
       expect(prompt).not.toContain("could not finish");
       expect(prompt).toContain("Continue from the previous work");

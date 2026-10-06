@@ -59,6 +59,7 @@ export interface InRunContinuityDeps {
   /** First try of a continueFrom successor: predecessor progress and receipt. */
   seed?: {
     acted: boolean;
+    completed?: boolean;
     continued: ContinuedTry;
     evidenceSources?: readonly PredecessorEvidenceSource[];
   } | null;

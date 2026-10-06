@@ -376,7 +376,7 @@ export async function openContinuity(
     continuity: new InRunContinuity({
       ...deps,
       workOrder,
-      seed: { acted: pred.acted, continued, evidenceSources },
+      seed: { acted: pred.acted, completed, continued, evidenceSources },
     }),
     spec: composed,
   };
