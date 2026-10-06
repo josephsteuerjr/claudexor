@@ -615,13 +615,18 @@ describe("continueFrom successor: kept isolated envelope", () => {
 });
 
 describe("continueFrom through an unadopted head", () => {
-  it.each([false, true])(
-    "preserves complete undelivered input with newest-first inline quotes (new correction: %s)",
-    async (newCorrection) => {
+  it.each([
+    { newCorrection: false, retry: false },
+    { newCorrection: true, retry: false },
+    { newCorrection: true, retry: true },
+  ])(
+    "preserves complete undelivered input with newest-first inline quotes (new correction: $newCorrection, unstarted retry: $retry)",
+    async ({ newCorrection, retry }) => {
       let f!: Fixture;
       const predScript = editThenLimit(() => f);
       f = fixture(["a"], function* (ctx) {
         if (ctx.phase === "predecessor") return yield* predScript(ctx);
+        if (retry && ctx.nth <= 2) return yield* crash(ctx.emit);
         yield* finishing(ctx.emit, ctx.cwd, "sid-A");
       });
       const correction = "Correction: keep the public migration API as is";
@@ -673,6 +678,12 @@ describe("continueFrom through an unadopted head", () => {
       });
       expect(resumed.result.lifecycle, resumed.result.summary).toBe("succeeded");
       expect(resumed.receipts[0]).toMatchObject({ carrier: "native", inputDelivery: "uncertain" });
+      if (retry) {
+        expect(resumed.receipts).toHaveLength(3);
+        expect(resumed.receipts.every((receipt) => receipt["inputDelivery"] === "uncertain")).toBe(
+          true,
+        );
+      }
       const prompt = f.spawns.at(-1)!.prompt;
       expect(prompt).toContain("may not have been delivered");
       expect(prompt).toContain("do not replay it blindly");
@@ -680,7 +691,8 @@ describe("continueFrom through an unadopted head", () => {
         expect(prompt).toContain(correction);
         expect(prompt.indexOf(correction)).toBeLessThan(prompt.indexOf(longInput.slice(0, 80)));
       }
-      const shown = 2048 - (newCorrection ? correction.length : 0);
+      const shown =
+        2048 - (newCorrection ? correction.length : 0) - (retry ? "Finish it".length : 0);
       const path = join(resumed.result.runDir, "context", "work-order.md");
       expect(prompt).toContain(
         `[cut: ${shown} of ${longInput.length} characters; the complete text is in ${path}]`,

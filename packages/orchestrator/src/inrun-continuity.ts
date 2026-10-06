@@ -26,6 +26,7 @@
  * `triedProfiles`; same-account continuations by `max_retries` (A2).
  */
 import { CONTINUITY_IDENTITY_MISMATCH_CODE, acceptedTryOutput } from "@claudexor/core";
+import { readContinuationSources } from "@claudexor/workspace";
 import {
   HarnessRunSpec as HarnessRunSpecSchema,
   type ContinuityIdentityCheck,
@@ -62,6 +63,7 @@ import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-con
 import { discloseContinuedTry } from "./inrun-continuity-thread.js";
 import type { ContinuityTerminalFacts } from "./continuity-terminal.js";
 import { RetainedAttemptOutput } from "./inrun-retained-output.js";
+import { unconfirmedContinuationInputs, type UncertainInput } from "./continuation-input.js";
 
 const TYPED_REFUSALS = new Set(["auth_failed", "capability_refused", "config_error"]);
 
@@ -90,7 +92,7 @@ export class InRunContinuity {
   private readonly retainedOutput = new RetainedAttemptOutput();
   /** Carrier of the try that just settled (null = the first try or a fresh replay). */
   private settledCarrier: RunContinuityReceipt["carrier"] | null = null;
-  private previousTryUnstarted: string | null = null;
+  private unstartedInputs: UncertainInput[] = [];
 
   constructor(private readonly deps: InRunContinuityDeps) {
     this.capsule = readSessionCapsule(deps.attemptDir);
@@ -210,8 +212,17 @@ export class InRunContinuity {
     await this.relocate(facts.runSpec);
     this.settledCarrier = this.continued?.carrier ?? null;
     this.emitReceipt(facts.runSpec);
-    this.previousTryUnstarted =
-      !this.tryStarted && this.tryIndex === 0 ? this.deps.workOrder : null;
+    if (this.tryStarted) this.unstartedInputs = [];
+    else if (this.tryIndex === 0) {
+      const { runDir, runId, workOrder } = this.deps;
+      const sources = readContinuationSources(runDir);
+      // A successor's workOrder is the whole joined chain. Keep the individual
+      // undelivered callers newest first, including this run's own correction.
+      // Further unstarted tries keep these references until a try starts.
+      this.unstartedInputs = sources.length
+        ? unconfirmedContinuationInputs([{ runDir, runId, state: "running" }, ...sources])
+        : [{ text: workOrder, runDir }];
+    }
     if (facts.budgetStopped) return this.breakWith("other");
     if (!facts.harnessErrored || facts.aborted) return { kind: "break" };
     if (facts.requestRefused) return this.breakWith("other");
@@ -499,9 +510,7 @@ export class InRunContinuity {
         tryIndex: this.tryIndex,
         uncertainInput: uncertainInputFor(
           this.deps.runDir,
-          this.previousTryUnstarted
-            ? [{ text: this.previousTryUnstarted, runDir: this.deps.runDir }]
-            : [],
+          this.unstartedInputs,
           this.deps.attemptId,
         ),
         retainedOutput: this.retainedOutput.text(),

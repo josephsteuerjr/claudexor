@@ -2175,7 +2175,8 @@ Endpoint semantics beyond the inventory:
   `context/work-order.md`. An earlier continuation's caller text without a
   confirmed first-try delivery is carried as an uncertain reference to reconcile,
   never blindly replay; the receipt reports `inputDelivery: "uncertain"`.
-  Each uncertain input stays separate. Inline quotes share a 2,048-character
+  Each uncertain input stays separate across run successors and unstarted
+  in-run retries. Inline quotes share a 2,048-character
   budget filled newest first; every cut gives the shown and complete character
   counts and an absolute path to the complete text. The engine reuses the saved
   work order when it contains that text, otherwise it saves a context file.
