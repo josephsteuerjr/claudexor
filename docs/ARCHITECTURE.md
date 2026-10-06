@@ -1228,7 +1228,8 @@ limit needed and never narrowed by error-text matching; agent progress is the
 typed marker set (thinking/tool/file/patch/compaction — deliberately not
 `message`/`error`, so vendor failure prose can never block it), transient-
 retryable deaths stay with the same-profile retry machinery, and an observed
-mutation (workspace diff or any `file_change` event) blocks every branch.
+mutation (workspace diff or any `file_change` event) fences only the `fresh`
+carrier; native, moved and packet carriers continue the work after progress.
 Adapters keep a failed result's prose out of answer material entirely: a
 non-success terminal result rides a `status` event, never a `message`, and an
 errored attempt with no typed final has no deliverable (`acceptedTryOutput`) —
@@ -4044,8 +4045,9 @@ run winner. Context exhaustion keeps this thread-packet path; the in-run
 continuation ladder below handles account and transport stops and discloses
 its terminal through the same `resumable` block (cause `context_exhausted`).
 
-In-run continuation (the ladder inside one attempt): both the candidate loop and
-the read-only chain hand every settled try to ONE per-attempt planner
+In-run continuation (Agent and Ask only; the ladder inside one attempt): the
+candidate loop and the Ask read-only chain hand every settled try to ONE
+per-attempt planner
 (`packages/orchestrator/src/inrun-continuity.ts`, pure decision in
 `carrier-planner.ts`). The planner observes the stream — the native session id
 on `started` becomes the attempt's durable SESSION CAPSULE
@@ -4053,20 +4055,27 @@ on `started` becomes the attempt's durable SESSION CAPSULE
 profile, the located history file and its sidecars, cwd, requested model;
 re-located through the adapter after the try settles), the typed limit that
 ended the try, this try's attested model, the identity of a resumed session
-(compared on `started`; codex compares the `thread/resume` reply before
-`turn/start`) and the adapter's typed rejection of carried state. "Acted" is a
+(compared on `started` for adapters with the `continuity` capability, whose
+resume keeps the id; codex compares the `thread/resume` reply before
+`turn/start`; on other harnesses a new id after a resume is recorded as the
+session) and the adapter's typed rejection of carried state. "Acted" is a
 sticky fact of the attempt (an accepted answer, agent progress, a file change
 or a diff in any try). An attempt that did not act keeps the rotation and
 transient rules above byte for byte. After progress: a typed vendor limit on an
 unpinned `rotate` route hops to the next eligible account and the next try
 carries the work — `native_moved` when the adapter's `continuity` located the
 session and moved it into the target store (claude: `<sid>.jsonl` + `<sid>/`
-sidecars; codex: every rollout part), else `packet` (a fresh session whose
+sidecars; codex: every rollout part). The capsule's holder is the source, even
+if another account's packet try failed before starting. A move copies and
+verifies all parts, then the engine writes the target capsule and invokes the
+adapter's retirement callback; a failed move removes its destination copies.
+When moving is unavailable, the carrier is `packet` (a fresh session whose
 prompt is the original prompt plus the bounded evidence index; owner answer
 1B) — never a fresh replay; a transport death (errored, not aborted, not a
 typed refusal, not context exhaustion) resumes the same session on the same
 account (`native`), or `packet` once a typed fact (locate miss, identity
-mismatch, adapter rejection) proved the native carrier unusable, bounded by
+mismatch, adapter rejection, no session ever reported) proved the native
+carrier unusable, bounded by
 `transient_retry.max_retries` per account; hops are bounded by the profiles
 already tried. A bare backoff frame (`retry_delay_ms`, no reset, no
 constraint) is transport when a session exists to resume. On a native carrier
@@ -4074,10 +4083,20 @@ the user prompt is one constant notice ("the previous process stopped …
 continue from where it stopped … a cut-off tool call may or may not have taken
 effect … finish with a self-contained final message") — the original prompt
 is never resent and `instructions` are untouched (Claude resends its recorded
-system prompt on resume); an input whose delivery is uncertain (a try that died
-before `started`, a steering message admitted but not echoed) rides the notice
+system prompt on resume). Native and packet continuations pin an initially
+unspecified model to its attested id only when the route lists that id; observed
+display labels are never sent as model ids. An input whose delivery is uncertain (a try that died
+before its first `started`, a steering message admitted but not echoed) rides the notice
 as a reference to reconcile, never a blind replay. Pinned accounts, `fail` /
-`ask` policies and a spent pool end typed. Every continued try settles with a
+`ask` policies and a spent pool end typed. Thread session/checkpoint publication
+follows an accepted handshake; mismatched and packet-born sessions never replace
+the lane binding. A packet continuation updates the thread disclosure to `packet`,
+including a preceding lane switch. The next turn hydrates that lane through the
+existing thread packet. Retained assistant evidence spans all accepted tries;
+identity-mismatched tries contribute no assistant output, and their stream stops
+at the mismatch. The evidence index pairs tool results by try and tool-use id,
+includes pending edit calls, filters steering by attempt, and preserves full
+evidence paths and tool counts when prose is truncated. Only begun continued tries settle with a
 `run.continuity` receipt (try index, carrier, cause, from/to profiles, memory
 full/partial/unknown, instructions as_sent/vendor_snapshot, re-ingested
 tokens, this try's observed model and mismatch, identity check, input
@@ -4086,7 +4105,16 @@ whose work is unfinished — non-success lifecycles and succeeded runs whose
 work state is `needs_input`/`incomplete` — carries `resumable` on its
 terminal event and in `final/resumable.yaml` (cause, `resetsAt`, window and
 evidence, the carriers still usable, the native session and the workspace),
-decided by the work outcome, never by the lifecycle word. Live plan checklists ride typed
+decided by the work outcome, never by the lifecycle word. Completed harness tries
+also retain continuation facts when gates, review or arbitration leave acted work
+unfinished (`cause: other`). Cancellation includes these facts for Ask as well as
+Agent. An in-place or read-only execution root is `workspace: in_place`; an
+isolated envelope is `none` in this release. Limit fields belong only to the
+terminal limit cause and its try; pool exhaustion uses the pool's earliest typed
+reset. A mid-stream hard budget cap ends the attempt without preparing another
+try. The separate Plan pipeline keeps today's behavior: it does not use this
+controller and does not emit these in-run `resumable` facts. Live plan checklists
+ride typed
 `HarnessEvent.plan_progress` (codex `todo_list` items; claude
 TaskCreate/TaskUpdate accumulation — TodoWrite kept for older CLIs), forwarded
 as last-wins `plan.progress` run events and projected on the run detail as

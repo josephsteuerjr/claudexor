@@ -99,21 +99,26 @@ export const codexContinuity: HarnessContinuityCapability = {
       for (const source of sources) {
         const rel = relative(fromHome, realpathSync(source));
         if (rel.startsWith("..") || !rel.startsWith("sessions"))
-          return { ok: false, reason: `rollout part outside the source sessions dir: ${source}` };
+          throw new Error(`rollout part outside the source sessions dir: ${source}`);
         const dest = join(toHome, rel);
         mkdirSync(dirname(dest), { recursive: true });
+        copied.push(dest);
         copyFileSync(source, dest);
         if (statSync(dest).size !== statSync(source).size)
-          return { ok: false, reason: "rollout copy size mismatch" };
-        copied.push(dest);
+          throw new Error("rollout copy size mismatch");
       }
     } catch (err) {
       for (const dest of copied) rmSync(dest, { force: true });
       return { ok: false, reason: err instanceof Error ? err.message : String(err) };
     }
-    // Every part verified: retire the sources so the thread has one holder.
-    for (const source of sources) rmSync(source, { force: true });
-    return { ok: true, resumeRef: { nativeSessionId: sid } };
+    // The engine publishes the destination holder before invoking retirement.
+    return {
+      ok: true,
+      resumeRef: { nativeSessionId: sid },
+      retire() {
+        for (const source of sources) rmSync(source, { force: true });
+      },
+    };
   },
 
   /** The vendor's own rejection of carried reasoning: the typed rollout code

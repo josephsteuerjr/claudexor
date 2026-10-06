@@ -25,32 +25,22 @@
  * resumed try never re-opens the `fresh` rung. Hops are bounded by
  * `triedProfiles`; same-account continuations by `max_retries` (A2).
  */
-import {
-  CONTINUITY_IDENTITY_MISMATCH_CODE,
-  acceptedTryOutput,
-  type AnswerAssembly,
-  type HarnessAdapter,
-} from "@claudexor/core";
+import { CONTINUITY_IDENTITY_MISMATCH_CODE, acceptedTryOutput } from "@claudexor/core";
 import {
   HarnessRunSpec as HarnessRunSpecSchema,
   type ContinuityIdentityCheck,
-  type CredentialProfile,
   type HarnessEvent,
   type HarnessRunSpec,
-  type QuotaSnapshot,
   type ResumableCause,
   type RunContinuityReceipt,
-  type RunEventType,
   type RunResumable,
   type SessionCapsule,
   type WorkState,
 } from "@claudexor/schema";
 import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
-import type { AttemptTelemetry, TransientFailureObservation } from "./attemptTelemetry.js";
 import {
   composeContinuedTry,
   continuityReceipt,
-  discloseMovedSession,
   relocateCapsule,
   resumableBlock,
   uncertainInputFor,
@@ -62,106 +52,16 @@ import {
   limitSubjectRoute,
   rotateSpecOnTypedLimit,
   type EmitFn,
-  type ProfilePolicy,
 } from "./credential-profile-rotation.js";
 import { emitTransientRetryPlan } from "./laneStreamEvents.js";
 import { rotatedSpecInLaneHome } from "./orchestrator-credentials.js";
-import type { PreProgressRefusalSubject } from "./pre-progress-refusal.js";
-import { transientRetryDelayMs, type TransientRetryPolicy } from "./runSupport.js";
+import { transientRetryDelayMs } from "./runSupport.js";
 import { readSessionCapsule, writeSessionCapsule } from "./session-capsule.js";
 
-type ContinuityEmit = (type: RunEventType, payload: Record<string, unknown>) => void;
-
-export interface InRunContinuityDeps {
-  adapter: HarnessAdapter;
-  runId: string;
-  attemptId: string;
-  /** The run dir (`paths.root`) — the evidence index reads `events.jsonl` there. */
-  runDir: string;
-  attemptDir: string;
-  /** Execution root the child runs in. */
-  cwd: string;
-  inPlace: boolean;
-  /** The isolated envelope's scoped HOME, or null in place: a located session
-   * file under it does not survive dispose and is never published to a thread. */
-  isolatedHomeDir: string | null;
-  /** The caller's original prompt (the work order), for the evidence index. */
-  workOrder: string;
-  /** The first try's full prompt (engine constraints included) — the packet carrier resends it. */
-  firstPrompt: string;
-  registry: readonly CredentialProfile[];
-  policy: ProfilePolicy;
-  snapshots: readonly QuotaSnapshot[];
-  retryPolicy: TransientRetryPolicy;
-  pinned: boolean;
-  defaultRouteWasVendorNative: boolean;
-  requestedProfileId: string | null;
-  /** False when the lane has no RunInput: rotation never fired there, and still does not. */
-  rotationEnabled: boolean;
-  laneEnvFor: (profileId: string | null) => Record<string, string> | null;
-  probeReadyProfiles: (spec: HarnessRunSpec, tried: Set<string>) => Promise<ReadonlySet<string>>;
-  rotationObservations: (
-    spec: HarnessRunSpec,
-    transients: readonly TransientFailureObservation[],
-    refusal: PreProgressRefusalSubject | null,
-  ) => Pick<
-    Parameters<typeof rotateSpecOnTypedLimit>[0],
-    "probeCurrentSubject" | "liveUnusable" | "notePreProgressRefusal"
-  >;
-  emit: ContinuityEmit;
-  newSessionId: () => string;
-  /** A `continueFrom` successor's first try (continue-from.ts): predecessor `acted` + receipt. */
-  seed?: { acted: boolean; continued: ContinuedTry } | null;
-  /** Thread facts for the moved-session disclosure (INV-137); null outside a thread. */
-  thread: {
-    threadId: string;
-    turnId: string | null;
-    onSessionObserved?: (
-      harnessId: string,
-      nativeSessionId: string,
-      observedModel?: string | null,
-      profileId?: string | null,
-    ) => void;
-    onContinuityResolved?: (
-      turnId: string,
-      disclosure: {
-        kind: "native_resume" | "packet" | "fresh";
-        packetTurns: number;
-        summarized: boolean;
-        laneSwitchedFrom: { harness: string; profileId: string | null } | null;
-      },
-    ) => void;
-  } | null;
-}
-
-/** What the loop knows when a try has settled. */
-export interface TryFacts {
-  runSpec: HarnessRunSpec;
-  nativeTry: number;
-  harnessErrored: boolean;
-  aborted: boolean;
-  requestRefused: boolean;
-  newTransients: readonly TransientFailureObservation[];
-  sawTypedLimit: boolean;
-  sawRetryable: boolean;
-  answer: AnswerAssembly;
-  /** Today's transient-gate fact (raw: workspace unchanged and no answer text). */
-  rawDeliverableEmpty: boolean;
-  /** Candidate lane: the workspace diff is non-empty (the read-only lane omits it). */
-  workspaceDiffNonEmpty?: boolean;
-  /** The current workspace diff when the lane has one (evidence index file list). */
-  currentDiff?: string;
-  markers: AttemptOutputMarkers;
-  lastLimit: { retryDelayMs: number | null; resetsAt: string | null } | null;
-  refusal: PreProgressRefusalSubject | null;
-  telemetry: AttemptTelemetry;
-}
-
-export type AfterTryVerdict =
-  | { kind: "continue"; spec: HarnessRunSpec; delayMs: number }
-  /** A typed terminal (pinned limit, pool spent): the loop records the error and stops. */
-  | { kind: "terminal"; error: Error }
-  | { kind: "break" };
+import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-continuity-types.js";
+import { discloseContinuedTry } from "./inrun-continuity-thread.js";
+import type { ContinuityTerminalFacts } from "./continuity-terminal.js";
+import { RetainedAttemptOutput } from "./inrun-retained-output.js";
 
 const TYPED_REFUSALS = new Set(["auth_failed", "capability_refused", "config_error"]);
 
@@ -178,13 +78,16 @@ export class InRunContinuity {
   private tryIndex = 0;
   private tryAbort: AbortController | null = null;
   private tryStarted = false;
-  private tryPrompt = "";
   private expectedSessionId: string | null = null;
   private tryModel: string | null = null;
   private tryRequestedModel: string | null = null;
   private tryIdentity: ContinuityIdentityCheck = "not_applicable";
   private tryFirstInputTokens: number | null = null;
   private continued: ContinuedTry | null = null;
+  private pending: ContinuedTry | null = null;
+  private packetSession = false;
+  private threadSwitch: { harness: string; profileId: string | null } | null = null;
+  private readonly retainedOutput = new RetainedAttemptOutput();
   /** Carrier of the try that just settled (null = the first try or a fresh replay). */
   private settledCarrier: RunContinuityReceipt["carrier"] | null = null;
   private previousTryUnstarted: string | null = null;
@@ -192,15 +95,26 @@ export class InRunContinuity {
   constructor(private readonly deps: InRunContinuityDeps) {
     this.capsule = readSessionCapsule(deps.attemptDir);
     this.acted = deps.seed?.acted === true;
-    this.continued = deps.seed?.continued ?? null;
+    this.pending = deps.seed?.continued ?? null;
   }
 
   /** The loop calls this before each try spawns; `abort` is THIS try's controller. */
   beginTry(runSpec: HarnessRunSpec, nativeTry: number, abort: AbortController): void {
+    this.limit = null;
+    this.terminalCode = null;
     this.tryIndex = nativeTry;
     this.tryAbort = abort;
     this.tryStarted = false;
-    this.tryPrompt = runSpec.prompt;
+    this.continued = this.pending;
+    this.pending = null;
+    if (this.continued) {
+      if (this.continued.fromProfileId !== this.continued.toProfileId)
+        this.threadSwitch ??= {
+          harness: this.deps.adapter.id,
+          profileId: this.continued.fromProfileId,
+        };
+      discloseContinuedTry(this.deps, this.continued, this.threadSwitch);
+    }
     this.expectedSessionId = runSpec.resume_session_id ?? null;
     this.tryModel = null;
     this.tryRequestedModel = runSpec.model_hint ?? null;
@@ -236,7 +150,8 @@ export class InRunContinuity {
       // before any action (codex thread/resume precedes turn/start).
       this.tryIdentity = "mismatch_before_effects";
       this.nativeRejected = true;
-      return null;
+      this.tryAbort?.abort();
+      return ev.error ?? "recovered native session differs from the requested session";
     }
     if (this.expectedSessionId && this.deps.adapter.continuity?.rejectsCarriedState?.(ev)) {
       this.nativeRejected = true;
@@ -245,7 +160,10 @@ export class InRunContinuity {
     this.tryStarted = true;
     const nid = ev.payload?.["native_session_id"];
     if (typeof nid !== "string" || nid.length === 0) return null;
-    if (this.expectedSessionId && nid !== this.expectedSessionId) {
+    // Only an adapter with the `continuity` capability promises that a resume
+    // keeps the session id; on any other harness a new id after a resume is the
+    // vendor's own answer and is recorded as the session, as before.
+    if (this.expectedSessionId && nid !== this.expectedSessionId && this.deps.adapter.continuity) {
       this.tryIdentity = markers.sawAgentProgress
         ? "mismatch_after_possible_effects"
         : "mismatch_before_effects";
@@ -255,6 +173,10 @@ export class InRunContinuity {
       return `resumed native session ${nid} is not the requested ${this.expectedSessionId}; the try was stopped${markers.sawAgentProgress ? " (effects may have occurred)" : " before any effect"}`;
     }
     if (this.expectedSessionId) this.tryIdentity = "matched_before_effects";
+    // Packet-born history lacks earlier thread turns, even on later native resumes.
+    this.packetSession =
+      this.continued?.carrier === "packet" ||
+      (this.packetSession && this.capsule?.nativeSessionId === nid);
     // A new native session (or the resumed one) is the attempt's capsule now.
     this.nativeRejected = false;
     this.capsule = {
@@ -271,8 +193,14 @@ export class InRunContinuity {
     return null;
   }
 
+  /** Both loops consult this only after the controller accepts the handshake. */
+  get mayPublishSession(): boolean {
+    return this.tryStarted && !this.tryIdentity.startsWith("mismatch") && !this.packetSession;
+  }
+
   /** Decide what the attempt does after a settled try. */
   async afterTry(facts: TryFacts): Promise<AfterTryVerdict> {
+    this.retainedOutput.add(facts.answer, facts.harnessErrored, this.tryIdentity);
     const accepted = acceptedTryOutput(facts.answer, facts.harnessErrored);
     this.acted ||=
       accepted.length > 0 ||
@@ -282,7 +210,9 @@ export class InRunContinuity {
     await this.relocate(facts.runSpec);
     this.settledCarrier = this.continued?.carrier ?? null;
     this.emitReceipt(facts.runSpec);
-    this.previousTryUnstarted = this.tryStarted ? null : this.tryPrompt;
+    this.previousTryUnstarted =
+      !this.tryStarted && this.tryIndex === 0 ? this.deps.workOrder : null;
+    if (facts.budgetStopped) return this.breakWith("other");
     if (!facts.harnessErrored || facts.aborted) return { kind: "break" };
     if (facts.requestRefused) return this.breakWith("other");
     if (facts.telemetry.contextExhausted) return this.breakWith("context_exhausted");
@@ -307,6 +237,7 @@ export class InRunContinuity {
   async finish(input: {
     runSpec: HarnessRunSpec;
     errored: boolean;
+    nonSuccess?: boolean;
     aborted: boolean;
     cancelReason: string | null;
     workState: WorkState | null | undefined;
@@ -317,7 +248,13 @@ export class InRunContinuity {
     await this.relocate(input.runSpec);
     const vetoed =
       input.workState?.state === "needs_input" || input.workState?.state === "incomplete";
-    if (!input.errored && !input.aborted && !vetoed) return null;
+    if (
+      !input.errored &&
+      !input.aborted &&
+      !vetoed &&
+      (!input.nonSuccess || (!this.acted && !this.capsule))
+    )
+      return null;
     const cause: ResumableCause = vetoed
       ? input.workState?.state === "needs_input"
         ? "input_required"
@@ -326,8 +263,16 @@ export class InRunContinuity {
         ? input.cancelReason === "wall_clock_exceeded"
           ? "wall_clock"
           : "cancelled"
-        : (this.lastCause ?? "other");
+        : input.errored
+          ? (this.lastCause ?? "other")
+          : "other";
     return this.resumable(cause);
+  }
+
+  /** Keep a snapshot for gates/review/arbitration that can fail after this try completed. */
+  terminalFacts(resumable: RunResumable | null): ContinuityTerminalFacts {
+    if (resumable) return { resumable };
+    return this.acted || this.capsule ? { resumableOnFailure: this.resumable("other") } : {};
   }
 
   resumable(cause: ResumableCause): RunResumable {
@@ -339,7 +284,20 @@ export class InRunContinuity {
       acted: this.acted,
       limit: this.limit,
       terminalCode: this.terminalCode,
+      workspace: this.deps.workspace,
     });
+  }
+
+  private poolTerminal(error: Error): AfterTryVerdict {
+    this.lastCause = "pool_exhausted";
+    this.terminalCode = codeOf(error);
+    const resetsAt = (error as { resetsAt?: unknown }).resetsAt;
+    this.limit = {
+      resetsAt: typeof resetsAt === "string" ? resetsAt : null,
+      constraintId: this.limit?.constraintId ?? null,
+      retryDelayMs: this.limit?.retryDelayMs ?? null,
+    };
+    return { kind: "terminal", error };
   }
 
   private breakWith(cause: ResumableCause): AfterTryVerdict {
@@ -352,9 +310,7 @@ export class InRunContinuity {
   private async legacy(facts: TryFacts): Promise<AfterTryVerdict> {
     const rotated = await this.rotate(facts, false);
     if (rotated && "poolExhausted" in rotated) {
-      this.lastCause = "pool_exhausted";
-      this.terminalCode = codeOf(rotated.poolExhausted);
-      return { kind: "terminal", error: rotated.poolExhausted };
+      return this.poolTerminal(rotated.poolExhausted);
     }
     if (rotated) {
       this.hopped(rotated);
@@ -378,7 +334,7 @@ export class InRunContinuity {
     const spec = HarnessRunSpecSchema.parse({
       ...facts.runSpec,
       session_id: this.deps.newSessionId(),
-      resume_session_id: null,
+      resume_session_id: facts.runSpec.resume_session_id ?? null,
       extra: { ...facts.runSpec.extra },
     });
     return { kind: "continue", spec, delayMs };
@@ -411,9 +367,7 @@ export class InRunContinuity {
       return this.breakWith("vendor_limit");
     const rotated = await this.rotate(facts, true);
     if (rotated && "poolExhausted" in rotated) {
-      this.lastCause = "pool_exhausted";
-      this.terminalCode = codeOf(rotated.poolExhausted);
-      return { kind: "terminal", error: rotated.poolExhausted };
+      return this.poolTerminal(rotated.poolExhausted);
     }
     if (!rotated) return this.breakWith("vendor_limit");
     this.hopped(rotated);
@@ -428,26 +382,24 @@ export class InRunContinuity {
 
   /** The process died after progress: the same account resumes its session
    * (bounded), or re-briefs once a typed fact rejected that session. With no
-   * session recorded at all there is nothing to resume: the run ends
-   * continuable (`resumable`, carrier packet) for the caller. */
+   * session recorded at all (the harness never reported one) the same account
+   * continues on a new session re-briefed by the evidence index (owner 1B),
+   * under the same bound. */
   private async afterTransport(facts: TryFacts): Promise<AfterTryVerdict> {
     this.lastCause = "transport";
-    if (this.capsule === null) {
-      // A packet try that died before doing anything replayed no effect: the
-      // structural branch hops it to the next account with the same packet
-      // (today's pre-progress failover, now on the packet carrier). Anything
-      // else with no session to resume ends continuable for the caller.
-      const packetDiedUnused =
-        this.settledCarrier === "packet" &&
-        !facts.sawRetryable &&
-        !facts.markers.sawAgentProgress &&
-        facts.markers.fileChanges === 0;
-      if (!packetDiedUnused) return { kind: "break" };
+    // A packet try that died before doing anything replayed no effect: the
+    // structural branch hops it to the next account with the same packet
+    // (today's pre-progress failover, now on the packet carrier).
+    const packetDiedUnused =
+      this.capsule === null &&
+      this.settledCarrier === "packet" &&
+      !facts.sawRetryable &&
+      !facts.markers.sawAgentProgress &&
+      facts.markers.fileChanges === 0;
+    if (packetDiedUnused) {
       const rotated = await this.rotate(facts, true);
       if (rotated && "poolExhausted" in rotated) {
-        this.lastCause = "pool_exhausted";
-        this.terminalCode = codeOf(rotated.poolExhausted);
-        return { kind: "terminal", error: rotated.poolExhausted };
+        return this.poolTerminal(rotated.poolExhausted);
       }
       if (!rotated) return { kind: "break" };
       this.hopped(rotated);
@@ -545,23 +497,20 @@ export class InRunContinuity {
         acted: this.acted,
         nativeRejected: this.nativeRejected,
         tryIndex: this.tryIndex,
-        uncertainInput: uncertainInputFor(this.deps.runDir, this.previousTryUnstarted),
+        uncertainInput: uncertainInputFor(
+          this.deps.runDir,
+          this.previousTryUnstarted,
+          this.deps.attemptId,
+        ),
+        retainedOutput: this.retainedOutput.text(),
       },
       facts,
       base,
       cause,
       delayMs,
     );
-    this.continued = composed.continued;
+    this.pending = composed.continued;
     if (composed.capsule) this.capsule = composed.capsule;
-    if (composed.moved && composed.capsule)
-      discloseMovedSession(
-        this.deps,
-        composed.capsule,
-        composed.moved.from,
-        composed.moved.to,
-        this.tryModel,
-      );
     return composed.verdict;
   }
 

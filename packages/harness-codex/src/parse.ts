@@ -285,6 +285,7 @@ export function parseCodexEvent(
           },
         ];
       case "file_change":
+        if (updated) return [];
         return [
           {
             type: "file_change",

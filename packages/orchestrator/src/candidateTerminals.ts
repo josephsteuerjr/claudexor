@@ -13,7 +13,7 @@ import {
 import { publishDirectoryCandidate } from "./directoryCandidate.js";
 import * as secretDiff from "./secretDiff.js";
 import { classifyBudgetFailure, budgetFailureRecord, type BudgetDenial } from "./budgetFailure.js";
-import { writeFailure } from "./runTerminalResults.js";
+import { failTerminally, writeFailure } from "./runTerminalResults.js";
 import { decisionBudgetSummary } from "./decisionBudget.js";
 import {
   attemptVendorFailure,
@@ -107,8 +107,20 @@ export async function cancelledCandidatesResult(
     signal,
     store,
     undefined,
-    resumableOf(runs),
+    resumableOf(runs, "cancelled"),
   );
+}
+
+/** A review/arbitration failure still owns the completed candidates' continuity. */
+export function failAfterCandidates(
+  input: CandidateTerminalContext & { runs: CandidateRun[] },
+  phase: "review" | "arbitration",
+  error: unknown,
+): OrchestratorResult {
+  const { log, store, paths, runId, taskId, mode, ledger, runs } = input;
+  return failTerminally(log, store, paths, runId, taskId, mode, phase, error, ledger.spend(), {
+    continuity: runs,
+  });
 }
 
 /** No candidate reached execution: preserve the original typed budget/executor terminal. */
@@ -269,7 +281,7 @@ export async function failedCandidatesResult(
     phase,
     error: rootCause,
     failure_ref: "final/failure.yaml",
-    ...resumableTerminal(store, paths, runs),
+    ...resumableTerminal(store, paths, runs, true),
   });
   return {
     runId,

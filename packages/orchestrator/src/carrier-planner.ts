@@ -19,7 +19,7 @@
  * the adapter's `continuity`. `fresh` never follows `acted`: a partially
  * acted attempt never replays its original prompt (INV-046 as amended).
  */
-import type { EnvMap, HarnessAdapter } from "@claudexor/core";
+import type { ContinuityMoveResult, EnvMap, HarnessAdapter } from "@claudexor/core";
 import type { ContinuityCarrier, ResumableCause, SessionCapsule } from "@claudexor/schema";
 import {
   buildEvidenceIndex,
@@ -87,6 +87,8 @@ export type CarrierPrepared =
       resumeRef: { nativeSessionId: string; path?: string };
       /** The capsule after location/move: the current holder. */
       capsule: SessionCapsule;
+      /** Invoke only AFTER persisting the capsule naming the new holder. */
+      retire?: () => void | Promise<void>;
     }
   | { carrier: "packet"; packet: EvidenceIndex }
   | { carrier: "fresh" };
@@ -142,8 +144,8 @@ export async function prepareCarrier(
       const moved = await moveSafe(continuity, source, facts, io.targetCwd);
       if (!moved) continue;
       // The holder is the file the TARGET resume looks at: re-locate there so
-      // the capsule names the new holder (copy → verify → publish; the adapter
-      // retires the source only after the copy verified).
+      // the capsule names the new holder. The caller must publish it before
+      // invoking the returned retirement step (copy → verify → publish → retire).
       const target = await locateSafe(
         continuity,
         { ...source, holderProfileId: facts.targetProfile.profileId, cwd: io.targetCwd },
@@ -155,24 +157,27 @@ export async function prepareCarrier(
           : target;
       return {
         carrier: "native_moved",
+        retire: moved.retire,
         resumeRef: {
-          nativeSessionId: moved.nativeSessionId,
+          nativeSessionId: moved.resumeRef.nativeSessionId,
           ...(capsule.file ? { path: capsule.file } : {}),
         },
         capsule,
       };
     }
-    if (rung === "packet") {
-      const input = collectEvidenceIndexInput(io.evidence, {
-        cause: facts.cause,
-        retainedOutput: io.retainedOutput ?? "",
-        diffStat: io.diffStat ?? null,
-      });
-      return { carrier: "packet", packet: buildEvidenceIndex(input) };
-    }
+    if (rung === "packet") return preparePacket(io);
     if (rung === "fresh") return { carrier: "fresh" };
   }
-  return { carrier: facts.acted ? "packet" : "fresh" } as CarrierPrepared;
+  return facts.acted ? preparePacket(io) : { carrier: "fresh" };
+}
+
+function preparePacket(io: CarrierIo): CarrierPrepared {
+  const input = collectEvidenceIndexInput(io.evidence, {
+    cause: io.facts.cause,
+    retainedOutput: io.retainedOutput ?? "",
+    diffStat: io.diffStat ?? null,
+  });
+  return { carrier: "packet", packet: buildEvidenceIndex(input) };
 }
 
 /** Locate through the adapter: the refreshed capsule, "miss", or "unverified"
@@ -200,7 +205,7 @@ async function moveSafe(
   source: SessionCapsule,
   facts: CarrierFacts,
   targetCwd: string,
-): Promise<{ nativeSessionId: string } | null> {
+): Promise<Extract<ContinuityMoveResult, { ok: true }> | null> {
   if (!source.file) return null;
   try {
     const moved = await continuity.move(
@@ -209,7 +214,7 @@ async function moveSafe(
       facts.targetProfile.env,
       targetCwd,
     );
-    return moved.ok ? moved.resumeRef : null;
+    return moved.ok ? moved : null;
   } catch {
     return null;
   }

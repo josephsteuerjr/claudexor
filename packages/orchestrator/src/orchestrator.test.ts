@@ -5652,13 +5652,17 @@ describe("Orchestrator", () => {
         onEvent: (event) => events.push(event.type),
       });
       expect(legacyOutcome(res)).toBe("failed");
-      expect(profilesSeen).toEqual(["a"]);
+      // Never another credential: after progress the same account continues
+      // the work (a packet re-brief, owner 1B — no session id was reported),
+      // bounded by transient_retry.max_retries; the structural branch stays shut.
+      expect(profilesSeen).toEqual(["a", "a", "a"]);
       expect(events).not.toContain("route.profile.rotated");
+      expect(events.filter((type) => type === "run.continuity")).toHaveLength(2);
     } finally {
       if (previousConfigDir === undefined) delete process.env.CLAUDEXOR_CONFIG_DIR;
       else process.env.CLAUDEXOR_CONFIG_DIR = previousConfigDir;
     }
-  });
+  }, 20_000);
 
   it("REGRESSION (final-review fix): the claude org-disabled incident — message-first prose — rotates STRUCTURALLY to a sibling subscription profile; answer.md never carries the prose", async () => {
     const repo = await initRepo();

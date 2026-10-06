@@ -74,23 +74,32 @@ export const claudeContinuity: HarnessContinuityCapability = {
     const targetDir = join(claudeStoreDir(toEnv), "projects", claudeProjectDirName(targetCwd));
     const dest = join(targetDir, `${sid}.jsonl`);
     if (dest === located.file) return { ok: true, resumeRef: { nativeSessionId: sid } };
+    const copied: string[] = [];
     try {
       mkdirSync(targetDir, { recursive: true });
+      copied.push(dest);
       copyFileSync(located.file, dest);
       if (statSync(dest).size !== statSync(located.file).size)
-        return { ok: false, reason: "transcript copy size mismatch" };
+        throw new Error("transcript copy size mismatch");
       for (const sidecar of located.sidecars) {
         const destDir = join(targetDir, basename(sidecar));
+        copied.push(destDir);
         cpSync(sidecar, destDir, { recursive: true });
-        if (!existsSync(destDir)) return { ok: false, reason: "sidecar copy missing" };
+        if (!existsSync(destDir)) throw new Error("sidecar copy missing");
       }
     } catch (err) {
+      for (const dest of copied) rmSync(dest, { recursive: true, force: true });
       return { ok: false, reason: err instanceof Error ? err.message : String(err) };
     }
-    // Copy verified: retire the source so the session has one holder.
-    rmSync(located.file, { force: true });
-    for (const sidecar of located.sidecars) rmSync(sidecar, { recursive: true, force: true });
-    return { ok: true, resumeRef: { nativeSessionId: sid } };
+    // The engine publishes the destination holder before invoking retirement.
+    return {
+      ok: true,
+      resumeRef: { nativeSessionId: sid },
+      retire() {
+        rmSync(located.file, { force: true });
+        for (const sidecar of located.sidecars) rmSync(sidecar, { recursive: true, force: true });
+      },
+    };
   },
 
   /** On a RESUMED try (the engine asks only then) an API 400 is the vendor

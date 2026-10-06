@@ -1,11 +1,5 @@
 import { makeOutcomeFacts } from "@claudexor/schema";
-import type {
-  GateResult,
-  ReviewFinding,
-  RunOutcomeFacts,
-  RunResumable,
-  TaskContract,
-} from "@claudexor/schema";
+import type { GateResult, ReviewFinding, RunOutcomeFacts, TaskContract } from "@claudexor/schema";
 import type { CandidateEvidence } from "@claudexor/arbitration";
 import type { AttemptOutcomeClass } from "./attemptFinalize.js";
 import type { AttemptTelemetry } from "./attemptTelemetry.js";
@@ -17,7 +11,9 @@ import { toolWarnings } from "./attemptTelemetry.js";
 import { directoryHasOutput, type DirectoryCandidate } from "./directoryCandidate.js";
 import { gatesPassed } from "@claudexor/review";
 
-export interface CandidateRun {
+import type { ContinuityTerminalFacts } from "./continuity-terminal.js";
+
+export interface CandidateRun extends ContinuityTerminalFacts {
   attemptId: string;
   harnessId: string;
   label: string;
@@ -60,9 +56,6 @@ export interface CandidateRun {
    * Present on success and per-slot failure so a delegated caller reads the
    * applied fact instead of inferring it from the request. */
   applied?: AppliedAttemptFacts;
-  /** The terminal continuation facts when this attempt's work is unfinished
-   * and can be continued (cause, limit evidence, carriers, native session). */
-  resumable?: RunResumable;
 }
 
 /**

@@ -78,18 +78,19 @@ function bytes(text: string): number {
 /** Truncate to at most `maxBytes` UTF-8 bytes on a safe char boundary. */
 function bound(text: string, maxBytes: number): { text: string; cut: boolean } {
   if (bytes(text) <= maxBytes) return { text, cut: false };
-  const buf = Buffer.from(text, "utf8").subarray(0, maxBytes);
+  const marker = "\n…[truncated]";
+  const buf = Buffer.from(text, "utf8").subarray(0, Math.max(0, maxBytes - bytes(marker)));
   for (let trim = 0; trim <= 3 && trim <= buf.length; trim += 1) {
     try {
       const decoded = new TextDecoder("utf-8", { fatal: true }).decode(
         trim === 0 ? buf : buf.subarray(0, buf.length - trim),
       );
-      return { text: `${decoded}\n…[truncated]`, cut: true };
+      return { text: `${decoded}${marker}`, cut: true };
     } catch {
       /* prefix ended inside a scalar; back off */
     }
   }
-  return { text: `${buf.toString("utf8")}\n…[truncated]`, cut: true };
+  return { text: `${buf.toString("utf8")}${marker}`, cut: true };
 }
 
 const CAUSE_LINE: Record<ResumableCause, string> = {
@@ -151,23 +152,28 @@ export function buildEvidenceIndex(input: EvidenceIndexInput): EvidenceIndex {
   }
   parts.push("", "## Changed files", "");
   parts.push(input.diffStat && input.diffStat.trim() ? section(input.diffStat) : "(no diff stat)");
-  parts.push("", "## Full evidence", "");
   const refs = [
     input.artifacts.eventsLog && `- Event log: ${input.artifacts.eventsLog}`,
     input.artifacts.attemptDir && `- Attempt artifacts: ${input.artifacts.attemptDir}`,
     input.artifacts.patch && `- Patch so far: ${input.artifacts.patch}`,
   ].filter((line): line is string => typeof line === "string");
-  parts.push(...(refs.length ? refs : ["(no artifact paths available)"]));
-  let markdown =
-    parts
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trimEnd() + "\n";
-  const total = bound(markdown, EVIDENCE_TOTAL_BUDGET_BYTES);
-  if (total.cut) {
-    summarized = true;
-    markdown = total.text + "\n";
-  }
+  const footer = [
+    "",
+    "",
+    "## Full evidence",
+    "",
+    ...(refs.length ? refs : ["(no artifact paths available)"]),
+    "",
+    `Tool calls: ${input.toolCalls.length}; unresolved: ${unresolved.length}.`,
+    "",
+  ].join("\n");
+  const prose = parts
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+  const total = bound(prose, EVIDENCE_TOTAL_BUDGET_BYTES - bytes(footer));
+  summarized ||= total.cut;
+  const markdown = total.text + footer;
   return {
     markdown,
     summarized,

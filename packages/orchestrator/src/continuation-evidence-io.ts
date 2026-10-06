@@ -3,9 +3,8 @@
  *
  * Reads the predecessor's durable record (the run's `events.jsonl` and, for
  * read-only attempts, the attempt's own `events.jsonl`) into the pure
- * builder's input: the tool-call index (a `tool_result` resolves the oldest
- * unresolved `tool_call` of the same attempt — adapters carry no call id in
- * the typed ref, so sequence is the honest pairing), the admitted steering
+ * builder's input: tool calls paired by try/session and typed use id (legacy
+ * results without an id close the oldest open call), and admitted steering
  * messages with their delivery status (`message.delivered` = confirmed; an
  * `accepted` row with no closing = uncertain; refused = not sent), and the
  * absolute artifact paths. Never throws: unreadable evidence yields an empty
@@ -58,12 +57,20 @@ function attemptHarnessEvents(runDir: string, attemptId: string): Row[] {
   });
 }
 
-/** Sequence-paired tool index of one attempt. */
+/** Pair typed use ids within a native try; ambiguous ids remain unresolved. */
 export function toolCallIndex(events: readonly Row[]): EvidenceToolCall[] {
-  const calls: EvidenceToolCall[] = [];
+  const calls: { call: EvidenceToolCall; session: unknown; id: string | null }[] = [];
   for (const ev of events) {
     const tool = asRow(ev["tool"]);
-    if (ev["type"] === "tool_call") {
+    const id = typeof tool?.["use_id"] === "string" ? tool["use_id"] : null;
+    // A file edit the vendor reports twice (codex: started, then completed) is
+    // one call; its second frame is the completion.
+    const sameEdit =
+      ev["type"] === "file_change" && id !== null
+        ? calls.find((entry) => entry.id === id && entry.session === ev["session_id"])
+        : undefined;
+    if (sameEdit) sameEdit.call.resolved = true;
+    else if (ev["type"] === "tool_call" || (ev["type"] === "file_change" && tool)) {
       const name =
         typeof tool?.["name"] === "string" && tool["name"].trim()
           ? tool["name"]
@@ -71,20 +78,26 @@ export function toolCallIndex(events: readonly Row[]): EvidenceToolCall[] {
             ? ev["text"].split("\n")[0]!.slice(0, 80)
             : "tool";
       const target = typeof tool?.["target"] === "string" ? tool["target"] : null;
-      calls.push({ name, target, resolved: false });
+      calls.push({ call: { name, target, resolved: false }, session: ev["session_id"], id });
     } else if (ev["type"] === "tool_result") {
-      const open = calls.find((call) => !call.resolved);
-      if (open) open.resolved = true;
+      const open = calls.filter(
+        (entry) => !entry.call.resolved && entry.session === ev["session_id"],
+      );
+      const matched = id === null ? open.slice(0, 1) : open.filter((entry) => entry.id === id);
+      if (matched.length === 1) matched[0]!.call.resolved = true;
     }
   }
-  return calls;
+  return calls.map((entry) => entry.call);
 }
 
 /** Admitted steering messages of a run, with delivery status, in admission order. */
-export function steeringFromRunLog(runDir: string): EvidenceSteering[] {
+export function steeringFromRunLog(runDir: string, attemptId?: string): EvidenceSteering[] {
   const byId = new Map<string, EvidenceSteering & { refused: boolean }>();
   for (const row of readRows(join(runDir, "events.jsonl"))) {
     const payload = asRow(row["payload"]);
+    const rowAttempt = payload?.["attempt_id"] ?? row["attempt_id"];
+    if (attemptId !== undefined && typeof rowAttempt === "string" && rowAttempt !== attemptId)
+      continue;
     const id = typeof payload?.["message_id"] === "string" ? payload["message_id"] : null;
     const text = typeof payload?.["text"] === "string" ? payload["text"] : null;
     if (!id || text === null) continue;
@@ -109,7 +122,10 @@ export function collectEvidenceIndexInput(
   return {
     cause: extras.cause,
     workOrder: sources.workOrder,
-    steering: sources.steering.length > 0 ? sources.steering : steeringFromRunLog(sources.runDir),
+    steering:
+      sources.steering.length > 0
+        ? sources.steering
+        : steeringFromRunLog(sources.runDir, sources.attemptId),
     retainedOutput: extras.retainedOutput,
     toolCalls: toolCallIndex(attemptHarnessEvents(sources.runDir, sources.attemptId)),
     diffStat: extras.diffStat,

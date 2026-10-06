@@ -41,7 +41,8 @@ import type { RunContinuation } from "./continuation-custody.js";
 import { buildEvidenceIndex } from "./continuation-evidence.js";
 import { collectEvidenceIndexInput, diffStatFromPatch } from "./continuation-evidence-io.js";
 import { continuationNotice, packetContinuationPrompt } from "./continuity-notice.js";
-import { InRunContinuity, type InRunContinuityDeps } from "./inrun-continuity.js";
+import { InRunContinuity } from "./inrun-continuity.js";
+import type { InRunContinuityDeps } from "./inrun-continuity-types.js";
 import { uncertainInputFor, type ContinuedTry } from "./inrun-continuity-carrier.js";
 import {
   readSessionCapsule,
@@ -217,7 +218,7 @@ export async function openContinuity(
     retainedOutput: pred.output,
     diffStat: pred.diffStat,
   });
-  const uncertainInput = uncertainInputFor(from.runDir, null);
+  const uncertainInput = uncertainInputFor(from.runDir, null, pred.attemptId);
   const sameRoot = samePath(pred.root, deps.cwd);
   // The notice says the workspace is as it was left; in another tree that is
   // not known, so the child is told to check before relying on it.
@@ -227,6 +228,11 @@ export async function openContinuity(
   let composed: HarnessRunSpec;
   if (prepared.carrier === "native" || prepared.carrier === "native_moved") {
     writeSessionCapsule(deps.attemptDir, prepared.capsule);
+    try {
+      await prepared.retire?.();
+    } catch {
+      // The published capsule is authoritative even if a stale source copy remains.
+    }
     // A follow-up on finished work is the caller's text alone; unfinished
     // work gets the continuation notice (cause, undelivered input) first.
     const followUp = pred.resumable === null && from.state === "succeeded" && callerText.trim();
@@ -267,6 +273,7 @@ export async function openContinuity(
   }
   const continued: ContinuedTry = {
     carrier: prepared.carrier,
+    summarized: prepared.carrier === "packet" && prepared.packet.summarized,
     cause: pred.cause,
     fromProfileId: capsule ? capsule.holderProfileId : pred.profileId,
     toProfileId: targetId,

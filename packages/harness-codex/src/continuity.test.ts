@@ -67,7 +67,11 @@ describe("codex continuity", () => {
     const envA = { [CONTINUITY_PROFILE_LOCATOR_ENV]: a };
     const envB = { [CONTINUITY_PROFILE_LOCATOR_ENV]: b };
     const moved = await codexContinuity.move({ file: main!, sidecars: [zst!] }, envA, envB, "/w");
-    expect(moved).toEqual({ ok: true, resumeRef: { nativeSessionId: TID } });
+    expect(moved).toMatchObject({ ok: true, resumeRef: { nativeSessionId: TID } });
+    expect(existsSync(main!)).toBe(true);
+    expect(existsSync(zst!)).toBe(true);
+    if (!moved.ok) throw new Error(moved.reason);
+    await moved.retire?.();
     const rel = join("sessions", "2026", "10", "06");
     expect(
       readFileSync(join(b, rel, `rollout-2026-10-06T10-00-00-${TID}.jsonl`), "utf8"),
@@ -103,4 +107,24 @@ describe("codex continuity", () => {
     expect(reject({ ...base, type: "error", error: "stream disconnected" })).toBe(false);
     expect(reject({ ...base, type: "message", text: "invalid_encrypted_content" })).toBe(false);
   });
+});
+
+it("a refused later part removes every destination written by the move", async () => {
+  const a = home("failed-a"),
+    b = home("failed-b");
+  const [file] = seed(a, [`rollout-fixture-${TID}.jsonl`]);
+  const stray = join(a, "outside.txt");
+  writeFileSync(stray, "fixture");
+  const moved = await codexContinuity.move(
+    { file: file!, sidecars: [stray] },
+    { CLAUDEXOR_PROFILE_LOCATOR: a },
+    { CLAUDEXOR_PROFILE_LOCATOR: b },
+    "/w",
+  );
+  expect(moved.ok).toBe(false);
+  expect(existsSync(file!)).toBe(true);
+  expect(existsSync(stray)).toBe(true);
+  expect(existsSync(join(b, "sessions", "2026", "10", "06", `rollout-fixture-${TID}.jsonl`))).toBe(
+    false,
+  );
 });

@@ -16,6 +16,7 @@ import {
   cancelledCandidatesResult,
   emptyCandidateResult,
   failedCandidatesResult,
+  failAfterCandidates,
 } from "./candidateTerminals.js";
 import { existsSync } from "node:fs";
 import {
@@ -29,8 +30,13 @@ import {
   reviewerProfileResolver,
 } from "./orchestrator-credentials.js";
 import type { InRunContinuity } from "./inrun-continuity.js";
+import {
+  continuityWorkspace,
+  resumableOf,
+  resumableTerminal,
+  type ContinuityTerminalFacts,
+} from "./continuity-terminal.js";
 import { openContinuity } from "./continue-from.js";
-import { resumableTerminal } from "./continuity-terminal.js";
 import { accountPoolRows } from "./account-pool.js";
 import type { PreProgressRefusalMemory } from "./pre-progress-refusal.js";
 import { writeRunTelemetryArtifact } from "./runTelemetryWriter.js";
@@ -119,7 +125,6 @@ import type {
   BudgetLease,
   ImplementationTransport,
   RawGitPatchEnvelope,
-  RunResumable,
   WebPolicySupport,
   WorkspaceEnvelope,
 } from "@claudexor/schema";
@@ -2454,6 +2459,7 @@ export class Orchestrator {
     let cost = 0;
     let costEstimated = false;
     let harnessErrored = false;
+    let streamBudgetDenied = false;
     let processingRefusal: ProcessingBudgetAdmissionError | RoutingPreflightError | null = null;
     let poolExhausted: Error | null = null; // A5: typed pool-exhausted refusal
     const deltaFlood = { count: 0, disclosed: false }; // W-C4 per-attempt delta budget
@@ -2512,12 +2518,7 @@ export class Orchestrator {
           nativeTry === 0
             ? spec
             : HarnessRunSpec.parse({ ...spec, session_id: newId("ses"), extra: { ...spec.extra } });
-        // Per-TRY abort controller: the inactivity watchdog aborts THIS try's
-        // stream (killing the process group through the existing abort
-        // plumbing) without touching the run-level cancel signal, so a timeout
-        // and a user cancel stay distinguishable. Recreated per
-        // nativeTry — a transient retry must get a LIVE signal, not the
-        // previous try's already-aborted composite.
+        // The watchdog aborts only this try; run cancellation also prevents successors.
         const attemptAbort = new AbortController();
         runSpec.extra["abortSignal"] = signal
           ? AbortSignal.any([signal, attemptAbort.signal])
@@ -2560,19 +2561,16 @@ export class Orchestrator {
             log?.emit("harness.event", harnessEventPayload(adapter.id, attemptId, safeEv), display);
             if (signal?.aborted) break;
             if (display) safeInvoke(onHarnessEvent, safeEv);
-            // In-place turns run in the live tree under the native environment, so
-            // the session they emit IS reachable for the next turn: record it. An
-            // ISOLATED envelope-born session lives in the scoped home that dispose()
-            // deletes, so observing it would poison the thread resume map with
-            // unreachable ids — skip it there.
-            if (inPlaceEnvelope) observeNativeSessionEvent(runInput, adapter.id, safeEv);
             observeAuthSwitch(log, adapter.id, attemptId, safeEv);
             observeAttemptTelemetry(telemetry, safeEv);
             const mismatch = continuity.observe(safeEv, runSpec, telemetry.outputMarkers);
             if (mismatch) {
               harnessErrored = true;
               errors.push(mismatch);
+              break;
             }
+            if (inPlaceEnvelope && continuity.mayPublishSession)
+              observeNativeSessionEvent(runInput, adapter.id, safeEv);
             // QA-024: the injected delegation belt's MCP server reported a
             // terminal startup failure. Disclose it ONCE while live; recoverable
             // exact tool-result failures are evaluated at attempt finalization.
@@ -2607,7 +2605,7 @@ export class Orchestrator {
               cost = usage.cost;
               costEstimated = usage.costEstimated;
               if (usage.hardCapReached) {
-                harnessErrored = true;
+                harnessErrored = streamBudgetDenied = true;
                 errors.push("budget hard cap reached mid-attempt; stream aborted");
                 break;
               }
@@ -2668,6 +2666,7 @@ export class Orchestrator {
           runSpec,
           nativeTry,
           harnessErrored,
+          budgetStopped: streamBudgetDenied,
           aborted: signal?.aborted === true,
           requestRefused: Boolean(telemetry.requestRefusal),
           newTransients,
@@ -2795,6 +2794,7 @@ export class Orchestrator {
     const resumable = await continuity.finish({
       runSpec: spec,
       errored,
+      nonSuccess: !gatesPassed(gates),
       aborted: signal?.aborted === true,
       cancelReason: typeof signal?.reason === "string" ? signal.reason : null,
       workState: finalized.workState,
@@ -2896,7 +2896,7 @@ export class Orchestrator {
           : {}),
       outcomeClass: finalized.outcomeClass,
       applied,
-      ...(resumable ? { resumable } : {}),
+      ...continuity.terminalFacts(resumable),
     };
   }
 
@@ -2924,8 +2924,7 @@ export class Orchestrator {
       runDir: paths.root,
       attemptDir: join(paths.attemptsDir, attemptId),
       cwd,
-      inPlace: lane.envelope ? lane.envelope.worktree_path === lane.envelope.repo_root : false,
-      isolatedHomeDir: lane.harnessHome?.isolated ? lane.harnessHome.homeDir : null,
+      workspace: continuityWorkspace(lane.envelope, cwd),
       workOrder: lane.workOrder,
       firstPrompt: lane.firstPrompt,
       registry: this.config(repoRoot)?.global.credential_profiles ?? [],
@@ -2933,7 +2932,6 @@ export class Orchestrator {
       snapshots: this.deps.quotaSnapshots?.() ?? [],
       retryPolicy: transientRetryPolicy(this.config(repoRoot)),
       pinned: runInput?.credentialProfileId != null, // D-U6: a pin never rotates
-
       defaultRouteWasVendorNative: routed.authRouteEstimate === "local_session",
       requestedProfileId: runInput?.credentialProfileId ?? null,
       rotationEnabled: runInput !== undefined,
@@ -2951,6 +2949,7 @@ export class Orchestrator {
       rotationObservations: (spec, transients, refusal) =>
         this.credentials.rotationObservations(adapter, spec, transients, refusal),
       emit: (type, payload) => log?.emit(type, payload),
+      route: routed,
       newSessionId: () => newId("ses"),
       thread: runInput?.threadId
         ? {
@@ -3776,7 +3775,11 @@ export class Orchestrator {
     } catch (err) {
       // Review preflight/evidence failures end TERMINALLY with artifacts —
       // never as an escaped throw that orphans the run dir.
-      return failTerminally(log, store, paths, runId, taskId, mode, "review", err, ledger.spend());
+      return failAfterCandidates(
+        { log, store, paths, runId, taskId, mode, ledger, runs },
+        "review",
+        err,
+      );
     } finally {
       // Review preflight failures must not leak candidate worktrees.
       await disposeReviewEnvelopes();
@@ -3971,16 +3974,10 @@ export class Orchestrator {
       });
     } catch (err) {
       // Arbitration throws end terminally with artifacts, never as an orphan.
-      return failTerminally(
-        log,
-        store,
-        paths,
-        runId,
-        taskId,
-        mode,
+      return failAfterCandidates(
+        { log, store, paths, runId, taskId, mode, ledger, runs },
         "arbitration",
         err,
-        ledger.spend(),
       );
     }
     log.emit("arbitration.completed", {
@@ -4395,7 +4392,7 @@ export class Orchestrator {
         lifecycle: facts.lifecycle,
         facts,
         reason: facts.reason,
-        ...resumableTerminal(store, paths, runs),
+        ...resumableTerminal(store, paths, winnerRun ? [winnerRun] : runs, isFailureTerminal),
       });
     } else if (facts.lifecycle === "succeeded") {
       // needsDecision at terminal — the event's phase must agree with
@@ -4403,7 +4400,7 @@ export class Orchestrator {
       log.emit("run.blocked", {
         lifecycle: facts.lifecycle,
         facts,
-        ...resumableTerminal(store, paths, runs),
+        ...resumableTerminal(store, paths, runs, isFailureTerminal),
         phase:
           deliveryFailureReason && !finalVerifyFailed
             ? "delivery"
@@ -4419,7 +4416,7 @@ export class Orchestrator {
         reason: facts.reason,
         phase: "arbitration",
         failure_ref: "final/failure.yaml",
-        ...resumableTerminal(store, paths, runs),
+        ...resumableTerminal(store, paths, runs, isFailureTerminal),
       });
     }
 
@@ -5178,16 +5175,10 @@ export class Orchestrator {
               facts: makeOutcomeFacts("failed", { noChanges: run.files.noChanges }),
               log,
             });
-          return failTerminally(
-            log,
-            store,
-            paths,
-            runId,
-            taskId,
-            mode,
+          return failAfterCandidates(
+            { log, store, paths, runId, taskId, mode, ledger, runs: [run] },
             "review",
             err,
-            ledger.spend(),
           );
         }
 
@@ -5475,6 +5466,12 @@ export class Orchestrator {
     // A needs-decision terminal (review blocked / checks failed) writes a
     // failure record + fires run.blocked even though the lifecycle succeeded.
     const convIsFailureTerminal = facts.lifecycle !== "succeeded" || convNeedsDecision;
+    const continuation = resumableTerminal(
+      store,
+      paths,
+      lastRun ? [lastRun] : [],
+      convIsFailureTerminal,
+    );
     if (convIsFailureTerminal) {
       // A5 last-result lift: the LAST attempt's typed mid-attempt refusal
       // survives onto the terminal; budget/cancel/needs-decision outrank it.
@@ -5556,6 +5553,7 @@ export class Orchestrator {
     }
     if (!convIsFailureTerminal) {
       log.emit("run.completed", {
+        ...continuation,
         lifecycle: facts.lifecycle,
         facts,
         reason: facts.reason,
@@ -5563,6 +5561,7 @@ export class Orchestrator {
       });
     } else if (facts.lifecycle === "succeeded") {
       log.emit("run.blocked", {
+        ...continuation,
         lifecycle: facts.lifecycle,
         facts,
         attempts: attempt,
@@ -5571,6 +5570,7 @@ export class Orchestrator {
       });
     } else {
       log.emit("run.failed", {
+        ...continuation,
         lifecycle: facts.lifecycle,
         facts,
         reason: facts.reason,
@@ -6298,7 +6298,7 @@ export class Orchestrator {
         candidates: [],
       };
     }
-    interface ReadonlyAttempt {
+    interface ReadonlyAttempt extends ContinuityTerminalFacts {
       attemptId: string;
       harnessId: string;
       status: "success" | "failed" | "blocked";
@@ -6316,8 +6316,6 @@ export class Orchestrator {
       /** A5: the typed refusal (exhausted credential pool / spent window) this
        * attempt died on, so the chain terminal can speak it machine-readably. */
       declaredFailure?: ReturnType<typeof declaredFailure>;
-      /** The terminal continuation facts of this attempt (cause, carriers, session). */
-      resumable?: RunResumable;
     }
     const attempts: ReadonlyAttempt[] = [];
     const attemptTelemetries: {
@@ -6707,13 +6705,6 @@ export class Orchestrator {
             for await (const ev of watchedReport) {
               const safeEv = redactHarnessEvent(ev);
               if (safeEv.payload?.["buffered"] !== true) safeInvoke(input.onHarnessEvent, safeEv);
-              // A thread ASK turn IS a chat turn now (INV-034): its native
-              // session lives in the DURABLE per-lane home, so record it for the
-              // next lane turn's resume. The read-only fallback chain is
-              // sequential (never the parallel deep-scan swarm, which is
-              // excluded from `laneRun`), so recordSession's upsert keeps the
-              // latest lane session without a race.
-              if (laneRun) observeNativeSessionEvent(input, adapter.id, safeEv);
               observeAuthSwitch(log, adapter.id, attemptId, safeEv);
               log.emit(
                 "harness.event",
@@ -6724,7 +6715,12 @@ export class Orchestrator {
               if (input.signal?.aborted) break;
               observeAttemptTelemetry(telemetry, safeEv);
               const mismatch = continuity.observe(safeEv, runSpec, telemetry.outputMarkers);
-              if (mismatch) harnessError = mismatch;
+              if (mismatch) {
+                harnessError = mismatch;
+                break;
+              }
+              if (laneRun && continuity.mayPublishSession)
+                observeNativeSessionEvent(input, adapter.id, safeEv);
               emitPlanProgress((t, p) => log.emit(t, p), adapter.id, attemptId, safeEv);
               // read-only routes burn quota too (the orchestrate PLANNER is
               // the loudest) — same single owner as the agent loop.
@@ -6909,7 +6905,7 @@ export class Orchestrator {
             : poolExhausted || processingRefusal
               ? { declaredFailure: declaredFailure(processingRefusal ?? poolExhausted) }
               : {}),
-          ...(roResumable ? { resumable: roResumable } : {}),
+          ...continuity.terminalFacts(roResumable),
         });
         if (opts.deepScan) {
           store.writeText(
@@ -6937,7 +6933,7 @@ export class Orchestrator {
         error: scoutInterrupted ? "context capacity exhausted before the scout completed" : null,
         telemetry,
         ...(scoutInterrupted ? { interrupted: true } : {}),
-        ...(roResumable ? { resumable: roResumable } : {}),
+        ...continuity.terminalFacts(roResumable),
       });
       if (opts.deepScan) {
         const warningNote = toolWarnings(telemetry).length
@@ -7134,6 +7130,8 @@ export class Orchestrator {
         ledger.spend(),
         input.signal,
         store,
+        undefined,
+        resumableOf(attempts, "cancelled"),
       );
     if (input.signal?.aborted) return cancelledTerminal();
 
@@ -7233,7 +7231,7 @@ export class Orchestrator {
           harness_id: terminalHarnessId,
           error: singleError,
           failure_ref: "final/failure.yaml",
-          ...resumableTerminal(store, paths, attempts),
+          ...resumableTerminal(store, paths, attempts, true),
         });
       } else {
         log.emit("run.failed", {
@@ -7244,7 +7242,7 @@ export class Orchestrator {
           harness_id: terminalHarnessId,
           error: singleError,
           failure_ref: "final/failure.yaml",
-          ...resumableTerminal(store, paths, attempts),
+          ...resumableTerminal(store, paths, attempts, true),
         });
       }
       return {
@@ -7336,7 +7334,7 @@ export class Orchestrator {
         phase: scanBudgetMapping ? scanBudgetMapping.phase : "harness",
         error: message,
         failure_ref: "final/failure.yaml",
-        ...resumableTerminal(store, paths, attempts),
+        ...resumableTerminal(store, paths, attempts, true),
       });
       return {
         spendUsd: ledger.spend(),
@@ -7518,14 +7516,14 @@ export class Orchestrator {
         reason: terminalFacts.reason,
         phase: "executor",
         failure_ref: "final/failure.yaml",
-        ...resumableTerminal(store, paths, attempts),
+        ...resumableTerminal(store, paths, attempts, true),
       });
     } else if (workVetoed) {
       log.emit("run.blocked", {
         lifecycle: terminalFacts.lifecycle,
         facts: terminalFacts,
         reason: terminalFacts.reason,
-        ...resumableTerminal(store, paths, attempts),
+        ...resumableTerminal(store, paths, attempts, true),
       });
     } else {
       log.emit("run.completed", {

@@ -358,7 +358,7 @@ describe("ordinary directory Agent execution", () => {
     },
   );
 
-  it("retains failed partial file work without retrying its physical effect", async () => {
+  it("retains failed partial file work and continues it on the same account, never from scratch", async () => {
     const root = fixture();
     const author = writer(Buffer.from([0, 255]), true);
     const result = await new Orchestrator({
@@ -370,11 +370,13 @@ describe("ordinary directory Agent execution", () => {
       prompt: "Create output",
       harnesses: [author.adapter.id],
     });
-    expect(author.calls).toHaveLength(1);
+    // After progress the same account continues the work (packet, owner 1B),
+    // bounded by transient_retry.max_retries; the partial file is kept.
+    expect(author.calls).toHaveLength(3);
     expect(result.facts.lifecycle).toBe("failed");
     expect(readResult(root, result.runDir).product.meta.apply_state).toBe("applied");
     expect(readFileSync(join(root, "output.bin"))).toEqual(Buffer.from([0, 255]));
-  });
+  }, 20_000);
 
   it("keeps path policy evidence for a copied binary work product", async () => {
     const root = fixture();

@@ -8,7 +8,6 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { acceptedTryOutput } from "@claudexor/core";
 import {
   HarnessRunSpec as HarnessRunSpecSchema,
   RunContinuityReceipt as RunContinuityReceiptSchema,
@@ -22,7 +21,8 @@ import {
 import { decideCarrier, prepareCarrier, type CarrierFacts } from "./carrier-planner.js";
 import { diffStatFromPatch, steeringFromRunLog } from "./continuation-evidence-io.js";
 import { continuationNotice, packetContinuationPrompt } from "./continuity-notice.js";
-import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-continuity.js";
+import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-continuity-types.js";
+import { routeListsModel } from "./modelGovernance.js";
 import {
   registryProfile,
   relocateSessionCapsule,
@@ -43,6 +43,7 @@ export interface ContinuedTry {
    * both unset (this run, same root). */
   from?: { runId: string; attemptId: string };
   workspace?: RunContinuityReceipt["workspace"];
+  summarized: boolean;
 }
 
 /** The typed limit that ended a try (A11 evidence quality). */
@@ -60,6 +61,7 @@ export interface ContinuedTryContext {
   /** Index of the try that just settled; the successor is `tryIndex + 1`. */
   tryIndex: number;
   uncertainInput: string | null;
+  retainedOutput: string;
 }
 
 export interface ComposedContinuedTry {
@@ -68,8 +70,6 @@ export interface ComposedContinuedTry {
   continued: ContinuedTry | null;
   /** The capsule after a native location/move (the new holder), or null when unchanged. */
   capsule: SessionCapsule | null;
-  /** The session was moved into another account's store (disclose on the thread). */
-  moved: { from: string | null; to: string | null } | null;
 }
 
 function profileRef(deps: InRunContinuityDeps, spec: HarnessRunSpec, profileId: string | null) {
@@ -97,7 +97,11 @@ export async function composeContinuedTry(
     capsule: ctx.capsule,
     acted: ctx.acted,
     cause,
-    sourceProfile: profileRef(deps, facts.runSpec, from),
+    sourceProfile: profileRef(
+      deps,
+      facts.runSpec,
+      ctx.capsule ? ctx.capsule.holderProfileId : from,
+    ),
     targetProfile: profileRef(deps, base, to),
     effectiveModel,
     preference: "auto",
@@ -113,7 +117,7 @@ export async function composeContinuedTry(
       steering: [],
     },
     targetCwd: base.cwd,
-    retainedOutput: acceptedTryOutput(facts.answer, facts.harnessErrored) || facts.answer.text(),
+    retainedOutput: ctx.retainedOutput,
     diffStat: facts.currentDiff ? diffStatFromPatch(facts.currentDiff) : null,
   });
   if (prepared.carrier === "fresh") {
@@ -121,7 +125,6 @@ export async function composeContinuedTry(
       verdict: { kind: "continue", spec: base, delayMs },
       continued: null,
       capsule: null,
-      moved: null,
     };
   }
   const notice = continuationNotice({
@@ -129,10 +132,18 @@ export async function composeContinuedTry(
     uncertainInput: ctx.uncertainInput,
     callerText: null,
   });
-  // A null model hint must not re-resolve to another default on a new session (§7.1).
-  const modelHint = base.model_hint ?? (prepared.carrier === "packet" ? effectiveModel : null);
+  // A null hint must not re-resolve to another default on any continued try:
+  // native and packet carriers pin the attested model, but only an id the route itself
+  // lists — an observed display label is never sent as a model id.
+  const attested = facts.telemetry.observedModel;
+  const pinned =
+    base.model_hint == null && attested
+      ? !!deps.route && (await routeListsModel(deps.route, base, attested))
+      : false;
+  const modelHint = base.model_hint ?? (pinned ? attested : null);
   const continued: ContinuedTry = {
     carrier: prepared.carrier,
+    summarized: prepared.carrier === "packet" && prepared.packet.summarized,
     cause,
     fromProfileId: from,
     toProfileId: to,
@@ -155,9 +166,16 @@ export async function composeContinuedTry(
         evidenceMarkdown: prepared.packet.markdown,
       }),
     });
-    return { verdict: { kind: "continue", spec, delayMs }, continued, capsule: null, moved: null };
+    return { verdict: { kind: "continue", spec, delayMs }, continued, capsule: null };
   }
   writeSessionCapsule(deps.attemptDir, prepared.capsule);
+  // The capsule names the new holder; a source that cannot be retired (a held
+  // file handle, a read-only store) leaves a stale copy, never a failed attempt.
+  try {
+    await prepared.retire?.();
+  } catch {
+    // stale source copy; the holder already moved
+  }
   const spec = HarnessRunSpecSchema.parse({
     ...base,
     model_hint: modelHint,
@@ -168,58 +186,22 @@ export async function composeContinuedTry(
     verdict: { kind: "continue", spec, delayMs },
     continued,
     capsule: prepared.capsule,
-    moved: prepared.carrier === "native_moved" ? { from, to } : null,
   };
 }
 
 /** The predecessor's input that may not be in the vendor history: the last
- * try's prompt when it died before `started`, plus admitted-but-unconfirmed
+ * caller-authored work order if the first try died before `started`, plus unconfirmed
  * steering messages (`message.accepted` with no `message.delivered`). */
 export function uncertainInputFor(
   runDir: string,
   previousTryUnstarted: string | null,
+  attemptId: string,
 ): string | null {
   const parts: string[] = [];
   if (previousTryUnstarted) parts.push(previousTryUnstarted.slice(0, 2048));
-  for (const message of steeringFromRunLog(runDir))
+  for (const message of steeringFromRunLog(runDir, attemptId))
     if (message.delivery === "uncertain") parts.push(message.text.slice(0, 2048));
   return parts.length ? parts.join("\n\n") : null;
-}
-
-/** INV-137: a moved session on a thread lane is a disclosed lane switch that
- * resumes natively; its row is published only when the file survives dispose. */
-export function discloseMovedSession(
-  deps: InRunContinuityDeps,
-  capsule: SessionCapsule,
-  from: string | null,
-  to: string | null,
-  observedModel: string | null,
-): void {
-  const thread = deps.thread;
-  if (!thread) return;
-  const survives =
-    deps.inPlace ||
-    !capsule.file ||
-    !deps.isolatedHomeDir ||
-    !capsule.file.startsWith(deps.isolatedHomeDir);
-  if (survives)
-    thread.onSessionObserved?.(deps.adapter.id, capsule.nativeSessionId, observedModel, to);
-  deps.emit("session.continuity", {
-    thread_id: thread.threadId,
-    harness_id: deps.adapter.id,
-    kind: "native_resume",
-    packet_turns: 0,
-    summarized: false,
-    lane_switched_from: { harness: deps.adapter.id, profileId: from },
-    moved: true,
-  });
-  if (thread.turnId)
-    thread.onContinuityResolved?.(thread.turnId, {
-      kind: "native_resume",
-      packetTurns: 0,
-      summarized: false,
-      laneSwitchedFrom: { harness: deps.adapter.id, profileId: from },
-    });
 }
 
 /** The receipt of a continued try (per-try model attestation, never borrowed). */
@@ -265,8 +247,11 @@ export function resumableBlock(input: {
   acted: boolean;
   limit: LimitEvidenceState | null;
   terminalCode: string | null;
+  workspace: RunResumable["workspace"];
 }): RunResumable {
-  const { deps, limit } = input;
+  const { deps } = input;
+  const limitCause = ["vendor_limit", "pinned_limit", "pool_exhausted"].includes(input.cause);
+  const limit = limitCause ? input.limit : null;
   const session = input.capsule && !input.nativeRejected ? input.capsule : null;
   const carriers: RunResumable["carriers"] = [];
   if (session) {
@@ -280,7 +265,7 @@ export function resumableBlock(input: {
     limitWindow: limit?.constraintId ?? null,
     limitEvidence: limit ? (limit.resetsAt || limit.constraintId ? "window" : "unspecified") : null,
     carriers,
-    limitCode: input.terminalCode ?? (limit ? "vendor_limit_rejected" : null),
+    limitCode: limitCause ? (input.terminalCode ?? (limit ? "vendor_limit_rejected" : null)) : null,
     session: session
       ? {
           harness: session.harness,
@@ -288,7 +273,7 @@ export function resumableBlock(input: {
           holderProfileId: session.holderProfileId,
         }
       : null,
-    workspace: deps.inPlace ? { kind: "in_place", root: deps.cwd } : { kind: "none", root: null },
+    workspace: input.workspace,
   };
 }
 

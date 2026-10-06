@@ -236,7 +236,8 @@ export interface LocatedNativeSession {
 export type ContinuityLocateResult = LocatedNativeSession | { found: false };
 
 export type ContinuityMoveResult =
-  { ok: true; resumeRef: { nativeSessionId: string } } | { ok: false; reason: string };
+  | { ok: true; resumeRef: { nativeSessionId: string }; retire?: () => void | Promise<void> }
+  | { ok: false; reason: string };
 
 /**
  * Optional per-adapter continuity capability (session carriers across
@@ -248,7 +249,8 @@ export type ContinuityMoveResult =
  * the same relative `sessions/` path under the target `CODEX_HOME`, every
  * part), so resume by id works and `HarnessRunSpec` needs no path field.
  * Order: copy → verify destination → the engine publishes the new holder in
- * the capsule → retire the source. A failed destination never destroys the
+ * the capsule → invokes the returned `retire` step. Failed moves remove their
+ * destination copies and preserve the source. A failed destination never destroys the
  * only history. Never credentials: no `auth.json`, no claude credential files.
  */
 export interface HarnessContinuityCapability {
