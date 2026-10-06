@@ -1,5 +1,12 @@
 # claudexor
 
+## 3.22.0
+
+### Patch Changes
+
+- Updated dependencies [51578d4]
+  - @claudexor/cli@3.22.0
+
 ## 3.21.0
 
 ### Patch Changes

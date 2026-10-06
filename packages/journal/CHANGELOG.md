@@ -1,5 +1,11 @@
 # @claudexor/journal
 
+## 3.22.0
+
+### Patch Changes
+
+- @claudexor/util@3.22.0
+
 ## 3.21.0
 
 ### Patch Changes
