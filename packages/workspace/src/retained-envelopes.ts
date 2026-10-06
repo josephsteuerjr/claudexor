@@ -5,9 +5,22 @@
  * the envelope base is the authority (`envelope-custody.ts`); the run-dir
  * pointer is only its address, so a stale pointer reads as "nothing retained".
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
-import type { EnvelopeCustody, ResumableCause, WorkspaceEnvelope } from "@claudexor/schema";
+import {
+  SessionCapsule,
+  type EnvelopeCustody,
+  type ResumableCause,
+  type WorkspaceEnvelope,
+} from "@claudexor/schema";
 import { nowIso } from "@claudexor/util";
 import {
   envelopeBaseOf,
@@ -105,7 +118,7 @@ export async function releaseRetainedEnvelope(custody: EnvelopeCustody): Promise
  * Crash recovery of an ownerless envelope (the startup sweeper, before any new
  * work is accepted). `retained`: kept, its route-scoped auth stripped again.
  * `live` with a dead owner: the holder run was interrupted mid-attempt; a tree
- * that differs from its base is kept as retained (`host_restart`) when the
+ * that differs from its base, or has a session capsule, is retained (`host_restart`) when the
  * holder run's directory still exists. Anything else (`null`) is an ordinary
  * orphan the sweeper disposes as before.
  */
@@ -114,14 +127,36 @@ export async function recoverOrphanCustody(base: string): Promise<"kept" | "reta
   if (!custody) return null;
   if (custody.state === "retained") {
     stripRouteScopedAuth(custody.envelope);
+    writePointer(custody.holder_run_dir, base);
     return "kept";
   }
   if (!existsSync(custody.holder_run_dir)) return null;
-  if ((await envelopeTreeChanged(custody.envelope)) !== true) return null;
+  if (
+    !holderHasSession(custody.holder_run_dir) &&
+    (await envelopeTreeChanged(custody.envelope)) !== true
+  )
+    return null;
   retainForContinuation(
     custody.envelope,
     { runId: custody.holder_run_id, runDir: custody.holder_run_dir },
     "host_restart",
   );
   return "retained";
+}
+
+function holderHasSession(runDir: string): boolean {
+  const attempts = join(runDir, "attempts");
+  try {
+    return readdirSync(attempts).some((attempt) => {
+      try {
+        return SessionCapsule.safeParse(
+          JSON.parse(readFileSync(join(attempts, attempt, "session-capsule.json"), "utf8")),
+        ).success;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
 }

@@ -81,6 +81,49 @@ async function createKept(repo: string, runDir: string, taskId = "task-p") {
 }
 
 describe("retained envelopes (A9 custody)", () => {
+  it("rebuilds a missing retained pointer from authoritative custody after a crash", async () => {
+    const runDir = temp("missing-pointer");
+    const { env } = await createKept(initRepo(), runDir);
+    retainForContinuation(env, { runId: "run-p", runDir }, "transport");
+    rmSync(join(runDir, RETAINED_ENVELOPE_POINTER));
+    expect(retainedEnvelopeOfRun(runDir, "run-p")).toBeNull();
+    expect(await recoverOrphanCustody(envelopeBaseOf(env))).toBe("kept");
+    expect(retainedEnvelopeOfRun(runDir, "run-p")).toMatchObject({
+      cause: "transport",
+      envelope: { id: env.id },
+    });
+  });
+
+  it("keeps a dead holder's session capsule even when its tree is unchanged", async () => {
+    const runDir = temp("capsule-only");
+    const env = await new WorkspaceManager(initRepo()).create({
+      taskId: "task-session",
+      attemptId: "a01",
+      baseRef: "HEAD",
+      custody: { runId: "run-p", runDir },
+    });
+    const attemptDir = join(runDir, "attempts", "a01");
+    mkdirSync(attemptDir, { recursive: true });
+    writeFileSync(
+      join(attemptDir, "session-capsule.json"),
+      JSON.stringify({
+        harness: "fake",
+        nativeSessionId: "session-p",
+        holderProfileId: null,
+        file: null,
+        mtimeMs: null,
+        sidecars: [],
+        cwd: env.worktree_path,
+        requestedModel: null,
+      }) + "\n",
+    );
+    expect(await recoverOrphanCustody(envelopeBaseOf(env))).toBe("retained");
+    expect(retainedEnvelopeOfRun(runDir, "run-p")).toMatchObject({
+      cause: "host_restart",
+      envelope: { id: env.id },
+    });
+    expect(existsSync(env.worktree_path)).toBe(true);
+  });
   it("survives dispose, strips route-scoped auth, and is adopted with identical files", async () => {
     const repo = initRepo();
     const predRunDir = temp("pred-run");

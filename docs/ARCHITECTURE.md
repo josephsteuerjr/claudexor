@@ -2894,8 +2894,9 @@ while their predecessor record remains in the kept set, preserving the
 continuation handle and its single-successor claim across journal compaction.
 After a predecessor is pruned, its successor becomes eligible on a later pass.
 The crash sweep never treats a kept envelope as an orphan (its auth is
-stripped again); an envelope whose holder run died mid-attempt with changes is
-kept the same way with cause `host_restart`. Delegate belt children,
+stripped again, and a missing holder pointer is rebuilt from authoritative
+custody); an envelope whose holder died mid-attempt with a changed tree or a
+valid session capsule is kept with cause `host_restart`. Delegate belt children,
 in-place runs and race/synthesis/review envelopes keep their ordinary
 lifecycle.
 While running it snapshots its live harness child process groups to
