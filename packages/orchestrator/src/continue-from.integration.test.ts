@@ -588,6 +588,84 @@ describe("continueFrom successor: kept isolated envelope", () => {
 });
 
 describe("continueFrom through an unadopted head", () => {
+  it.each([false, true])(
+    "preserves complete undelivered input with newest-first inline quotes (new correction: %s)",
+    async (newCorrection) => {
+      let f!: Fixture;
+      const predScript = editThenLimit(() => f);
+      f = fixture(["a"], function* (ctx) {
+        if (ctx.phase === "predecessor") return yield* predScript(ctx);
+        yield* finishing(ctx.emit, ctx.cwd, "sid-A");
+      });
+      const correction = "Correction: keep the public migration API as is";
+      const longInput = newCorrection
+        ? "Keep the existing work. ".repeat(100).slice(0, 2240)
+        : "Continue the migration carefully. ".repeat(90).slice(0, 2700) +
+          "\nFinal correction: preserve the existing API now.";
+      expect(longInput).toHaveLength(newCorrection ? 2240 : 2749);
+      expect(correction).toHaveLength(47);
+      const { pred, succ: failed } = await chain(f, {
+        successor: { prompt: longInput, credentialProfileId: "missing-profile" },
+      });
+      expect(failed.result.lifecycle).toBe("failed");
+      const records = [
+        { ...pred.result, params: { prompt: WORK_ORDER }, state: pred.result.lifecycle },
+        {
+          ...failed.result,
+          params: { prompt: longInput, continueFrom: pred.result.runId },
+          state: failed.result.lifecycle,
+        },
+      ];
+      const continuation = () =>
+        continuationForRun(
+          ControlRunStartRequest.parse({
+            continueFrom: records.at(-1)!.runId,
+            scope: { kind: "project", root: f.root },
+            execution: { isolation: "live" },
+          }),
+          { all: () => [{ records: () => records }] },
+        );
+      if (newCorrection) {
+        const next = await runOnce(f, {
+          inPlace: true,
+          prompt: correction,
+          credentialProfileId: "missing-profile",
+          continuation: continuation(),
+        });
+        expect(next.result.lifecycle).toBe("failed");
+        records.push({
+          ...next.result,
+          params: { prompt: correction, continueFrom: failed.result.runId },
+          state: next.result.lifecycle,
+        });
+      }
+      const resumed = await runOnce(f, {
+        inPlace: true,
+        prompt: "Finish it",
+        continuation: continuation(),
+      });
+      expect(resumed.result.lifecycle, resumed.result.summary).toBe("succeeded");
+      expect(resumed.receipts[0]).toMatchObject({ carrier: "native", inputDelivery: "uncertain" });
+      const prompt = f.spawns.at(-1)!.prompt;
+      expect(prompt).toContain("may not have been delivered");
+      expect(prompt).toContain("do not replay it blindly");
+      if (newCorrection) {
+        expect(prompt).toContain(correction);
+        expect(prompt.indexOf(correction)).toBeLessThan(prompt.indexOf(longInput.slice(0, 80)));
+      }
+      const shown = 2048 - (newCorrection ? correction.length : 0);
+      const path = join(resumed.result.runDir, "context", "work-order.md");
+      expect(prompt).toContain(
+        `[cut: ${shown} of ${longInput.length} characters; the complete text is in ${path}]`,
+      );
+      expect(readFileSync(path, "utf8")).toContain(longInput);
+      // The engine's existing work order already holds the complete input.
+      expect(readdirSync(join(resumed.result.runDir, "context"))).not.toEqual(
+        expect.arrayContaining([expect.stringMatching(/^uncertain-input-/)]),
+      );
+    },
+  );
+
   it.each(["preflight", "ask"] as const)(
     "reaches the retained tree after a %s successor",
     async (middle) => {

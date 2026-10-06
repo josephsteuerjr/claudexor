@@ -20,6 +20,7 @@ import {
 } from "@claudexor/schema";
 import { decideCarrier, prepareCarrier, type CarrierFacts } from "./carrier-planner.js";
 import { diffStatFromPatch, steeringFromRunLog } from "./continuation-evidence-io.js";
+import { completeInputPath, type UncertainInput } from "./continuation-input.js";
 import { continuationNotice, packetContinuationPrompt } from "./continuity-notice.js";
 import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-continuity-types.js";
 import { routeListsModel } from "./modelGovernance.js";
@@ -195,13 +196,28 @@ export async function composeContinuedTry(
  * steering messages (`message.accepted` with no `message.delivered`). */
 export function uncertainInputFor(
   runDir: string,
-  previousTryUnstarted: string | null,
+  previousInputs: readonly UncertainInput[],
   attemptId: string,
+  currentRunDir = runDir,
 ): string | null {
-  const parts: string[] = [];
-  if (previousTryUnstarted) parts.push(previousTryUnstarted.slice(0, 2048));
-  for (const message of steeringFromRunLog(runDir, attemptId))
-    if (message.delivery === "uncertain") parts.push(message.text.slice(0, 2048));
+  // Caller inputs arrive newest first. Steering is newer than the caller
+  // text of its own run, but older than any subsequent continuation's text.
+  const inputs = [...previousInputs];
+  const sameRun = inputs.findIndex((input) => input.runDir === runDir);
+  const steering = steeringFromRunLog(runDir, attemptId)
+    .filter((message) => message.delivery === "uncertain")
+    .reverse()
+    .map(({ text }) => ({ text, runDir }));
+  inputs.splice(sameRun < 0 ? inputs.length : sameRun, 0, ...steering);
+  let remaining = 2048;
+  const parts = inputs.map((input) => {
+    const shown = Math.min(remaining, input.text.length);
+    remaining -= shown;
+    const quote = input.text.slice(0, shown);
+    return shown === input.text.length
+      ? quote
+      : `${quote}\n[cut: ${shown} of ${input.text.length} characters; the complete text is in ${completeInputPath(input, currentRunDir)}]`;
+  });
   return parts.length ? parts.join("\n\n") : null;
 }
 

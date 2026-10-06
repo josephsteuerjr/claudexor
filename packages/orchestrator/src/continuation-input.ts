@@ -1,12 +1,35 @@
 /** Caller text of earlier continuations needs delivery proof, not merely a copied capsule. */
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { readRunEvents } from "@claudexor/event-log";
 import { RunContinuityReceipt, type ContinuationSources } from "@claudexor/schema";
 import { readContinuationSources } from "@claudexor/workspace";
+import { readTextSafe } from "@claudexor/util";
+
+export interface UncertainInput {
+  text: string;
+  runDir: string;
+}
+
+/** Reuse complete durable context; only missing text needs a new context file. */
+export function completeInputPath(input: UncertainInput, currentRunDir: string): string {
+  for (const runDir of [input.runDir, currentRunDir]) {
+    const path = resolve(runDir, "context", "work-order.md");
+    if (readTextSafe(path)?.includes(input.text)) return path;
+  }
+  const digest = createHash("sha256").update(input.text).digest("hex");
+  const path = resolve(currentRunDir, "context", `uncertain-input-${digest}.md`);
+  if (readTextSafe(path) !== input.text) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, input.text);
+  }
+  return path;
+}
 
 /** Reference only: the notice tells the next process to reconcile, never replay blindly. */
-export function unconfirmedContinuationInputs(sources: ContinuationSources): string | null {
-  const uncertain: string[] = [];
+export function unconfirmedContinuationInputs(sources: ContinuationSources): UncertainInput[] {
+  const uncertain: UncertainInput[] = [];
   for (const [index, source] of sources.entries()) {
     if (index === sources.length - 1 && readContinuationSources(source.runDir).length === 0)
       continue;
@@ -35,7 +58,7 @@ export function unconfirmedContinuationInputs(sources: ContinuationSources): str
           event.payload["attempt_id"] === receipt.attemptId &&
           event.payload["type"] === "started",
       );
-    if (!delivered) uncertain.push(text.trim());
+    if (!delivered) uncertain.push({ text, runDir: source.runDir });
   }
-  return uncertain.length ? uncertain.reverse().join("\n\n") : null;
+  return uncertain;
 }

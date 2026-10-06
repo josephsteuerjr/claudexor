@@ -285,6 +285,7 @@ export async function openContinuity(
     pred.runDir,
     unconfirmedContinuationInputs([from, ...(from.ancestors ?? [])]),
     pred.attemptId,
+    deps.runDir,
   );
   const sameRoot = samePath(pred.root, deps.cwd);
   // The notice says the workspace is as it was left; in another tree that is

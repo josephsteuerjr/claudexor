@@ -499,7 +499,9 @@ export class InRunContinuity {
         tryIndex: this.tryIndex,
         uncertainInput: uncertainInputFor(
           this.deps.runDir,
-          this.previousTryUnstarted,
+          this.previousTryUnstarted
+            ? [{ text: this.previousTryUnstarted, runDir: this.deps.runDir }]
+            : [],
           this.deps.attemptId,
         ),
         retainedOutput: this.retainedOutput.text(),
