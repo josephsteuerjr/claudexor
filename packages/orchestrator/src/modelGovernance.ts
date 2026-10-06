@@ -164,6 +164,27 @@ function assertModelsAllowed(
   return unverified;
 }
 
+/** True when the spawn's own model truth LISTS `model` as an id (never an
+ * unverifiable forward): an attested model is pinned on a continued session
+ * only then, so an observed display label is never sent as a model id. */
+export async function routeListsModel(
+  routed: ModelGovernedRoute,
+  spec: HarnessRunSpec,
+  model: string,
+): Promise<boolean> {
+  try {
+    const truth = await modelTruthForRoute(routed, {
+      cwd: spec.cwd,
+      env: spec.env,
+      ...(spec.auth_preference ? { authPreference: spec.auth_preference } : {}),
+      profile: spec.credential_profile ?? null,
+    });
+    return truth.list.includes(model.trim());
+  } catch {
+    return false;
+  }
+}
+
 export async function assertRouteModelsAllowed(
   routes: readonly ModelGovernedRoute[],
   models: Record<string, string> | undefined,

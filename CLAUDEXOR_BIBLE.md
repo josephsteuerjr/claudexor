@@ -301,8 +301,19 @@ invariant or operator decision before proceeding.
   is partial/unverified. verify: web-evidence telemetry tests.
 - **INV-046** Transient infrastructure failures are typed adapter evidence,
   never guessed from model prose. The orchestrator may spend a bounded retry
-  budget only for typed transient failures with no produced deliverable.
-  verify: transient-retry orchestrator tests.
+  budget only for typed transient failures with no produced deliverable: a
+  RETRY replays the original prompt on a fresh session, so it is admitted
+  only before any work. In Agent and Ask, after progress (an accepted answer,
+  agent activity, a file change or a diff in ANY try of the attempt) the attempt
+  never replays — it CONTINUES the same work through a disclosed carrier (the
+  native session on the same or the next account, or a fresh session
+  re-grounded by the evidence index), bounded per account by the same retry
+  budget and across accounts by the pool; the terminal of unfinished work
+  carries its continuation facts (`resumable`). The separate Plan pipeline
+  keeps today's behavior and does not yet emit these in-run continuation facts.
+  verify: transient-retry
+  orchestrator tests;
+  `packages/orchestrator/src/inrun-continuity.integration.test.ts`.
 - **INV-047** A repeated identical diff against a still-failing required
   gate is reported honestly as `stuck_no_progress`, never success. verify:
   until-clean stuck test.
@@ -1011,8 +1022,11 @@ invariant or operator decision before proceeding.
   a typed retryable error, never a removed-with-warning receipt). ONE server
   projection — `accountPools` — owns the informational per-harness
   `next_up` verdict, computed by the same routing owner, so no surface
-  re-derives it. Native-session resume never crosses rows (the engine
-  boundary re-verifies every cached session against the RESOLVED account).
+  re-derives it. A native session has ONE holder row at a time: resume is
+  re-verified against the RESOLVED account at the engine boundary, and a
+  session reaches another row only through a disclosed MOVE of its history
+  file by the harness adapter (session files only, never credentials),
+  recorded in the attempt's session capsule.
   Deletion retires the canonical id PLUS every migrated legacy alias (the
   null quota subject, default lane homes, durable pins, `rotation_eligible`
   entries) in one lifecycle operation, so an id cannot dangle or resurrect
@@ -1052,9 +1066,16 @@ invariant or operator decision before proceeding.
   verbatim, a summarized older prefix, accepted decisions, the active plan
   reference, a workspace anchor), and the turn DISCLOSES the hydration
   visibly in both UI and CLI. Returning to a previously used lane resumes
-  it natively and injects only the missed delta. Native sessions never
-  cross profiles (INV-135). Silent conversation loss on any switch is a
-  release-blocking bug of the same class as data loss. verify: continuity
-  canary `[INV-137:a-b-a-continuity]`; lane checkpoint + packet-builder tests
+  it natively and injects only the missed delta. A native session has one
+  holder profile at a time (INV-135). In Agent and Ask, an in-run account hop
+  MOVES the session file into the next profile's store and resumes it there —
+  disclosed on the thread as a lane switch that resumed natively — rather than
+  hydrating a packet; a session that cannot be moved continues as a fresh
+  session re-grounded by the evidence index, disclosed as `packet`. Silent
+  conversation loss on any switch is a release-blocking bug of the same
+  class as data loss. verify: continuity canary
+  `[INV-137:a-b-a-continuity]`; lane checkpoint + packet-builder tests
   (`packages/orchestrator/src/continuity.test.ts`,
-  `packages/daemon/src/threads.test.ts`); disclosure UI/CLI review.
+  `packages/daemon/src/threads.test.ts`); in-run carrier contract
+  (`packages/orchestrator/src/inrun-continuity.integration.test.ts`);
+  disclosure UI/CLI review.

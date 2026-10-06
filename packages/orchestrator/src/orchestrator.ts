@@ -16,20 +16,26 @@ import {
   cancelledCandidatesResult,
   emptyCandidateResult,
   failedCandidatesResult,
+  failAfterCandidates,
 } from "./candidateTerminals.js";
 import { existsSync } from "node:fs";
 import {
   effectiveAuthPreference,
   observeNativeSessionEvent,
   resumeSessionForProfile,
-  rotateSpecOnTypedLimit,
 } from "./credential-profiles.js";
 import {
   AdmissionProfileProbes,
   OrchestratorCredentials,
   reviewerProfileResolver,
-  rotatedSpecInLaneHome,
 } from "./orchestrator-credentials.js";
+import { InRunContinuity } from "./inrun-continuity.js";
+import {
+  continuityWorkspace,
+  resumableOf,
+  resumableTerminal,
+  type ContinuityTerminalFacts,
+} from "./continuity-terminal.js";
 import { accountPoolRows } from "./account-pool.js";
 import type { PreProgressRefusalMemory } from "./pre-progress-refusal.js";
 import { writeRunTelemetryArtifact } from "./runTelemetryWriter.js";
@@ -206,7 +212,6 @@ import {
   dropDeltaPastBudget,
   emitPlanProgress,
   emitTransientExhausted,
-  emitTransientRetryPlan,
   observeReadonlySpend,
   recordAdapterThrow,
 } from "./laneStreamEvents.js";
@@ -2449,10 +2454,10 @@ export class Orchestrator {
     let applied = appliedNow();
     const attemptStartedMs = Date.now();
     const budgetSignalState = { quotaPressureDisclosed: false };
-    const triedProfiles = new Set<string>(); // W5.4 failover: each profile at most once
     let cost = 0;
     let costEstimated = false;
     let harnessErrored = false;
+    let streamBudgetDenied = false;
     let processingRefusal: ProcessingBudgetAdmissionError | RoutingPreflightError | null = null;
     let poolExhausted: Error | null = null; // A5: typed pool-exhausted refusal
     const deltaFlood = { count: 0, disclosed: false }; // W-C4 per-attempt delta budget
@@ -2486,6 +2491,14 @@ export class Orchestrator {
     const onAbort = () => void adapter.cancel?.(activeSessionId)?.catch(() => {});
     if (signal?.aborted) onAbort();
     else signal?.addEventListener("abort", onAbort, { once: true });
+    const continuity = new InRunContinuity(
+      this.continuityDeps(adapter, routed, contract, attemptId, paths, runInput, log, {
+        envelope,
+        harnessHome,
+        workOrder: prompt,
+        firstPrompt: spec.prompt,
+      }),
+    );
     try {
       for (let nativeTry = 0; !signal?.aborted; nativeTry += 1) {
         // A3 per-try isolation: neither output nor progress markers leak across tries.
@@ -2501,17 +2514,13 @@ export class Orchestrator {
           nativeTry === 0
             ? spec
             : HarnessRunSpec.parse({ ...spec, session_id: newId("ses"), extra: { ...spec.extra } });
-        // Per-TRY abort controller: the inactivity watchdog aborts THIS try's
-        // stream (killing the process group through the existing abort
-        // plumbing) without touching the run-level cancel signal, so a timeout
-        // and a user cancel stay distinguishable. Recreated per
-        // nativeTry — a transient retry must get a LIVE signal, not the
-        // previous try's already-aborted composite.
+        // The watchdog aborts only this try; run cancellation also prevents successors.
         const attemptAbort = new AbortController();
         runSpec.extra["abortSignal"] = signal
           ? AbortSignal.any([signal, attemptAbort.signal])
           : attemptAbort.signal;
         activeSessionId = runSpec.session_id;
+        continuity.beginTry(runSpec, nativeTry, attemptAbort);
         // #363: bound before the spawn — a credential change mid-try voids it.
         const refusal = this.credentials.bindPreProgressRefusal(adapter.id, runSpec);
         const transientStart = telemetry.transientFailures.length;
@@ -2548,14 +2557,16 @@ export class Orchestrator {
             log?.emit("harness.event", harnessEventPayload(adapter.id, attemptId, safeEv), display);
             if (signal?.aborted) break;
             if (display) safeInvoke(onHarnessEvent, safeEv);
-            // In-place turns run in the live tree under the native environment, so
-            // the session they emit IS reachable for the next turn: record it. An
-            // ISOLATED envelope-born session lives in the scoped home that dispose()
-            // deletes, so observing it would poison the thread resume map with
-            // unreachable ids — skip it there.
-            if (inPlaceEnvelope) observeNativeSessionEvent(runInput, adapter.id, safeEv);
             observeAuthSwitch(log, adapter.id, attemptId, safeEv);
             observeAttemptTelemetry(telemetry, safeEv);
+            const mismatch = continuity.observe(safeEv, runSpec, telemetry.outputMarkers);
+            if (mismatch) {
+              harnessErrored = true;
+              errors.push(mismatch);
+              break;
+            }
+            if (inPlaceEnvelope && continuity.mayPublishSession)
+              observeNativeSessionEvent(runInput, adapter.id, safeEv);
             // QA-024: the injected delegation belt's MCP server reported a
             // terminal startup failure. Disclose it ONCE while live; recoverable
             // exact tool-result failures are evaluated at attempt finalization.
@@ -2590,7 +2601,7 @@ export class Orchestrator {
               cost = usage.cost;
               costEstimated = usage.costEstimated;
               if (usage.hardCapReached) {
-                harnessErrored = true;
+                harnessErrored = streamBudgetDenied = true;
                 errors.push("budget hard cap reached mid-attempt; stream aborted");
                 break;
               }
@@ -2647,87 +2658,36 @@ export class Orchestrator {
         const deliverableEmpty = workspaceUnchanged && answer.text().length === 0;
         const delivered = !harnessErrored && !deliverableEmpty && !signal?.aborted;
         this.credentials.noteTryServed(refusal, telemetry.outputMarkers, delivered);
-        // W5.4 + A2 failover: a typed-limit hit OR a structural pre-progress
-        // death rebuilds the spec on a NEW session under the next profile.
-        if (harnessErrored && runInput && !signal?.aborted) {
-          const rotated = await rotateSpecOnTypedLimit({
-            spec,
-            harnessId: adapter.id,
-            attemptId,
-            policy: this.credentials.profilePolicy(contract.repo.root, adapter.id),
-            registry: this.config(contract.repo.root)?.global.credential_profiles ?? [],
-            snapshots: this.deps.quotaSnapshots?.() ?? [],
-            probeReadyProfiles: () =>
-              this.credentials.readyProfileIdsForRotation(
-                runInput,
-                adapter.id,
-                spec.credential_profile ?? null,
-                triedProfiles,
-                spec.model_hint ?? null,
-              ),
-            ...this.credentials.rotationObservations(adapter, spec, newTransients, refusal),
-            triedProfiles,
-            markers: telemetry.outputMarkers,
-            requestRefused: Boolean(telemetry.requestRefusal),
-            sawTypedLimit,
-            sawRetryable,
-            attemptErrored: harnessErrored,
-            // Rotation evidence reads the POLICY-accepted try output: refusal
-            // prose arriving as mid-stream MESSAGE events (claude org-disabled)
-            // is no deliverable; the transient gate keeps RAW deliverableEmpty.
-            deliverableEmpty:
-              workspaceUnchanged && acceptedTryOutput(answer, harnessErrored).length === 0,
-            workspaceDiffNonEmpty: !workspaceUnchanged,
-            lastLimit: telemetry.rateLimits.at(-1) ?? null,
-            emit: (type, payload) => log?.emit(type, payload),
-            newSessionId: () => newId("ses"),
-            defaultRouteWasVendorNative: routed.authRouteEstimate === "local_session",
-            // D-U6: an explicit pin never rotates; pool-selected rows do.
-            pinned: runInput.credentialProfileId != null,
-          });
-          // A5 ordering: an exhausted pool terminalizes TYPED here, BEFORE the
-          // transient gate below burns same-profile retries (limits classify
-          // as retryable) on the already-refused subject.
-          if (rotated && "poolExhausted" in rotated) {
-            poolExhausted = rotated.poolExhausted;
-            errors.push(safeErrorMessage(poolExhausted));
-            break;
-          }
-          if (rotated) {
-            // INV-137: the rotated row runs in ITS OWN lane home (no-op for
-            // isolated envelopes and native-env in-place turns).
-            spec = rotatedSpecInLaneHome(
-              spec,
-              rotated,
-              (id) => this.laneHomeEnvFor(runInput, adapter.id, id),
-              runInput.credentialProfileId ?? null,
-            );
-            applied = appliedNow();
-            errors.length = 0;
-            harnessErrored = false;
-            continue;
-          }
-        }
-        if (
-          !harnessErrored ||
-          !sawRetryable ||
-          !deliverableEmpty ||
-          nativeTry >= retryPolicy.maxRetries ||
-          signal?.aborted
-        )
-          break;
-
-        const delayMs = emitTransientRetryPlan(
-          (t, p) => log?.emit(t, p),
-          adapter.id,
-          attemptId,
-          telemetry,
+        const verdict = await continuity.afterTry({
+          runSpec,
           nativeTry,
-          retryPolicy,
-        );
+          harnessErrored,
+          budgetStopped: streamBudgetDenied,
+          aborted: signal?.aborted === true,
+          requestRefused: Boolean(telemetry.requestRefusal),
+          newTransients,
+          sawTypedLimit,
+          sawRetryable,
+          answer,
+          rawDeliverableEmpty: deliverableEmpty,
+          workspaceDiffNonEmpty: !workspaceUnchanged,
+          currentDiff,
+          markers: telemetry.outputMarkers,
+          lastLimit: telemetry.rateLimits.at(-1) ?? null,
+          refusal,
+          telemetry,
+        });
+        if (verdict.kind === "terminal") {
+          poolExhausted = verdict.error;
+          errors.push(safeErrorMessage(poolExhausted));
+          break;
+        }
+        if (verdict.kind === "break") break;
+        spec = verdict.spec;
+        applied = appliedNow();
         errors.length = 0;
         harnessErrored = false;
-        await sleep(delayMs);
+        await sleep(verdict.delayMs);
       }
     } finally {
       live.release();
@@ -2827,6 +2787,14 @@ export class Orchestrator {
       errors.push(`work_report contract: ${unwrapped.contractViolation}`);
     const deliverablePresent = finalized.deliverablePresent;
     const errored = harnessErrored || webBlocked;
+    const resumable = await continuity.finish({
+      runSpec: spec,
+      errored,
+      nonSuccess: !gatesPassed(gates),
+      aborted: signal?.aborted === true,
+      cancelReason: typeof signal?.reason === "string" ? signal.reason : null,
+      workState: finalized.workState,
+    });
     setAttemptOutcome(telemetry, {
       deliverablePresent,
       gatesPassed: gates.length > 0 ? gatesPassed(gates) : null,
@@ -2924,6 +2892,69 @@ export class Orchestrator {
           : {}),
       outcomeClass: finalized.outcomeClass,
       applied,
+      ...continuity.terminalFacts(resumable),
+    };
+  }
+
+  private continuityDeps(
+    adapter: HarnessAdapter,
+    routed: RoutedAdapter,
+    contract: ActiveTaskContract,
+    attemptId: string,
+    paths: RunPaths,
+    runInput: RunInput | undefined,
+    log: EventLog | undefined,
+    lane: {
+      envelope: WorkspaceEnvelope | null;
+      harnessHome: ScopedHarnessHome | null;
+      workOrder: string;
+      firstPrompt: string;
+    },
+  ): ConstructorParameters<typeof InRunContinuity>[0] {
+    const repoRoot = contract.repo.root;
+    const cwd = lane.envelope?.worktree_path ?? (runInput ? this.execRootOf(runInput) : repoRoot);
+    return {
+      adapter,
+      runId: paths.runId,
+      attemptId,
+      runDir: paths.root,
+      attemptDir: join(paths.attemptsDir, attemptId),
+      cwd,
+      workspace: continuityWorkspace(lane.envelope, cwd),
+      workOrder: lane.workOrder,
+      firstPrompt: lane.firstPrompt,
+      registry: this.config(repoRoot)?.global.credential_profiles ?? [],
+      policy: this.credentials.profilePolicy(repoRoot, adapter.id),
+      snapshots: this.deps.quotaSnapshots?.() ?? [],
+      retryPolicy: transientRetryPolicy(this.config(repoRoot)),
+      pinned: runInput?.credentialProfileId != null, // D-U6: a pin never rotates
+      defaultRouteWasVendorNative: routed.authRouteEstimate === "local_session",
+      requestedProfileId: runInput?.credentialProfileId ?? null,
+      rotationEnabled: runInput !== undefined,
+      laneEnvFor: (id) => (runInput ? this.laneHomeEnvFor(runInput, adapter.id, id) : null),
+      probeReadyProfiles: (spec, tried) =>
+        runInput
+          ? this.credentials.readyProfileIdsForRotation(
+              runInput,
+              adapter.id,
+              spec.credential_profile ?? null,
+              tried,
+              spec.model_hint ?? null,
+            )
+          : Promise.resolve(new Set<string>()),
+      rotationObservations: (spec, transients, refusal) =>
+        this.credentials.rotationObservations(adapter, spec, transients, refusal),
+      emit: (type, payload) => log?.emit(type, payload),
+      route: routed,
+      newSessionId: () => newId("ses"),
+      thread: runInput?.threadId
+        ? {
+            threadId: runInput.threadId,
+            turnId: runInput.threadContinuity?.turnId ?? null,
+            onSessionObserved: runInput.onSessionObserved,
+            onContinuityResolved: runInput.onContinuityResolved,
+          }
+        : null,
     };
   }
 
@@ -3763,7 +3794,11 @@ export class Orchestrator {
     } catch (err) {
       // Review preflight/evidence failures end TERMINALLY with artifacts —
       // never as an escaped throw that orphans the run dir.
-      return failTerminally(log, store, paths, runId, taskId, mode, "review", err, ledger.spend());
+      return failAfterCandidates(
+        { log, store, paths, runId, taskId, mode, ledger, runs },
+        "review",
+        err,
+      );
     } finally {
       // Review preflight failures must not leak candidate worktrees.
       await disposeReviewEnvelopes();
@@ -3958,16 +3993,10 @@ export class Orchestrator {
       });
     } catch (err) {
       // Arbitration throws end terminally with artifacts, never as an orphan.
-      return failTerminally(
-        log,
-        store,
-        paths,
-        runId,
-        taskId,
-        mode,
+      return failAfterCandidates(
+        { log, store, paths, runId, taskId, mode, ledger, runs },
         "arbitration",
         err,
-        ledger.spend(),
       );
     }
     log.emit("arbitration.completed", {
@@ -4378,13 +4407,19 @@ export class Orchestrator {
       log.emit("work_product.emitted", { winner: result.decision.winner });
     }
     if (!isFailureTerminal) {
-      log.emit("run.completed", { lifecycle: facts.lifecycle, facts, reason: facts.reason });
+      log.emit("run.completed", {
+        lifecycle: facts.lifecycle,
+        facts,
+        reason: facts.reason,
+        ...resumableTerminal(store, paths, winnerRun ? [winnerRun] : runs, isFailureTerminal),
+      });
     } else if (facts.lifecycle === "succeeded") {
       // needsDecision at terminal — the event's phase must agree with
       // failure.yaml (a verify block is phase "verification", not "review").
       log.emit("run.blocked", {
         lifecycle: facts.lifecycle,
         facts,
+        ...resumableTerminal(store, paths, runs, isFailureTerminal),
         phase:
           deliveryFailureReason && !finalVerifyFailed
             ? "delivery"
@@ -4400,6 +4435,7 @@ export class Orchestrator {
         reason: facts.reason,
         phase: "arbitration",
         failure_ref: "final/failure.yaml",
+        ...resumableTerminal(store, paths, runs, isFailureTerminal),
       });
     }
 
@@ -5158,16 +5194,10 @@ export class Orchestrator {
               facts: makeOutcomeFacts("failed", { noChanges: run.files.noChanges }),
               log,
             });
-          return failTerminally(
-            log,
-            store,
-            paths,
-            runId,
-            taskId,
-            mode,
+          return failAfterCandidates(
+            { log, store, paths, runId, taskId, mode, ledger, runs: [run] },
             "review",
             err,
-            ledger.spend(),
           );
         }
 
@@ -5455,6 +5485,12 @@ export class Orchestrator {
     // A needs-decision terminal (review blocked / checks failed) writes a
     // failure record + fires run.blocked even though the lifecycle succeeded.
     const convIsFailureTerminal = facts.lifecycle !== "succeeded" || convNeedsDecision;
+    const continuation = resumableTerminal(
+      store,
+      paths,
+      lastRun ? [lastRun] : [],
+      convIsFailureTerminal,
+    );
     if (convIsFailureTerminal) {
       // A5 last-result lift: the LAST attempt's typed mid-attempt refusal
       // survives onto the terminal; budget/cancel/needs-decision outrank it.
@@ -5536,6 +5572,7 @@ export class Orchestrator {
     }
     if (!convIsFailureTerminal) {
       log.emit("run.completed", {
+        ...continuation,
         lifecycle: facts.lifecycle,
         facts,
         reason: facts.reason,
@@ -5543,6 +5580,7 @@ export class Orchestrator {
       });
     } else if (facts.lifecycle === "succeeded") {
       log.emit("run.blocked", {
+        ...continuation,
         lifecycle: facts.lifecycle,
         facts,
         attempts: attempt,
@@ -5551,6 +5589,7 @@ export class Orchestrator {
       });
     } else {
       log.emit("run.failed", {
+        ...continuation,
         lifecycle: facts.lifecycle,
         facts,
         reason: facts.reason,
@@ -6278,7 +6317,7 @@ export class Orchestrator {
         candidates: [],
       };
     }
-    interface ReadonlyAttempt {
+    interface ReadonlyAttempt extends ContinuityTerminalFacts {
       attemptId: string;
       harnessId: string;
       status: "success" | "failed" | "blocked";
@@ -6509,10 +6548,6 @@ export class Orchestrator {
               : null) ?? roHome.env,
         });
         this.credentials.stampProfileSelection(spec, input, adapter.id);
-        const reportAbort = new AbortController();
-        spec.extra["abortSignal"] = input.signal
-          ? AbortSignal.any([input.signal, reportAbort.signal])
-          : reportAbort.signal;
         const reportInteraction = this.interactionChannelFor(
           input,
           log,
@@ -6547,7 +6582,6 @@ export class Orchestrator {
         return {
           knobs,
           spec,
-          reportAbort,
           reportInteraction,
           readonlyWorkMode,
           attemptEventsPath,
@@ -6602,7 +6636,6 @@ export class Orchestrator {
       const {
         knobs,
         spec: preparedSpec,
-        reportAbort,
         reportInteraction,
         readonlyWorkMode,
         attemptEventsPath,
@@ -6622,6 +6655,14 @@ export class Orchestrator {
       const retryPolicy = transientRetryPolicy(this.config(input.repoRoot));
       let activeSessionId = spec.session_id;
       const live = liveAttempt(input, routed, paths, contract, attemptId, () => activeSessionId);
+      const continuity = new InRunContinuity(
+        this.continuityDeps(adapter, routed, contract, attemptId, paths, input, log, {
+          envelope: null,
+          harnessHome: null,
+          workOrder: input.prompt,
+          firstPrompt: spec.prompt,
+        }),
+      );
       const onAbort = () => void adapter.cancel?.(activeSessionId)?.catch(() => {});
       if (input.signal) {
         if (input.signal.aborted) onAbort();
@@ -6634,7 +6675,6 @@ export class Orchestrator {
       let processingRefusal: ProcessingBudgetAdmissionError | RoutingPreflightError | null = null;
       let poolExhausted: Error | null = null; // A5: typed pool-exhausted refusal
       try {
-        const triedProfiles = new Set<string>(); // W5.4 failover: each profile at most once
         for (let nativeTry = 0; !input.signal?.aborted; nativeTry += 1) {
           // A3 per-try isolation (candidate-lane parity): neither a failed try's
           // output nor its progress markers leak into the next try's evidence.
@@ -6648,10 +6688,14 @@ export class Orchestrator {
               : HarnessRunSpec.parse({
                   ...spec,
                   session_id: newId("ses"),
-                  resume_session_id: null,
                   extra: { ...spec.extra },
                 });
           activeSessionId = runSpec.session_id;
+          const tryAbort = new AbortController();
+          runSpec.extra["abortSignal"] = input.signal
+            ? AbortSignal.any([input.signal, tryAbort.signal])
+            : tryAbort.signal;
+          continuity.beginTry(runSpec, nativeTry, tryAbort);
           // #363: bound before the spawn — a credential change mid-try voids it.
           const refusal = this.credentials.bindPreProgressRefusal(adapter.id, runSpec);
           const transientStart = telemetry.transientFailures.length;
@@ -6669,7 +6713,7 @@ export class Orchestrator {
               timeoutMs: harnessInactivityTimeoutMs(this.config(input.repoRoot)),
               countsAsProgress: countsAsAgentProgress,
               onTimeout: () => {
-                reportAbort.abort();
+                tryAbort.abort();
                 void adapter.cancel?.(activeSessionId)?.catch(() => {});
               },
               isSuspended: () => (reportInteraction?.pendingCount?.() ?? 0) > 0,
@@ -6678,13 +6722,6 @@ export class Orchestrator {
             for await (const ev of watchedReport) {
               const safeEv = redactHarnessEvent(ev);
               if (safeEv.payload?.["buffered"] !== true) safeInvoke(input.onHarnessEvent, safeEv);
-              // A thread ASK turn IS a chat turn now (INV-034): its native
-              // session lives in the DURABLE per-lane home, so record it for the
-              // next lane turn's resume. The read-only fallback chain is
-              // sequential (never the parallel deep-scan swarm, which is
-              // excluded from `laneRun`), so recordSession's upsert keeps the
-              // latest lane session without a race.
-              if (laneRun) observeNativeSessionEvent(input, adapter.id, safeEv);
               observeAuthSwitch(log, adapter.id, attemptId, safeEv);
               log.emit(
                 "harness.event",
@@ -6694,6 +6731,13 @@ export class Orchestrator {
               appendLine(attemptEventsPath, JSON.stringify(safeEv));
               if (input.signal?.aborted) break;
               observeAttemptTelemetry(telemetry, safeEv);
+              const mismatch = continuity.observe(safeEv, runSpec, telemetry.outputMarkers);
+              if (mismatch) {
+                harnessError = mismatch;
+                break;
+              }
+              if (laneRun && continuity.mayPublishSession)
+                observeNativeSessionEvent(input, adapter.id, safeEv);
               emitPlanProgress((t, p) => log.emit(t, p), adapter.id, attemptId, safeEv);
               // read-only routes burn quota too (the orchestrate PLANNER is
               // the loudest) — same single owner as the agent loop.
@@ -6719,7 +6763,7 @@ export class Orchestrator {
                 budgetStopped = streamBudgetDenied = true;
                 budgetDenial ??= streamDenial;
                 harnessError = streamDenial.reason;
-                reportAbort.abort();
+                tryAbort.abort();
                 void adapter.cancel?.(activeSessionId)?.catch(() => {});
                 break;
               }
@@ -6751,84 +6795,33 @@ export class Orchestrator {
           const reportSoFar = answer.text();
           const delivered = !harnessError && reportSoFar.length > 0 && !input.signal?.aborted;
           this.credentials.noteTryServed(refusal, telemetry.outputMarkers, delivered);
-          // W5.4 + A2 reactive failover, READ-ONLY lane (same contract as the
-          // candidate lane: typed limit or structural pre-progress death).
-          if (harnessError && !input.signal?.aborted) {
-            const rotated = await rotateSpecOnTypedLimit({
-              spec,
-              harnessId: adapter.id,
-              attemptId,
-              policy: this.credentials.profilePolicy(input.repoRoot, adapter.id),
-              registry: this.config(input.repoRoot)?.global.credential_profiles ?? [],
-              snapshots: this.deps.quotaSnapshots?.() ?? [],
-              probeReadyProfiles: () =>
-                this.credentials.readyProfileIdsForRotation(
-                  input,
-                  adapter.id,
-                  spec.credential_profile ?? null,
-                  triedProfiles,
-                  spec.model_hint ?? null,
-                ),
-              ...this.credentials.rotationObservations(adapter, spec, newTransients, refusal),
-              triedProfiles,
-              markers: telemetry.outputMarkers,
-              requestRefused: Boolean(telemetry.requestRefusal),
-              sawTypedLimit,
-              sawRetryable,
-              attemptErrored: harnessError !== null,
-              // Same policy owner as the candidate lane: an errored try's
-              // narration is not a report; the transient gate keeps reportSoFar.
-              deliverableEmpty: acceptedTryOutput(answer, harnessError !== null).length === 0,
-              lastLimit: telemetry.rateLimits.at(-1) ?? null,
-              emit: (type, payload) => log.emit(type, payload),
-              newSessionId: () => newId("ses"),
-              defaultRouteWasVendorNative: routed.authRouteEstimate === "local_session",
-              // D-U6: an explicit pin never rotates; pool-selected rows do.
-              pinned: input.credentialProfileId != null,
-            });
-            // A5 ordering: same as the candidate lane — terminalize typed
-            // before the transient gate burns same-profile retries. The pool
-            // refusal APPENDS to the original harness error (candidate-lane
-            // parity: errors.push) instead of erasing the true failure.
-            if (rotated && "poolExhausted" in rotated) {
-              poolExhausted = rotated.poolExhausted;
-              harnessError = harnessError
-                ? `${harnessError}; ${safeErrorMessage(poolExhausted)}`
-                : safeErrorMessage(poolExhausted);
-              break;
-            }
-            if (rotated) {
-              // INV-137: the rotated row's session must land in ITS OWN lane
-              // home — never the previous row's lane store.
-              spec = rotatedSpecInLaneHome(
-                spec,
-                rotated,
-                (id) => this.laneHomeEnvFor(input, adapter.id, id),
-                input.credentialProfileId ?? null,
-              );
-              harnessError = null;
-              continue;
-            }
-          }
-          if (
-            !harnessError ||
-            !sawRetryable ||
-            reportSoFar.length > 0 ||
-            nativeTry >= retryPolicy.maxRetries ||
-            input.signal?.aborted
-          )
-            break;
-
-          const delayMs = emitTransientRetryPlan(
-            (t, p) => log.emit(t, p),
-            adapter.id,
-            attemptId,
-            telemetry,
+          const verdict = await continuity.afterTry({
+            runSpec,
             nativeTry,
-            retryPolicy,
-          );
+            harnessErrored: harnessError !== null,
+            aborted: input.signal?.aborted === true,
+            requestRefused: Boolean(telemetry.requestRefusal),
+            newTransients,
+            sawTypedLimit,
+            sawRetryable,
+            answer,
+            rawDeliverableEmpty: reportSoFar.length === 0,
+            markers: telemetry.outputMarkers,
+            lastLimit: telemetry.rateLimits.at(-1) ?? null,
+            refusal,
+            telemetry,
+          });
+          if (verdict.kind === "terminal") {
+            poolExhausted = verdict.error;
+            harnessError = harnessError
+              ? `${harnessError}; ${safeErrorMessage(poolExhausted)}`
+              : safeErrorMessage(poolExhausted);
+            break;
+          }
+          if (verdict.kind === "break") break;
+          spec = verdict.spec;
           harnessError = null;
-          await sleep(delayMs);
+          await sleep(verdict.delayMs);
         }
       } finally {
         live.release();
@@ -6902,6 +6895,13 @@ export class Orchestrator {
         // interruptions keep the strict deliverable requirement.
         emptyDeliverableAllowed: roFinalized.outcomeClass === "clean",
       });
+      const roResumable = await continuity.finish({
+        runSpec: spec,
+        errored: harnessError !== null,
+        aborted: input.signal?.aborted === true,
+        cancelReason: typeof input.signal?.reason === "string" ? input.signal.reason : null,
+        workState: roFinalized.workState,
+      });
       if (harnessError) {
         log.emit("harness.completed", {
           harness_id: adapter.id,
@@ -6922,6 +6922,7 @@ export class Orchestrator {
             : poolExhausted || processingRefusal
               ? { declaredFailure: declaredFailure(processingRefusal ?? poolExhausted) }
               : {}),
+          ...continuity.terminalFacts(roResumable),
         });
         if (opts.deepScan) {
           store.writeText(
@@ -6949,6 +6950,7 @@ export class Orchestrator {
         error: scoutInterrupted ? "context capacity exhausted before the scout completed" : null,
         telemetry,
         ...(scoutInterrupted ? { interrupted: true } : {}),
+        ...continuity.terminalFacts(roResumable),
       });
       if (opts.deepScan) {
         const warningNote = toolWarnings(telemetry).length
@@ -7145,6 +7147,8 @@ export class Orchestrator {
         ledger.spend(),
         input.signal,
         store,
+        undefined,
+        resumableOf(attempts, "cancelled"),
       );
     if (input.signal?.aborted) return cancelledTerminal();
 
@@ -7244,6 +7248,7 @@ export class Orchestrator {
           harness_id: terminalHarnessId,
           error: singleError,
           failure_ref: "final/failure.yaml",
+          ...resumableTerminal(store, paths, attempts, true),
         });
       } else {
         log.emit("run.failed", {
@@ -7254,6 +7259,7 @@ export class Orchestrator {
           harness_id: terminalHarnessId,
           error: singleError,
           failure_ref: "final/failure.yaml",
+          ...resumableTerminal(store, paths, attempts, true),
         });
       }
       return {
@@ -7345,6 +7351,7 @@ export class Orchestrator {
         phase: scanBudgetMapping ? scanBudgetMapping.phase : "harness",
         error: message,
         failure_ref: "final/failure.yaml",
+        ...resumableTerminal(store, paths, attempts, true),
       });
       return {
         spendUsd: ledger.spend(),
@@ -7526,18 +7533,21 @@ export class Orchestrator {
         reason: terminalFacts.reason,
         phase: "executor",
         failure_ref: "final/failure.yaml",
+        ...resumableTerminal(store, paths, attempts, true),
       });
     } else if (workVetoed) {
       log.emit("run.blocked", {
         lifecycle: terminalFacts.lifecycle,
         facts: terminalFacts,
         reason: terminalFacts.reason,
+        ...resumableTerminal(store, paths, attempts, true),
       });
     } else {
       log.emit("run.completed", {
         lifecycle: terminalFacts.lifecycle,
         facts: terminalFacts,
         reason: terminalFacts.reason,
+        ...resumableTerminal(store, paths, attempts),
       });
     }
 

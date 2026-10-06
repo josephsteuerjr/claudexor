@@ -11,7 +11,9 @@ import { toolWarnings } from "./attemptTelemetry.js";
 import { directoryHasOutput, type DirectoryCandidate } from "./directoryCandidate.js";
 import { gatesPassed } from "@claudexor/review";
 
-export interface CandidateRun {
+import type { ContinuityTerminalFacts } from "./continuity-terminal.js";
+
+export interface CandidateRun extends ContinuityTerminalFacts {
   attemptId: string;
   harnessId: string;
   label: string;

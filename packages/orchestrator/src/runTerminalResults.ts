@@ -9,11 +9,13 @@ import {
   RunFailureCode,
   type ModeKind,
   type RunOutcomeFacts,
+  type RunResumable,
   type VendorFailureEvidence,
   HarnessRequestRefusal,
 } from "@claudexor/schema";
 import { redactSecrets } from "@claudexor/util";
 import type { OrchestratorResult } from "./orchestrator.js";
+import { resumableTerminal, type ContinuityTerminalFacts } from "./continuity-terminal.js";
 import { terminalOutcomeFacts } from "./terminalOutcome.js";
 
 export function writeFailure(
@@ -160,6 +162,8 @@ export function cancelledResult(
   /** A prepared result may already carry independent checks/review/work facts
    * when cancellation wins during the Delegate terminal barrier. */
   priorFacts?: RunOutcomeFacts,
+  /** The attempt's continuation facts (cause wall_clock/cancelled, carriers), when any. */
+  resumable?: RunResumable | null,
 ): OrchestratorResult {
   if (writeTelemetry) {
     try {
@@ -202,11 +206,13 @@ export function cancelledResult(
     "cancelled",
     cancelReasonFromSignalToken(cancelReason),
   );
+  if (resumable && store) store.writeYaml(join(runDir, "final", "resumable.yaml"), resumable);
   log.emit("run.failed", {
     lifecycle: "cancelled",
     facts: cancelFacts,
     reason: cancelFacts.reason,
     ...(cancelReason ? { cancel_reason: cancelReason } : {}),
+    ...(resumable ? { resumable } : {}),
   });
   return {
     runId,
@@ -245,6 +251,7 @@ export function failTerminally(
     rawDetailRef?: string;
     nextActions?: string[];
     priorFacts?: RunOutcomeFacts;
+    continuity?: readonly ContinuityTerminalFacts[];
   } = {},
 ): OrchestratorResult {
   const budget =
@@ -286,6 +293,7 @@ export function failTerminally(
     phase,
     error: message,
     failure_ref: "final/failure.yaml",
+    ...resumableTerminal(store, paths, failureMeta.continuity ?? [], true),
   });
   return {
     runId,

@@ -1,0 +1,182 @@
+{
+  "$ref": "#/definitions/RunContinuityReceipt",
+  "definitions": {
+    "RunContinuityReceipt": {
+      "type": "object",
+      "properties": {
+        "tryIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Native try within the attempt; joins the receipt to its try."
+        },
+        "attemptId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Non-empty identifier string."
+        },
+        "carrier": {
+          "type": "string",
+          "enum": [
+            "native",
+            "native_moved",
+            "packet",
+            "fresh"
+          ],
+          "description": "Carrier of a continued try: native (the vendor's own session, same account), native_moved (the session file made visible in the next account's store, then resumed there), packet (a fresh session re-grounded by an evidence index), or fresh (nothing to carry — a replay of the original prompt)."
+        },
+        "cause": {
+          "type": "string",
+          "enum": [
+            "vendor_limit",
+            "pool_exhausted",
+            "pinned_limit",
+            "transport",
+            "context_exhausted",
+            "wall_clock",
+            "cancelled",
+            "host_restart",
+            "input_required",
+            "other"
+          ],
+          "description": "Typed reason the previous process stopped: a vendor limit (next account eligible), the whole pool spent, a pinned account's limit, a transport death (crash, timeout, watchdog), context exhaustion, the wall-clock deadline, a cancel, a daemon/host restart, a model that asked for input, or another typed cause."
+        },
+        "from": {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "$ref": "#/definitions/RunContinuityReceipt/properties/attemptId"
+            },
+            "attemptId": {
+              "$ref": "#/definitions/RunContinuityReceipt/properties/attemptId"
+            },
+            "profileId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RunContinuityReceipt/properties/attemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Non-empty identifier string."
+            }
+          },
+          "required": [
+            "runId",
+            "attemptId",
+            "profileId"
+          ],
+          "additionalProperties": false
+        },
+        "to": {
+          "type": "object",
+          "properties": {
+            "profileId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RunContinuityReceipt/properties/attemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Non-empty identifier string."
+            }
+          },
+          "required": [
+            "profileId"
+          ],
+          "additionalProperties": false
+        },
+        "workspace": {
+          "type": "string",
+          "enum": [
+            "same_root",
+            "different_root"
+          ],
+          "description": "Whether the continued try runs in the predecessor's execution root."
+        },
+        "memory": {
+          "type": "string",
+          "enum": [
+            "full",
+            "partial",
+            "unknown"
+          ],
+          "description": "Its own fact: a native resume carries the whole history (full); a packet re-brief is partial; a native resume that lost history (e.g. a rejected compacted item) is partial/unknown."
+        },
+        "instructions": {
+          "type": "string",
+          "enum": [
+            "as_sent",
+            "vendor_snapshot"
+          ],
+          "description": "as_sent: the successor's instructions equal the predecessor's; vendor_snapshot: they differ, and the vendor may resend its recorded system prompt instead (claude records it on the first request)."
+        },
+        "reingestedTokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Input + cache-creation tokens of the first resumed request, when known."
+        },
+        "observedModel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "THIS try's attested model (never borrowed from another try)."
+        },
+        "modelMismatch": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "identityCheck": {
+          "type": "string",
+          "enum": [
+            "matched_before_effects",
+            "mismatch_before_effects",
+            "mismatch_after_possible_effects",
+            "not_applicable"
+          ],
+          "description": "Whether the resumed vendor session was the one requested, judged at the earliest handshake (codex thread/resume before turn/start; claude system/init): matched, mismatch caught before the child could act, mismatch caught after it may have acted, or no resume was requested."
+        },
+        "inputDelivery": {
+          "type": "string",
+          "enum": [
+            "confirmed",
+            "uncertain",
+            "not_applicable"
+          ],
+          "description": "Whether the predecessor's last input (its turn prompt or an admitted steering message) is known to be in the vendor history: confirmed, uncertain (carried in the notice as a reference to reconcile, never replayed blindly), or not applicable."
+        }
+      },
+      "required": [
+        "tryIndex",
+        "attemptId",
+        "carrier",
+        "cause",
+        "from",
+        "to",
+        "workspace",
+        "memory",
+        "instructions",
+        "reingestedTokens",
+        "observedModel",
+        "modelMismatch",
+        "identityCheck",
+        "inputDelivery"
+      ],
+      "additionalProperties": false,
+      "description": "Receipt of one continued try: carrier, cause, accounts, memory, model attestation."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -23,6 +23,7 @@ import {
 } from "./app-server-threads.js";
 import { parseCodexStderrFailure, type CodexParseState } from "./parse.js";
 import { parseCodexRpcError } from "./rpc-error.js";
+import { codexResumeIdentityMismatch } from "./resume-identity.js";
 
 export { CodexAppServerController } from "./app-server-protocol.js";
 export { codexAppServerEvents, codexAppServerThreadParams } from "./app-server-protocol.js";
@@ -361,6 +362,12 @@ export async function* runCodexAppServer(
     const thread = asObject(threadResult["thread"]);
     const threadId = thread?.["id"];
     if (typeof threadId !== "string") throw new Error("Codex app-server omitted thread id");
+    const identityMismatch = codexResumeIdentityMismatch(input.spec, threadId);
+    if (identityMismatch) {
+      await stopProcess();
+      yield* identityMismatch;
+      return;
+    }
     const rootWasUnknown = nativeThreadId === null;
     nativeThreadId = threadId;
     threadConfirmed = true;

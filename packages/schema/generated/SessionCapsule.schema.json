@@ -1,0 +1,78 @@
+{
+  "$ref": "#/definitions/SessionCapsule",
+  "definitions": {
+    "SessionCapsule": {
+      "type": "object",
+      "properties": {
+        "harness": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Harness that owns the session."
+        },
+        "nativeSessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The vendor's own session/thread id."
+        },
+        "holderProfileId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "description": "Non-empty identifier string."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Credential profile whose store currently holds the session; null = the harness default store."
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Absolute path of the located history file (the holder); null until located."
+        },
+        "mtimeMs": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Modification time of the located file (newest wins on a tie); null until located."
+        },
+        "sidecars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Absolute paths of sibling state a move must carry (claude `<sid>/` tool-results and subagents; codex rollout parts)."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory the session was created under."
+        },
+        "requestedModel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The model the spec requested; null = the harness default."
+        }
+      },
+      "required": [
+        "harness",
+        "nativeSessionId",
+        "holderProfileId",
+        "file",
+        "mtimeMs",
+        "cwd",
+        "requestedModel"
+      ],
+      "additionalProperties": false,
+      "description": "Durable per-attempt record of the native vendor session and its holder file."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
