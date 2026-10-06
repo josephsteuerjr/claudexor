@@ -206,6 +206,24 @@ describe("evidence collector (I/O)", () => {
     ]);
   });
 
+  it("one codex item with several paths is one call per path, each resolved by its own completion", () => {
+    const edit = (path: string) => ({
+      type: "file_change",
+      session_id: "s1",
+      tool: { name: "apply_patch", kind: "file", use_id: "patch-1", target: path },
+    });
+    expect(toolCallIndex([edit("one.ts"), edit("two.ts")])).toEqual([
+      { name: "apply_patch", target: "one.ts", resolved: false },
+      { name: "apply_patch", target: "two.ts", resolved: false },
+    ]);
+    expect(toolCallIndex([edit("one.ts"), edit("two.ts"), edit("one.ts"), edit("two.ts")])).toEqual(
+      [
+        { name: "apply_patch", target: "one.ts", resolved: true },
+        { name: "apply_patch", target: "two.ts", resolved: true },
+      ],
+    );
+  });
+
   it("prefers the attempt's own event log when present and lists changed files from a patch", () => {
     const dir = mkdtempSync(join(tmpdir(), "cx-evidence-"));
     roots.push(dir);
