@@ -32,6 +32,7 @@ import {
   type SessionCapsule,
 } from "@claudexor/schema";
 import { readTextSafe } from "@claudexor/util";
+import { retainedEnvelopeInChain } from "@claudexor/workspace";
 import {
   decideCarrier,
   prepareCarrier,
@@ -293,7 +294,11 @@ export async function openContinuity(
     pred.attemptId,
     deps.runDir,
   );
-  const sameRoot = samePath(continuation.adopt?.envelope.worktree_path ?? pred.root, deps.cwd);
+  const retainedRoot =
+    continuation.adopt?.envelope.worktree_path ??
+    retainedEnvelopeInChain([from, ...(from.ancestors ?? [])])?.envelope.worktree_path ??
+    null;
+  const sameRoot = samePath(retainedRoot, deps.cwd) || samePath(pred.root, deps.cwd);
   // The notice says the workspace is as it was left; in another tree that is
   // not known, so the child is told to check before relying on it.
   const patchPath = join(pred.runDir, "final", "patch.diff");

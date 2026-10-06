@@ -2196,7 +2196,8 @@ Endpoint semantics beyond the inventory:
   fails before adoption remains the head: continuation walks its ancestors to
   the nearest retained envelope and available session/evidence. An Ask head
   leaves the retained tree available for a later Agent successor. Adopting that
-  ancestor's tree reports `same_root`, even when the Ask ran at the project base.
+  ancestor's tree or explicitly selecting the same retained root reports
+  `same_root`, even when the Ask ran at the project base.
   Predecessor
   references are recorded in `context/continuation.json` before announcement;
   a failed head's `resumable` projection names its inherited carriers. Without

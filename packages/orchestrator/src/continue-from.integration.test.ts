@@ -705,7 +705,7 @@ describe("continueFrom through an unadopted head", () => {
     },
   );
 
-  it.each(["preflight", "ask"] as const)(
+  it.each(["preflight", "ask", "ask-same-root"] as const)(
     "reaches the retained tree after a %s successor",
     async (middle) => {
       let f!: Fixture;
@@ -741,25 +741,30 @@ describe("continueFrom through an unadopted head", () => {
           params: { prompt: WORK_ORDER, continueFrom: undefined as string | undefined },
         },
       ];
-      const continuation = (runId: string) =>
+      const continuation = (runId: string, sameRoot = false) =>
         continuationForRun(
           ControlRunStartRequest.parse({
             prompt: "",
             continueFrom: runId,
             scope: { kind: "project", root: f.root },
+            ...(sameRoot
+              ? { execution: { isolation: "live", workspaceRoot: held.envelope.worktree_path } }
+              : {}),
           }),
           { all: () => [{ records: () => records }] },
         );
       f.phase.current = "successor";
       const b = await runOnce(f, {
-        mode: middle === "ask" ? "ask" : "agent",
+        mode: middle === "preflight" ? "agent" : "ask",
         prompt: "Explain what is left",
         ...(middle === "preflight"
           ? { credentialProfileId: "missing-profile" }
           : { access: "readonly" as const }),
         continuation: continuation(a.result.runId),
       });
-      expect(b.result.lifecycle, b.result.summary).toBe(middle === "ask" ? "succeeded" : "failed");
+      expect(b.result.lifecycle, b.result.summary).toBe(
+        middle === "preflight" ? "failed" : "succeeded",
+      );
       records.push({
         id: b.result.runId,
         runId: b.result.runId,
@@ -775,14 +780,20 @@ describe("continueFrom through an unadopted head", () => {
         });
       }
       const fingerprint = summaryFingerprint(records[1]!);
+      const sameRoot = middle === "ask-same-root";
+      const next = continuation(b.result.runId, sameRoot);
+      if (sameRoot) expect(next.adopt).toBeNull();
       const c = await runOnce(f, {
         prompt: "Finish it",
-        continuation: continuation(b.result.runId),
+        ...(sameRoot ? { inPlace: true, executionRoot: held.envelope.worktree_path } : {}),
+        continuation: next,
       });
-      expect(summaryFingerprint(records[1]!)).not.toBe(fingerprint);
-      expect(continuationSummary(records[1]!).resumable?.workspace.kind).not.toBe(
-        "retained_envelope",
-      );
+      if (!sameRoot) {
+        expect(summaryFingerprint(records[1]!)).not.toBe(fingerprint);
+        expect(continuationSummary(records[1]!).resumable?.workspace.kind).not.toBe(
+          "retained_envelope",
+        );
+      }
       expect(c.result.lifecycle, c.result.summary).toBe("succeeded");
       expect(f.spawns.at(-1)).toMatchObject({ resume: "sid-A", cwd: held.envelope.worktree_path });
       expect(c.receipts[0]).toMatchObject({
@@ -796,9 +807,15 @@ describe("continueFrom through an unadopted head", () => {
         expect(f.spawns.at(-1)!.prompt).toContain("do not replay it blindly");
         expect(c.receipts[0]).toMatchObject({ inputDelivery: "uncertain" });
       }
-      expect(readFileSync(join(c.result.runDir, "final", "patch.diff"), "utf8")).toContain(
-        "first half",
-      );
+      if (sameRoot) {
+        expect(readFileSync(join(held.envelope.worktree_path, "part1.txt"), "utf8")).toBe(
+          "first half\n",
+        );
+      } else {
+        expect(readFileSync(join(c.result.runDir, "final", "patch.diff"), "utf8")).toContain(
+          "first half",
+        );
+      }
     },
   );
 });
