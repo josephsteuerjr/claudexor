@@ -211,17 +211,20 @@ export async function flushContinuationTerminal(
   facts: RunOutcomeFacts,
 ): Promise<void> {
   const finish = pendingRuns.get(context.log);
-  if (finish) {
-    await finish(facts);
+  try {
+    if (finish) {
+      await finish(facts);
+      const kept = retainedEnvelopeOfRun(context.paths.root, context.runId);
+      const path = join(context.paths.finalDir, "resumable.yaml");
+      const resumable = RunResumable.safeParse(context.store.readYaml(path)).data;
+      if (kept && resumable)
+        context.store.writeYaml(path, {
+          ...resumable,
+          workspace: { kind: "retained_envelope", root: kept.envelope.worktree_path },
+        });
+    }
+  } finally {
     pendingRuns.delete(context.log);
-    const kept = retainedEnvelopeOfRun(context.paths.root, context.runId);
-    const path = join(context.paths.finalDir, "resumable.yaml");
-    const resumable = RunResumable.safeParse(context.store.readYaml(path)).data;
-    if (kept && resumable)
-      context.store.writeYaml(path, {
-        ...resumable,
-        workspace: { kind: "retained_envelope", root: kept.envelope.worktree_path },
-      });
+    context.log.flushDeferredTerminal();
   }
-  context.log.flushDeferredTerminal();
 }

@@ -2903,7 +2903,8 @@ something to continue (a diff, a session capsule, or a tree that differs from
 its base), the envelope — tree and scoped home — is kept (custody
 `retained`, the run-dir pointer `final/retained-envelope.json`, a
 `workspace.retained` event; disk use is measured once and projected as
-`retainedEnvelope`) instead of disposed. Route-scoped auth that Claudexor
+`retainedEnvelope`) instead of disposed. Terminal deferral is released even
+when settlement or its terminal artifact update throws. Route-scoped auth that Claudexor
 itself seeds in that home (the Codex API-key `auth.json`, the Claude Keychain
 bridge link) is removed when it is kept; the adapters re-create it on the next
 spawn. Nothing removes a kept envelope automatically: a successor adopting it

@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { EventLog } from "@claudexor/event-log";
+import { EventLog, readRunEvents } from "@claudexor/event-log";
+import { ArtifactStore } from "@claudexor/artifact-store";
 import { makeOutcomeFacts, type WorkspaceEnvelope } from "@claudexor/schema";
 import {
   WorkspaceManager,
@@ -10,9 +11,10 @@ import {
   readEnvelopeCustody,
   retainedEnvelopeOfRun,
 } from "@claudexor/workspace";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { CandidateRun } from "./candidateEvidence.js";
-import { forRun, sessionCapsuleFile } from "./continuation-custody.js";
+import { flushContinuationTerminal, forRun, sessionCapsuleFile } from "./continuation-custody.js";
+import type { AnnouncedRunContext } from "./runTerminalContext.js";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -81,6 +83,58 @@ function setup(retain: boolean, signal?: AbortSignal) {
 }
 
 describe("candidate envelope custody (A9)", () => {
+  it.each([true, false])(
+    "releases terminal deferral when settlement throws (terminal already pending: %s)",
+    async (pending) => {
+      const repo = initRepo();
+      const store = new ArtifactStore(repo);
+      const paths = store.createRun("run-settle");
+      const log = new EventLog(paths.eventsPath, "run-settle", "task-settle");
+      const context: AnnouncedRunContext = {
+        store,
+        paths,
+        log,
+        runId: "run-settle",
+        taskId: "task-settle",
+        mode: "agent",
+        phase: "settle",
+      };
+      const kept = forRun({ continuation: { retain: true } }, true, context.runId, paths, log);
+      const wsm = new WorkspaceManager(repo);
+      const env = await kept.envelope(wsm, {
+        taskId: "task-settle",
+        attemptId: "a01",
+        baseRef: "HEAD",
+      });
+      await kept.settle(wsm, env, [candidate(env, { errored: true })]);
+      const settle = vi
+        .spyOn(wsm, "dispose")
+        .mockRejectedValue(new Error("injected settle failure"));
+      const facts = makeOutcomeFacts("failed");
+      try {
+        log.emit("run.created", { prompt: "Test terminal settlement" });
+        if (pending) log.emit("run.failed", { facts });
+        expect(log.terminalCommitted()).toBe(false);
+        await expect(flushContinuationTerminal(context, facts)).rejects.toThrow(
+          "injected settle failure",
+        );
+        // With no deferred event, the terminal guard must still be able to publish its fallback.
+        if (!pending) log.emit("run.failed", { facts });
+        expect(log.terminalCommitted()).toBe(true);
+        expect(readRunEvents(paths.eventsPath).events.map((event) => event.type)).toEqual([
+          "run.created",
+          "run.failed",
+        ]);
+        // The failed settle is removed: a guard retry must not repeat the failing operation.
+        await expect(flushContinuationTerminal(context, facts)).resolves.toBeUndefined();
+        expect(settle).toHaveBeenCalledTimes(1);
+      } finally {
+        settle.mockRestore();
+        log.dispose();
+      }
+    },
+  );
+
   it("keeps the envelope of an errored candidate that changed files and discloses it", async () => {
     const { kept, wsm, create, events, runDir } = setup(true);
     const env = await create();
