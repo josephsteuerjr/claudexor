@@ -2183,8 +2183,9 @@ Endpoint semantics beyond the inventory:
   predecessor (`from.runId`) and `workspace` `same_root` / `different_root`;
   its later tries continue in-run with the predecessor's sticky `acted` and
   evidence sources for the whole predecessor chain (steering delivery, retained
-  answer, unresolved tools and artifact paths). A later native rejection therefore
-  re-briefs from those sources as well as the successor's own run, so a
+  answer, unresolved tools and artifact paths). A later native rejection or
+  typed-limit hop whose session cannot be moved re-briefs from those sources
+  as well as the successor's own run, so a
   failed first try never falls back to a context-free replay. Workspace: an
   explicit `execution.workspaceRoot` or live isolation wins; otherwise a
   predecessor whose isolated envelope was kept (below) is continued IN that

@@ -310,73 +310,98 @@ function attemptDirOf(runDir: string): string {
 }
 
 describe("continueFrom successor: first try", () => {
-  it("keeps predecessor evidence in a later packet after the successor rejects its native identity", async () => {
-    let f!: Fixture;
-    f = fixture(["a"], function* (ctx) {
-      if (ctx.phase === "predecessor") {
-        seedSession(f.stores[ctx.profile]!, "sid-A");
-        yield ctx.emit({
-          type: "started",
-          observed_model: "m1",
-          payload: { native_session_id: "sid-A" },
-        });
-        yield ctx.emit({
-          type: "message",
-          text: "The original answer contains a migration plan.",
-          final: true,
-        });
-        yield ctx.emit({
-          type: "tool_call",
-          tool: {
-            name: "InspectMigration",
-            kind: "file",
-            target: "migration.ts",
-            use_id: "pending-a",
-          },
-        });
-        yield* limit(ctx.emit);
-      } else if (ctx.nth === 1) {
-        yield ctx.emit({ type: "started", payload: { native_session_id: "sid-other" } });
-        yield ctx.emit({ type: "completed", aborted: true });
-      } else {
-        yield* finishing(ctx.emit, ctx.cwd, "sid-packet");
-      }
-    });
-    const { pred, succ } = await chain(f, {
-      between: (runDir) => {
-        const event = (seq: number, type: string) =>
-          JSON.stringify({
-            seq,
-            type,
-            ts: new Date().toISOString(),
-            run_id: "run-a",
-            task_id: "task-a",
-            payload: {
-              message_id: "correction-a",
-              text: "Keep the public migration API stable",
-              attempt_id: "a01",
+  it.each(["native identity rejection", "typed limit"] as const)(
+    "keeps predecessor evidence in a later packet after the successor's %s",
+    async (stop) => {
+      let f!: Fixture;
+      f = fixture(stop === "typed limit" ? ["a", "b"] : ["a"], function* (ctx) {
+        if (ctx.phase === "predecessor") {
+          seedSession(f.stores[ctx.profile]!, "sid-A");
+          yield ctx.emit({
+            type: "started",
+            observed_model: "m1",
+            payload: { native_session_id: "sid-A" },
+          });
+          yield ctx.emit({
+            type: "message",
+            text: "The original answer contains a migration plan.",
+            final: true,
+          });
+          yield ctx.emit({
+            type: "tool_call",
+            tool: {
+              name: "InspectMigration",
+              kind: "file",
+              target: "migration.ts",
+              use_id: "pending-a",
             },
           });
-        appendFileSync(
-          join(runDir, "events.jsonl"),
-          `${event(900, "message.accepted")}\n${event(901, "message.delivered")}\n`,
-        );
-      },
-    });
-    expect(succ.result.lifecycle, succ.result.summary).toBe("succeeded");
-    expect(succ.receipts.map((r) => r["carrier"])).toEqual(["native", "packet"]);
-    expect(succ.receipts[0]).toMatchObject({ identityCheck: "mismatch_before_effects" });
-    const packet = readFileSync(
-      join(attemptDirOf(succ.result.runDir), "continuation", "evidence-index-try1.md"),
-      "utf8",
-    );
-    expect(packet).toContain("Keep the public migration API stable");
-    expect(packet).toContain("(delivered)");
-    expect(packet).toContain("The original answer contains a migration plan.");
-    expect(packet).toContain("InspectMigration — migration.ts (unresolved");
-    expect(packet).toContain(join(pred.result.runDir, "events.jsonl"));
-    expect(packet).toContain(attemptDirOf(pred.result.runDir));
-  });
+          yield* limit(ctx.emit);
+        } else if (ctx.nth === 1) {
+          if (stop === "typed limit") {
+            yield ctx.emit({
+              type: "started",
+              observed_model: "m1",
+              payload: { native_session_id: "sid-A" },
+            });
+            yield* limit(ctx.emit);
+          } else {
+            yield ctx.emit({ type: "started", payload: { native_session_id: "sid-other" } });
+            yield ctx.emit({ type: "completed", aborted: true });
+          }
+        } else {
+          yield* finishing(ctx.emit, ctx.cwd, "sid-packet");
+        }
+      });
+      if (stop === "typed limit") {
+        f.adapter.continuity!.move = async () => ({ ok: false, reason: "scripted move rejection" });
+      }
+      const { pred, succ } = await chain(f, {
+        predecessor: { credentialProfileId: "a" },
+        between: (runDir) => {
+          const event = (seq: number, type: string) =>
+            JSON.stringify({
+              seq,
+              type,
+              ts: new Date().toISOString(),
+              run_id: "run-a",
+              task_id: "task-a",
+              payload: {
+                message_id: "correction-a",
+                text: "Keep the public migration API stable",
+                attempt_id: "a01",
+              },
+            });
+          appendFileSync(
+            join(runDir, "events.jsonl"),
+            `${event(900, "message.accepted")}\n${event(901, "message.delivered")}\n`,
+          );
+        },
+      });
+      expect(succ.result.lifecycle, succ.result.summary).toBe("succeeded");
+      expect(succ.receipts.map((r) => r["carrier"])).toEqual(["native", "packet"]);
+      expect(succ.receipts[0]).toMatchObject({
+        identityCheck:
+          stop === "typed limit" ? "matched_before_effects" : "mismatch_before_effects",
+      });
+      const tries = f.spawns.filter((spawn) => spawn.phase === "successor");
+      expect(tries[0]).toMatchObject({ resume: "sid-A", profile: "a" });
+      expect(tries[1]).toMatchObject({ resume: null, profile: stop === "typed limit" ? "b" : "a" });
+      if (stop === "typed limit") {
+        expect(succ.receipts[1]).toMatchObject({ cause: "vendor_limit", to: { profileId: "b" } });
+      }
+      const packet = readFileSync(
+        join(attemptDirOf(succ.result.runDir), "continuation", "evidence-index-try1.md"),
+        "utf8",
+      );
+      expect(packet).toContain("Keep the public migration API stable");
+      expect(packet).toContain("(delivered)");
+      expect(packet).toContain("The original answer contains a migration plan.");
+      expect(packet).toContain("InspectMigration — migration.ts (unresolved");
+      expect(packet).toContain(join(pred.result.runDir, "events.jsonl"));
+      expect(packet).toContain(attemptDirOf(pred.result.runDir));
+    },
+  );
   it("resumes the predecessor's session on the same account with the notice and the caller's text, never the work order", async () => {
     let f!: Fixture;
     const predScript = editThenLimit(() => f);
