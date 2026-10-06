@@ -2501,7 +2501,7 @@ export class Orchestrator {
         workOrder: prompt,
         firstPrompt: spec.prompt,
       }),
-      { spec, continuation: runInput?.continuation, store },
+      { spec, continuation: runInput?.continuation, store, telemetry },
     ));
     try {
       for (let nativeTry = 0; !signal?.aborted; nativeTry += 1) {
@@ -6644,7 +6644,7 @@ export class Orchestrator {
           workOrder: input.prompt,
           firstPrompt: spec.prompt,
         }),
-        { spec, continuation: input.continuation, store },
+        { spec, continuation: input.continuation, store, telemetry },
       ));
       const onAbort = () => void adapter.cancel?.(activeSessionId)?.catch(() => {});
       if (input.signal) {

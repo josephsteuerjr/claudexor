@@ -2151,7 +2151,9 @@ Endpoint semantics beyond the inventory:
   `models` inherits neither. With no caller model choice, the first try pins the
   predecessor's attested model only when the target route lists that id, ahead
   of a changed settings default; otherwise the inherited request/default applies.
-  The receipt discloses the actual `observedModel`. Nothing else is inherited;
+  The receipt discloses the actual `observedModel`; terminal telemetry compares
+  it with the composed first try's requested model, including an inherited pin.
+  Nothing else is inherited;
   `prompt` is the
   caller's continuation text — empty only here. The first try of the
   successor's first candidate attempt is planned through the in-run

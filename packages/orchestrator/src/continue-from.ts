@@ -47,6 +47,7 @@ import { InRunContinuity } from "./inrun-continuity.js";
 import type { InRunContinuityDeps } from "./inrun-continuity-types.js";
 import { routeListsModel } from "./modelGovernance.js";
 import { uncertainInputFor, type ContinuedTry } from "./inrun-continuity-carrier.js";
+import type { AttemptTelemetry } from "./attemptTelemetry.js";
 import {
   readSessionCapsule,
   registryProfile,
@@ -214,7 +215,12 @@ function profileRef(deps: InRunContinuityDeps, spec: HarnessRunSpec, profileId: 
  */
 export async function openContinuity(
   deps: InRunContinuityDeps,
-  first: { spec: HarnessRunSpec; continuation: RunContinuation | undefined; store: ArtifactStore },
+  first: {
+    spec: HarnessRunSpec;
+    continuation: RunContinuation | undefined;
+    store: ArtifactStore;
+    telemetry: Pick<AttemptTelemetry, "requestedModel">;
+  },
 ): Promise<{ continuity: InRunContinuity; spec: HarnessRunSpec }> {
   const { spec, continuation, store } = first;
   const from = continuation?.from;
@@ -365,6 +371,7 @@ export async function openContinuity(
     from: { runId: from.runId, attemptId: pred.attemptId },
     workspace: sameRoot ? "same_root" : "different_root",
   };
+  first.telemetry.requestedModel = composed.model_hint ?? null;
   return {
     continuity: new InRunContinuity({
       ...deps,

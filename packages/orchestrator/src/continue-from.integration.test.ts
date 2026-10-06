@@ -19,10 +19,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HarnessAdapter, HarnessContinuityCapability } from "@claudexor/core";
+import { ArtifactStore } from "@claudexor/artifact-store";
 import {
   ConformanceReport,
   ControlRunStartRequest,
   HarnessManifest,
+  RunTelemetry,
   type HarnessEvent,
   type HarnessRunSpec,
   type RunEvent,
@@ -765,19 +767,37 @@ describe("continueFrom through an unadopted head", () => {
 });
 
 describe("continueFrom model selection", () => {
-  it.each([true, false])(
-    "distinguishes an inherited hint from a caller choice (inherited: %s)",
-    async (inheritModel) => {
+  it.each([
+    { mode: "agent", inheritModel: true },
+    { mode: "agent", inheritModel: false },
+    { mode: "ask", inheritModel: true },
+    { mode: "ask", inheritModel: false },
+  ] as const)(
+    "distinguishes an inherited hint from a caller choice ($mode, inherited: $inheritModel)",
+    async ({ mode, inheritModel }) => {
       let f!: Fixture;
       const predScript = editThenLimit(() => f);
       f = fixture(["a"], function* (ctx) {
         if (ctx.phase === "predecessor") return yield* predScript(ctx);
         yield* finishing(ctx.emit, ctx.cwd, "sid-A");
       });
-      const { succ } = await chain(f, { successor: { models: { fake: "m2" } }, inheritModel });
+      const { succ } = await chain(f, {
+        successor: { mode, models: { fake: "m2" } },
+        inheritModel,
+      });
       expect(succ.result.lifecycle, succ.result.summary).toBe("succeeded");
       expect(f.spawns.find((s) => s.phase === "successor")!.model).toBe(inheritModel ? "m1" : "m2");
       expect(succ.receipts[0]).toMatchObject({ observedModel: "m1", modelMismatch: !inheritModel });
+      const telemetry = RunTelemetry.parse(
+        new ArtifactStore(f.root).readYaml(join(succ.result.runDir, "final", "telemetry.yaml")),
+      );
+      expect(telemetry.attempts[0]).toMatchObject({
+        requested_model: inheritModel ? "m1" : "m2",
+        observed_model: "m1",
+      });
+      expect(telemetry.auth_route?.model_mismatch).toEqual(
+        inheritModel ? null : { requested: "m2", observed: "m1" },
+      );
     },
   );
   it.each(["auto", "packet"] as const)(
