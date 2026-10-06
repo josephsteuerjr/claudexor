@@ -63,7 +63,14 @@ export function toolCallIndex(events: readonly Row[]): EvidenceToolCall[] {
   for (const ev of events) {
     const tool = asRow(ev["tool"]);
     const id = typeof tool?.["use_id"] === "string" ? tool["use_id"] : null;
-    if (ev["type"] === "tool_call" || (ev["type"] === "file_change" && tool)) {
+    // A file edit the vendor reports twice (codex: started, then completed) is
+    // one call; its second frame is the completion.
+    const sameEdit =
+      ev["type"] === "file_change" && id !== null
+        ? calls.find((entry) => entry.id === id && entry.session === ev["session_id"])
+        : undefined;
+    if (sameEdit) sameEdit.call.resolved = true;
+    else if (ev["type"] === "tool_call" || (ev["type"] === "file_change" && tool)) {
       const name =
         typeof tool?.["name"] === "string" && tool["name"].trim()
           ? tool["name"]

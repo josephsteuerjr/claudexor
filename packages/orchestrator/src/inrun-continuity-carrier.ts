@@ -164,7 +164,13 @@ export async function composeContinuedTry(
     return { verdict: { kind: "continue", spec, delayMs }, continued, capsule: null };
   }
   writeSessionCapsule(deps.attemptDir, prepared.capsule);
-  await prepared.retire?.();
+  // The capsule names the new holder; a source that cannot be retired (a held
+  // file handle, a read-only store) leaves a stale copy, never a failed attempt.
+  try {
+    await prepared.retire?.();
+  } catch {
+    // stale source copy; the holder already moved
+  }
   const spec = HarnessRunSpecSchema.parse({
     ...base,
     model_hint: modelHint,

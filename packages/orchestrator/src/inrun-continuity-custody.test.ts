@@ -93,6 +93,45 @@ describe("native carrier custody", () => {
     expect(order).toEqual(["copied", "published", "retired", "spawned"]);
   });
 
+  it("a source that cannot be retired leaves a stale copy, not a failed attempt", async () => {
+    const store = fileStoreContinuity();
+    const o = await run({
+      mode: "agent",
+      profiles: ["a", "b"],
+      continuity: {
+        ...store,
+        async move(located, from, to, cwd) {
+          const moved = await store.move(located, from, to, cwd);
+          if (!moved.ok) return moved;
+          return {
+            ok: true,
+            resumeRef: moved.resumeRef,
+            retire() {
+              throw Object.assign(new Error("EBUSY: source held"), { code: "EBUSY" });
+            },
+          };
+        },
+      },
+      script: function* ({ profile, spec, emit }) {
+        if (profile === "a") seedSession(spec.cwd, "a", "sid-busy");
+        yield emit({ type: "started", payload: { native_session_id: "sid-busy" } });
+        if (profile === "a") {
+          yield emit({ type: "tool_call", tool: { name: "Read", kind: "file" } });
+          yield* limit(emit);
+        } else {
+          yield emit({ type: "message", text: "finished", final: true });
+          yield emit({ type: "completed" });
+        }
+      },
+    });
+    expect(o.result.lifecycle, o.result.summary).toBe("succeeded");
+    expect(o.spawns.map((s) => [s.profile, s.resume])).toEqual([
+      ["a", null],
+      ["b", "sid-busy"],
+    ]);
+    expect(o.receipts.map((r) => r["carrier"])).toEqual(["native_moved"]);
+  });
+
   it.each([false, true])("pins listed attested models on native carriers (hop=%s)", async (hop) => {
     for (const observed of ["m1", "Display label"]) {
       const o = await run({

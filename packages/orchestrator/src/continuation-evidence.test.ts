@@ -143,6 +143,22 @@ describe("evidence collector (I/O)", () => {
     ]);
   });
 
+  it("a file edit reported twice (codex started, then completed) is one resolved call", () => {
+    const edit = (session: string) => ({
+      type: "file_change",
+      session_id: session,
+      tool: { name: "apply_patch", kind: "file", use_id: "item-7", target: "src/a.ts" },
+    });
+    expect(toolCallIndex([edit("s1"), edit("s1")])).toEqual([
+      { name: "apply_patch", target: "src/a.ts", resolved: true },
+    ]);
+    // A started edit that never completed stays unresolved; another session's id is its own call.
+    expect(toolCallIndex([edit("s1"), edit("s2")])).toEqual([
+      { name: "apply_patch", target: "src/a.ts", resolved: false },
+      { name: "apply_patch", target: "src/a.ts", resolved: false },
+    ]);
+  });
+
   it("prefers the attempt's own event log when present and lists changed files from a patch", () => {
     const dir = mkdtempSync(join(tmpdir(), "cx-evidence-"));
     roots.push(dir);
