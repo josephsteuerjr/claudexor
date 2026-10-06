@@ -7,6 +7,7 @@ import {
   WorkspaceManager,
   adoptRetainedEnvelope,
   retainForContinuation,
+  writeContinuationSources,
 } from "@claudexor/workspace";
 import { stringify as stringifyYaml } from "yaml";
 import { afterAll, describe, expect, it } from "vitest";
@@ -70,6 +71,41 @@ function initRepo(): string {
 }
 
 describe("continuationSummary (run-status projection of the continueFrom chain)", () => {
+  it.each(["custody", "capsule", "evidence"] as const)(
+    "derives a failed head's restart cause from ancestor %s without resumable.yaml",
+    async (source) => {
+      const ancestor = runDir();
+      const head = runDir();
+      writeContinuationSources(head, [{ runId: "run-a", runDir: ancestor, state: "interrupted" }]);
+      if (source === "evidence") {
+        writeFileSync(join(ancestor, "final", "retained-output.md"), "Keep the existing work.");
+      } else {
+        capsule(ancestor, "a01", "sid-A", 1);
+      }
+      if (source === "custody") {
+        const env = await new WorkspaceManager(initRepo()).create({
+          taskId: "task-a",
+          attemptId: "a01",
+          baseRef: "HEAD",
+          custody: { runId: "run-a", runDir: ancestor },
+        });
+        retainForContinuation(env, { runId: "run-a", runDir: ancestor }, "host_restart");
+      }
+      const projected = continuationSummary({
+        id: "run-b",
+        runId: "run-b",
+        runDir: head,
+        state: "failed",
+        params: { continueFrom: "run-a" },
+      });
+      expect(projected.resumable).toMatchObject({
+        cause: "host_restart",
+        carriers: source === "evidence" ? ["packet"] : ["native", "packet"],
+        workspace: { kind: source === "custody" ? "retained_envelope" : "none" },
+      });
+    },
+  );
+
   it("projects the engine's terminal block, the predecessor link and the receipts (detail only)", () => {
     const dir = runDir();
     writeFileSync(join(dir, "final", "resumable.yaml"), stringifyYaml(written));

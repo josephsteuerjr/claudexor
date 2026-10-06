@@ -97,6 +97,7 @@ export function continuationSummary(
   let written = safeReadStructuredArtifact(rec, "final/resumable.yaml", RunResumable);
   let capsule = newestCapsule(rec.runDir);
   let inherited = false;
+  let inheritedState: string | null = null;
   if (!written && !capsule && rec.state !== "succeeded") {
     for (const source of sources) {
       const ancestor = { ...source, id: source.runId };
@@ -113,7 +114,10 @@ export function continuationSummary(
             event.type === "harness.event" &&
             ["tool_call", "file_change", "message"].includes(String(event.payload["type"])),
         );
-      if (inherited) break;
+      if (inherited) {
+        inheritedState = source.state;
+        break;
+      }
     }
   }
   if (written) {
@@ -132,7 +136,9 @@ export function continuationSummary(
     ...base,
     retainedEnvelope,
     resumable: {
-      cause: restarted ? "host_restart" : (kept?.cause ?? "other"),
+      cause: restarted
+        ? "host_restart"
+        : (available?.cause ?? (inheritedState === "interrupted" ? "host_restart" : "other")),
       resetsAt: null,
       limitWindow: null,
       limitEvidence: null,

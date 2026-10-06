@@ -2197,7 +2197,9 @@ Endpoint semantics beyond the inventory:
   ancestor's tree reports `same_root`, even when the Ask ran at the project base.
   Predecessor
   references are recorded in `context/continuation.json` before announcement;
-  a failed head's `resumable` projection names its inherited carriers. `GET
+  a failed head's `resumable` projection names its inherited carriers. Without
+  an ancestor's terminal block, its retained custody supplies the cause, or
+  `host_restart` is derived from that ancestor's interrupted state. `GET
   /v2/runs/:id` projects `continueFrom`, `resumable` (the engine's terminal
   block with the CURRENT workspace overlaid; a run the daemon found running at
   its restart gets a derived block, cause `host_restart`, from its session
