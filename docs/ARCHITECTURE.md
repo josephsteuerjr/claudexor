@@ -2162,7 +2162,10 @@ Endpoint semantics beyond the inventory:
   input) plus the caller's text is the user prompt, and a follow-up on
   finished work is the caller's text alone. The chain's work order
   (predecessor's work order + continuation text) is recorded as
-  `context/work-order.md`. That try's `run.continuity` receipt names the
+  `context/work-order.md`. An earlier continuation's caller text without a
+  confirmed first-try delivery is carried as an uncertain reference to reconcile,
+  never blindly replay; the receipt reports `inputDelivery: "uncertain"`.
+  That try's `run.continuity` receipt names the
   predecessor (`from.runId`) and `workspace` `same_root` / `different_root`;
   its later tries continue in-run with the predecessor's sticky `acted`, so a
   failed first try never falls back to a context-free replay. Workspace: an

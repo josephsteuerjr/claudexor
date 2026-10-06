@@ -42,6 +42,7 @@ import type { RunContinuation } from "./continuation-custody.js";
 import { buildEvidenceIndex } from "./continuation-evidence.js";
 import { collectEvidenceIndexInput, diffStatFromPatch } from "./continuation-evidence-io.js";
 import { continuationNotice, packetContinuationPrompt } from "./continuity-notice.js";
+import { unconfirmedContinuationInputs } from "./continuation-input.js";
 import { InRunContinuity } from "./inrun-continuity.js";
 import type { InRunContinuityDeps } from "./inrun-continuity-types.js";
 import { routeListsModel } from "./modelGovernance.js";
@@ -253,7 +254,11 @@ export async function openContinuity(
     retainedOutput: pred.output,
     diffStat: pred.diffStat,
   });
-  const uncertainInput = uncertainInputFor(pred.runDir, null, pred.attemptId);
+  const uncertainInput = uncertainInputFor(
+    pred.runDir,
+    unconfirmedContinuationInputs([from, ...(from.ancestors ?? [])]),
+    pred.attemptId,
+  );
   const sameRoot = samePath(pred.root, deps.cwd);
   // The notice says the workspace is as it was left; in another tree that is
   // not known, so the child is told to check before relying on it.

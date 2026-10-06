@@ -602,6 +602,11 @@ describe("continueFrom through an unadopted head", () => {
       expect(c.result.lifecycle, c.result.summary).toBe("succeeded");
       expect(f.spawns.at(-1)).toMatchObject({ resume: "sid-A", cwd: held.envelope.worktree_path });
       expect(c.receipts[0]).toMatchObject({ carrier: "native", from: { runId: b.result.runId } });
+      if (middle === "preflight") {
+        expect(f.spawns.at(-1)!.prompt).toContain("Explain what is left");
+        expect(f.spawns.at(-1)!.prompt).toContain("do not replay it blindly");
+        expect(c.receipts[0]).toMatchObject({ inputDelivery: "uncertain" });
+      }
       expect(readFileSync(join(c.result.runDir, "final", "patch.diff"), "utf8")).toContain(
         "first half",
       );
