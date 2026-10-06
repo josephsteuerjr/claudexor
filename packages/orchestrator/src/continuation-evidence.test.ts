@@ -90,6 +90,53 @@ describe("evidence index (pure)", () => {
 });
 
 describe("evidence collector (I/O)", () => {
+  it("combines chain evidence without letting another run close a predecessor tool call", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cx-evidence-chain-"));
+    roots.push(dir);
+    const ancestor = join(dir, "ancestor");
+    const current = join(dir, "current");
+    for (const runDir of [ancestor, current])
+      mkdirSync(join(runDir, "attempts", "a01"), { recursive: true });
+    writeFileSync(
+      join(ancestor, "attempts", "a01", "events.jsonl"),
+      JSON.stringify({
+        type: "tool_call",
+        session_id: "same",
+        tool: { name: "Edit", use_id: "shared" },
+      }) + "\n",
+    );
+    writeFileSync(
+      join(current, "attempts", "a01", "events.jsonl"),
+      JSON.stringify({
+        type: "tool_result",
+        session_id: "same",
+        tool: { use_id: "shared" },
+      }) + "\n",
+    );
+    const collected = collectEvidenceIndexInput(
+      {
+        runDir: current,
+        attemptId: "a01",
+        workOrder: "whole chain",
+        steering: [],
+        predecessors: [
+          {
+            runDir: ancestor,
+            attemptId: "a01",
+            workOrder: "first part",
+            steering: [{ text: "preserve the interface", delivery: "uncertain" }],
+            retainedOutput: "earlier answer",
+            diffStat: null,
+          },
+        ],
+      },
+      { cause: "transport", retainedOutput: "new answer", diffStat: null },
+    );
+    expect(collected.toolCalls).toEqual([{ name: "Edit", target: null, resolved: false }]);
+    expect(collected.steering).toEqual([{ text: "preserve the interface", delivery: "uncertain" }]);
+    expect(collected.retainedOutput).toBe("earlier answer\n\nnew answer");
+    expect(collected.predecessorArtifacts?.[0]?.attemptDir).toBe(join(ancestor, "attempts", "a01"));
+  });
   it("pairs legacy rows without ids and reads steering delivery from the run log", () => {
     const dir = mkdtempSync(join(tmpdir(), "cx-evidence-"));
     roots.push(dir);
@@ -187,6 +234,20 @@ describe("evidence collector (I/O)", () => {
 });
 
 describe("evidence review regressions", () => {
+  it("keeps a long predecessor chain within the packet budget with honest truncation", () => {
+    const index = buildEvidenceIndex(
+      input({
+        predecessorArtifacts: Array.from({ length: 200 }, (_, n) => ({
+          eventsLog: `/runs/${n}/${"path".repeat(50)}/events.jsonl`,
+          attemptDir: null,
+          patch: null,
+        })),
+      }),
+    );
+    expect(index.summarized).toBe(true);
+    expect(index.bytes).toBeLessThanOrEqual(EVIDENCE_TOTAL_BUDGET_BYTES);
+    expect(index.markdown).toContain("Tool calls: 0; unresolved: 0.");
+  });
   it("pairs results by use id within a try and retains unresolved edit calls", () => {
     const calls = toolCallIndex([
       { session_id: "try-1", type: "file_change", tool: { name: "Write", use_id: "first" } },

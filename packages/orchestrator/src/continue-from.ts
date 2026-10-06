@@ -39,7 +39,7 @@ import {
   type CarrierPreference,
 } from "./carrier-planner.js";
 import type { RunContinuation } from "./continuation-custody.js";
-import { buildEvidenceIndex } from "./continuation-evidence.js";
+import { buildEvidenceIndex, type PredecessorEvidenceSource } from "./continuation-evidence.js";
 import { collectEvidenceIndexInput, diffStatFromPatch } from "./continuation-evidence-io.js";
 import { continuationNotice, packetContinuationPrompt } from "./continuity-notice.js";
 import { unconfirmedContinuationInputs } from "./continuation-input.js";
@@ -133,6 +133,7 @@ function readSource(store: ArtifactStore, from: ContinueFromSource): Predecessor
   const events = readRunEvents(join(from.runDir, "events.jsonl"));
   const output =
     readTextSafe(join(finalDir, "answer.md"))?.trim() ||
+    readTextSafe(join(finalDir, "retained-output.md"))?.trim() ||
     retainedOutput(events.events, events.malformed) ||
     "";
   const hasEvidence =
@@ -215,6 +216,19 @@ export async function openContinuity(
   if (!continuation || !from) return { continuity: new InRunContinuity(deps), spec };
   continuation.from = null;
   const pred = readPredecessor(store, from);
+  const evidenceSources: PredecessorEvidenceSource[] = [from, ...(from.ancestors ?? [])]
+    .reverse()
+    .map((source) => {
+      const facts = readSource(store, { ...from, ...source });
+      return {
+        runDir: facts.runDir,
+        attemptId: facts.attemptId,
+        workOrder: facts.workOrder,
+        steering: [],
+        retainedOutput: facts.output,
+        diffStat: facts.diffStat,
+      };
+    });
   const model =
     from.inheritModel &&
     pred.observedModel &&
@@ -245,6 +259,7 @@ export async function openContinuity(
     attemptId: pred.attemptId,
     workOrder: pred.workOrder,
     steering: [],
+    predecessors: evidenceSources.filter((source) => source.runDir !== pred.runDir),
   };
   const extras = { cause: pred.cause, retainedOutput: pred.output, diffStat: pred.diffStat };
   const prepared = await prepareCarrier(decideCarrier(facts), {
@@ -323,7 +338,11 @@ export async function openContinuity(
     workspace: sameRoot ? "same_root" : "different_root",
   };
   return {
-    continuity: new InRunContinuity({ ...deps, workOrder, seed: { acted: pred.acted, continued } }),
+    continuity: new InRunContinuity({
+      ...deps,
+      workOrder,
+      seed: { acted: pred.acted, continued, evidenceSources },
+    }),
     spec: composed,
   };
 }

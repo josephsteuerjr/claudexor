@@ -15,6 +15,7 @@ import type { PreProgressRefusalSubject } from "./pre-progress-refusal.js";
 import type { TransientRetryPolicy } from "./runSupport.js";
 
 import type { ContinuedTry } from "./inrun-continuity-carrier.js";
+import type { PredecessorEvidenceSource } from "./continuation-evidence.js";
 
 type ContinuityEmit = (type: RunEventType, payload: Record<string, unknown>) => void;
 
@@ -56,7 +57,11 @@ export interface InRunContinuityDeps {
   route?: ModelGovernedRoute;
   newSessionId: () => string;
   /** First try of a continueFrom successor: predecessor progress and receipt. */
-  seed?: { acted: boolean; continued: ContinuedTry } | null;
+  seed?: {
+    acted: boolean;
+    continued: ContinuedTry;
+    evidenceSources?: readonly PredecessorEvidenceSource[];
+  } | null;
   /** Thread facts for the moved-session disclosure (INV-137); null outside a thread. */
   thread: {
     threadId: string;

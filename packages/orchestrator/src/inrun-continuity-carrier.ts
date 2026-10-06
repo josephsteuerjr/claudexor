@@ -115,6 +115,7 @@ export async function composeContinuedTry(
       attemptId: deps.attemptId,
       workOrder: deps.workOrder,
       steering: [],
+      predecessors: deps.seed?.evidenceSources,
     },
     targetCwd: base.cwd,
     retainedOutput: ctx.retainedOutput,
