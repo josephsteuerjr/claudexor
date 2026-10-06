@@ -63,21 +63,29 @@ export function toolCallIndex(events: readonly Row[]): EvidenceToolCall[] {
   for (const ev of events) {
     const tool = asRow(ev["tool"]);
     const id = typeof tool?.["use_id"] === "string" ? tool["use_id"] : null;
+    const target = typeof tool?.["target"] === "string" ? tool["target"] : null;
     // A file edit the vendor reports twice (codex: started, then completed) is
-    // one call; its second frame is the completion.
+    // one call per path; the later frame for the same path is the completion
+    // (one codex item may carry several paths under one id).
     const sameEdit =
       ev["type"] === "file_change" && id !== null
-        ? calls.find((entry) => entry.id === id && entry.session === ev["session_id"])
-        : undefined;
-    if (sameEdit) sameEdit.call.resolved = true;
-    else if (ev["type"] === "tool_call" || (ev["type"] === "file_change" && tool)) {
+        ? calls.filter(
+            (entry) =>
+              entry.id === id &&
+              entry.session === ev["session_id"] &&
+              (target === null || entry.call.target === target),
+          )
+        : [];
+    if (sameEdit.length > 0) {
+      const open = sameEdit.find((entry) => !entry.call.resolved);
+      if (open) open.call.resolved = true;
+    } else if (ev["type"] === "tool_call" || (ev["type"] === "file_change" && tool)) {
       const name =
         typeof tool?.["name"] === "string" && tool["name"].trim()
           ? tool["name"]
           : typeof ev["text"] === "string" && ev["text"].trim()
             ? ev["text"].split("\n")[0]!.slice(0, 80)
             : "tool";
-      const target = typeof tool?.["target"] === "string" ? tool["target"] : null;
       calls.push({ call: { name, target, resolved: false }, session: ev["session_id"], id });
     } else if (ev["type"] === "tool_result") {
       const open = calls.filter(
