@@ -183,7 +183,7 @@ function preparePacket(io: CarrierIo): CarrierPrepared {
 }
 
 /** Locate through the adapter: the refreshed capsule, "miss", or "unverified"
- * when the adapter has no `continuity` (resume by id, engine-side id check). */
+ * when the adapter has no `continuity` (resume by id; a new id is recorded as before). */
 async function locateSafe(
   continuity: HarnessAdapter["continuity"],
   capsule: SessionCapsule,

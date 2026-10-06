@@ -174,7 +174,8 @@ export class InRunContinuity {
       void this.deps.adapter.cancel?.(runSpec.session_id)?.catch(() => {});
       return `resumed native session ${nid} is not the requested ${this.expectedSessionId}; the try was stopped${markers.sawAgentProgress ? " (effects may have occurred)" : " before any effect"}`;
     }
-    if (this.expectedSessionId) this.tryIdentity = "matched_before_effects";
+    if (this.expectedSessionId && nid === this.expectedSessionId)
+      this.tryIdentity = "matched_before_effects";
     // Packet-born history lacks earlier thread turns, even on later native resumes.
     this.packetSession =
       this.continued?.carrier === "packet" ||
