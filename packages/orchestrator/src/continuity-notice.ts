@@ -34,6 +34,8 @@ const CAUSE_PHRASE: Record<ResumableCause, string> = {
 
 export interface ContinuationNoticeInput {
   cause: ResumableCause;
+  /** A succeeded predecessor without unfinished work receives a neutral follow-up. */
+  completed?: boolean;
   /** The predecessor's last input when its delivery is uncertain; null when confirmed. */
   uncertainInput: string | null;
   /** The caller's own continuation text (`continueFrom` prompt); null in-run. */
@@ -43,7 +45,9 @@ export interface ContinuationNoticeInput {
 /** The constant notice a continued process receives as its user prompt. */
 export function continuationNotice(input: ContinuationNoticeInput): string {
   const parts = [
-    `The previous process stopped (${CAUSE_PHRASE[input.cause]}). Continue the task from where it stopped. The workspace is as it was left. A tool call that was cut off may or may not have taken effect: check before repeating it. Finish with a self-contained final message: this process's final message alone is the run's answer.`,
+    input.completed
+      ? "Continue from the previous work. Check the current workspace before making further changes. Finish with a self-contained final message: this process's final message alone is the run's answer."
+      : `The previous process stopped (${CAUSE_PHRASE[input.cause]}). Continue the task from where it stopped. The workspace is as it was left. A tool call that was cut off may or may not have taken effect: check before repeating it. Finish with a self-contained final message: this process's final message alone is the run's answer.`,
   ];
   if (input.uncertainInput !== null && input.uncertainInput.trim()) {
     parts.push(
@@ -55,8 +59,15 @@ export function continuationNotice(input: ContinuationNoticeInput): string {
 }
 
 /** Pointer to the evidence index of a packet carrier (fresh session). */
-export function evidenceIndexPointer(path: string, inlineMarkdown: string): string {
-  return `Earlier work on this task was done by another process that could not finish. Its evidence index is at: ${path} — read it before continuing. The same index follows:\n\n${inlineMarkdown}`;
+export function evidenceIndexPointer(
+  path: string,
+  inlineMarkdown: string,
+  completed = false,
+): string {
+  const prior = completed
+    ? "The previous work is recorded in its evidence index."
+    : "Earlier work on this task was done by another process that could not finish.";
+  return `${prior} Its evidence index is at: ${path} — read it before continuing. The same index follows:\n\n${inlineMarkdown}`;
 }
 
 /** The packet carrier's prompt: original prompt (constraints included) + notice + evidence index. */
@@ -65,10 +76,11 @@ export function packetContinuationPrompt(input: {
   notice: string;
   evidencePath: string;
   evidenceMarkdown: string;
+  completed?: boolean;
 }): string {
   return [
     input.originalPrompt,
     input.notice,
-    evidenceIndexPointer(input.evidencePath, input.evidenceMarkdown),
+    evidenceIndexPointer(input.evidencePath, input.evidenceMarkdown, input.completed),
   ].join("\n\n");
 }

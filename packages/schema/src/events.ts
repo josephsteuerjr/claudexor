@@ -219,11 +219,17 @@ export const RunEventType = z
      * never leaves a disclosure claiming a continuation launched. No attempt ran
      * and the one-shot is not consumed. Payload: {from_attempt, cause, reason}. */
     "run.continuation.denied",
-    /** Per-try receipt of a CONTINUED try inside one attempt (the in-run
-     * continuation ladder): carrier, cause, accounts, memory and this try's
-     * model attestation. Payload: {harness_id, attempt_id, session_id,
-     * receipt: RunContinuityReceipt}. */
+    /** Per-try receipt of a CONTINUED try: the in-run continuation ladder's
+     * later tries and the first try of a `continueFrom` successor. Carrier,
+     * cause, accounts, workspace, memory and this try's model attestation.
+     * Payload: {harness_id, attempt_id, session_id, receipt:
+     * RunContinuityReceipt}. */
     "run.continuity",
+    /** A stopped run's isolated envelope was kept for continuation (custody
+     * `retained`). Payload: {attempt_id, root, cause, bytes}. Released by
+     * adoption (`continueFrom`), apply or the discard decision; never removed
+     * automatically. */
+    "workspace.retained",
   ])
   .describe(
     "Type of an append-only run event, covering run lifecycle, contract/context creation, budget, routing fallbacks, harness activity, interactions, gates, review, arbitration, work products, and control verbs.",

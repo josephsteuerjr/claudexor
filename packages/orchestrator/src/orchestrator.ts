@@ -29,13 +29,14 @@ import {
   OrchestratorCredentials,
   reviewerProfileResolver,
 } from "./orchestrator-credentials.js";
-import { InRunContinuity } from "./inrun-continuity.js";
+import type { InRunContinuity } from "./inrun-continuity.js";
 import {
   continuityWorkspace,
   resumableOf,
   resumableTerminal,
   type ContinuityTerminalFacts,
 } from "./continuity-terminal.js";
+import { openContinuity } from "./continue-from.js";
 import { accountPoolRows } from "./account-pool.js";
 import type { PreProgressRefusalMemory } from "./pre-progress-refusal.js";
 import { writeRunTelemetryArtifact } from "./runTelemetryWriter.js";
@@ -62,6 +63,7 @@ import {
   type ScopedHarnessHome,
 } from "./delegatedHome.js";
 import * as AC from "./attemptUsageCost.js";
+import * as custody from "./continuation-custody.js";
 import {
   type CandidateRun,
   candidateRoster,
@@ -524,6 +526,8 @@ export interface RunInput {
   taskId?: string;
   /** Thread this run is a turn of (chat/session-first); recorded in events. */
   threadId?: string;
+  /** Continuation facts from the daemon: keep stopped work; adopt a predecessor's envelope. */
+  continuation?: custody.RunContinuation;
   /** Preferred auth route for harness attempts (subscription/api_key/auto). */
   authPreference?: "subscription" | "api_key" | "auto";
   /** Explicit credential profile for this turn (INV-135): resolved once per
@@ -733,8 +737,6 @@ export interface RoutedAdapter {
 }
 const LABELS = "ABCDEFGHIJ".split("");
 const NO_PROJECT_ROOT = noProjectRepoRoot();
-/** Default wait for one interactive answer before a benign decline. */
-const DEFAULT_INTERACTION_TIMEOUT_MS = 900_000;
 
 export class Orchestrator {
   private readonly gateway: HarnessGateway;
@@ -2491,14 +2493,16 @@ export class Orchestrator {
     const onAbort = () => void adapter.cancel?.(activeSessionId)?.catch(() => {});
     if (signal?.aborted) onAbort();
     else signal?.addEventListener("abort", onAbort, { once: true });
-    const continuity = new InRunContinuity(
+    let continuity: InRunContinuity;
+    ({ continuity, spec } = await openContinuity(
       this.continuityDeps(adapter, routed, contract, attemptId, paths, runInput, log, {
         envelope,
         harnessHome,
         workOrder: prompt,
         firstPrompt: spec.prompt,
       }),
-    );
+      { spec, continuation: runInput?.continuation, store, telemetry },
+    ));
     try {
       for (let nativeTry = 0; !signal?.aborted; nativeTry += 1) {
         // A3 per-try isolation: neither output nor progress markers leak across tries.
@@ -2958,30 +2962,6 @@ export class Orchestrator {
     };
   }
 
-  private interactionChannelFor(
-    input: RunInput,
-    log: EventLog,
-    runId: string,
-    taskId: string,
-    attemptId: string,
-    harnessId: string,
-    // REQUIRED (no default): every call site must state the routed manifest's
-    // `interactive` capability, or a future site would silently bypass the gate.
-    supportsInteractive: boolean,
-  ): InteractionChannel | undefined {
-    // Thin delegate — the channel mechanics live in interaction.ts.
-    return interactionChannelFor(
-      input,
-      log,
-      runId,
-      taskId,
-      attemptId,
-      harnessId,
-      supportsInteractive,
-      DEFAULT_INTERACTION_TIMEOUT_MS,
-    );
-  }
-
   private async runRace(
     input: RunInput,
     mode: ModeKind,
@@ -3138,7 +3118,7 @@ export class Orchestrator {
     const reviewEnvelopes: WorkspaceEnvelope[] = [];
     const disposeReviewEnvelopes = async () => {
       const envelopes = reviewEnvelopes.splice(0);
-      for (const env of envelopes) await wsm.dispose(env);
+      for (const env of envelopes) await kept.settle(wsm, env, runsBySlot);
     };
     const candidateAccess = contract.access.effective_profile;
 
@@ -3154,6 +3134,7 @@ export class Orchestrator {
     let budgetDenial: BudgetDenial | null = null;
     let softWarned = false;
     const requestedSingleCandidate = adapters.length === 1;
+    const kept = custody.forRun(input, requestedSingleCandidate && mutatingRun, runId, paths, log);
     const slots: CandidateSlot[] = [];
     for (let i = 0; i < adapters.length; i++) {
       const routed = adapters[i] as RoutedAdapter;
@@ -3270,7 +3251,7 @@ export class Orchestrator {
           external_context_policy: knobs.webPolicy,
           ...(knobs.ignored.length > 0 ? { ignored_settings: knobs.ignored } : {}),
         });
-        envelope = await wsm.create({
+        envelope = await kept.envelope(wsm, {
           taskId,
           attemptId: slot.attemptId,
           baseRef: contract.repo.base_ref,
@@ -3313,7 +3294,7 @@ export class Orchestrator {
           this.candidateIntent(input),
           log,
           effectiveWeb,
-          this.interactionChannelFor(
+          interactionChannelFor(
             input,
             log,
             runId,
@@ -3443,7 +3424,7 @@ export class Orchestrator {
                   this.candidateIntent(input),
                   log,
                   effectiveWeb,
-                  this.interactionChannelFor(
+                  interactionChannelFor(
                     input,
                     log,
                     runId,
@@ -3576,7 +3557,7 @@ export class Orchestrator {
           ),
         };
       } finally {
-        if (envelope) await wsm.dispose(envelope); // no worktree leak even on create/run error
+        if (envelope) await kept.settle(wsm, envelope, runsBySlot); // no leak on create/run error
       }
     };
     await runParallelCandidates(slots, this.deps.runtimeConcurrencyCaps, runSlot);
@@ -3887,7 +3868,7 @@ export class Orchestrator {
             "synthesize",
             log,
             effectiveWeb,
-            this.interactionChannelFor(
+            interactionChannelFor(
               input,
               log,
               runId,
@@ -4928,7 +4909,7 @@ export class Orchestrator {
             "repair",
             log,
             effectiveWeb,
-            this.interactionChannelFor(
+            interactionChannelFor(
               input,
               log,
               runId,
@@ -5695,7 +5676,7 @@ export class Orchestrator {
         spec.extra["abortSignal"] = input.signal
           ? AbortSignal.any([input.signal, plannerAbort.signal])
           : plannerAbort.signal;
-        const planInteraction = this.interactionChannelFor(
+        const planInteraction = interactionChannelFor(
           input,
           log,
           runId,
@@ -6548,7 +6529,7 @@ export class Orchestrator {
               : null) ?? roHome.env,
         });
         this.credentials.stampProfileSelection(spec, input, adapter.id);
-        const reportInteraction = this.interactionChannelFor(
+        const reportInteraction = interactionChannelFor(
           input,
           log,
           runId,
@@ -6655,14 +6636,16 @@ export class Orchestrator {
       const retryPolicy = transientRetryPolicy(this.config(input.repoRoot));
       let activeSessionId = spec.session_id;
       const live = liveAttempt(input, routed, paths, contract, attemptId, () => activeSessionId);
-      const continuity = new InRunContinuity(
+      let continuity: InRunContinuity;
+      ({ continuity, spec } = await openContinuity(
         this.continuityDeps(adapter, routed, contract, attemptId, paths, input, log, {
           envelope: null,
           harnessHome: null,
           workOrder: input.prompt,
           firstPrompt: spec.prompt,
         }),
-      );
+        { spec, continuation: input.continuation, store, telemetry },
+      ));
       const onAbort = () => void adapter.cancel?.(activeSessionId)?.catch(() => {});
       if (input.signal) {
         if (input.signal.aborted) onAbort();

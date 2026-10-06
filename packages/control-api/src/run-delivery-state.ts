@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { ControlRunResult, RunDeliveryState, WorkProduct } from "@claudexor/schema";
 import { nowIso } from "@claudexor/util";
+import { releaseRetainedEnvelope, retainedEnvelopeOfRun } from "@claudexor/workspace";
 import { safeArtifactRoot } from "./artifact-paths.js";
 import { safeReadStructuredArtifact } from "./run-artifact-read.js";
 import type { DaemonRunRecord } from "./run-record.js";
@@ -119,6 +120,10 @@ export function markRunApplyState(
     const tmp = `${dsPath}.tmp-${process.pid}`;
     writeFileSync(tmp, stringifyYaml(next), "utf8");
     renameSync(tmp, dsPath);
+    // Applying a kept stopped run's result is its disposition (A9): the
+    // envelope retained for continueFrom is released, never kept twice.
+    const kept = state === "applied" && rec.runId ? retainedEnvelopeOfRun(root, rec.runId) : null;
+    if (kept) void releaseRetainedEnvelope(kept).catch(() => {});
   } catch (error) {
     if (required) throw error;
     /* best-effort: the revert succeeded regardless of this metadata flip */

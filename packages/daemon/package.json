@@ -24,6 +24,7 @@
     "@claudexor/journal": "workspace:*",
     "@claudexor/schema": "workspace:*",
     "@claudexor/util": "workspace:*",
+    "@claudexor/workspace": "workspace:*",
     "yaml": "^2.9.1"
   },
   "repository": {

@@ -2126,6 +2126,91 @@ validator dump, and validates the per-run SSE cursor as a nonnegative integer
 
 Endpoint semantics beyond the inventory:
 
+- `POST /v2/runs` with `continueFrom: <runId>` continues a terminal run of this
+  daemon — stopped, limited, cancelled, interrupted or finished — as a new
+  run, the next link of its continuation chain. One shared admission rule
+  (`continuationRefusal` in `@claudexor/schema`) answers typed:
+  `predecessor_unknown` (404, also another daemon's ids), `predecessor_live`
+  (409), `continue_from_with_thread` (400; a thread continues through its
+  turns), `continue_from_unsupported` (400; only a single-candidate Agent or
+  an Ask run can carry the predecessor's session — not plan, best-of,
+  attempts/until-clean, deep-scan or council) and `continuation_superseded`
+  (409, context `head` = the newest link of the chain). The daemon applies it
+  inside the enqueue RPC immediately before acceptance, so the accepted
+  successor command is the durable claim: while the predecessor's command
+  record is kept, its successor claim is exempt from command pruning, preserving
+  one accepted successor across every ingress and restart. After the predecessor
+  record is pruned, its id is unknown and the successor can be pruned on a later
+  pass. A successor refused before
+  its run started holds no claim, one that ran and failed stays the head.
+  Exact Retry and `rerun_with_feedback` replay the original request, so for a
+  successor that ran they answer the same `continuation_superseded`: the
+  caller continues the head instead. Omitted `mode`, `scope`, `execution`, `harnesses`, `primaryHarness`, `model`
+  and `models` come from the predecessor before request defaults. Setting either
+  `harnesses` or `primaryHarness` inherits neither; setting either `model` or
+  `models` inherits neither. With no caller model choice, the first try pins the
+  predecessor's attested model only when the target route lists that id, ahead
+  of a changed settings default; otherwise the inherited request/default applies.
+  The receipt discloses the actual `observedModel`; terminal telemetry compares
+  it with the composed first try's requested model, including an inherited pin.
+  Nothing else is inherited;
+  `prompt` is the
+  caller's continuation text — empty only here. The first try of the
+  successor's first candidate attempt is planned through the in-run
+  continuation planner from the predecessor's session capsule and terminal
+  `resumable` facts: `native` (same account, resume by id), `native_moved`
+  (the session moved into the successor's account store), `packet` (a fresh
+  session briefed by the evidence index) or `fresh` (the predecessor did no
+  work: the index carries its work order); another harness gets the packet,
+  and `continueCarrier: "packet"` forces the re-brief. A native carrier never
+  resends the original prompt: the continuation notice (cause, any undelivered
+  input) plus the caller's text is the user prompt, and a follow-up on
+  finished work uses the caller's text alone when delivery is certain; an empty
+  follow-up gets a neutral continue notice, including with a packet carrier
+  and when a rejected native first try falls back to a later in-run packet.
+  A different-root notice includes the predecessor's saved `final/patch.diff`
+  path when available. If no capsule/workspace recorded a root, the predecessor's
+  inherited project scope root is the comparison baseline. The chain's work order
+  (predecessor's work order + continuation text) is recorded as
+  `context/work-order.md`. An earlier continuation's caller text without a
+  confirmed first-try delivery is carried as an uncertain reference to reconcile,
+  never blindly replay; the receipt reports `inputDelivery: "uncertain"`.
+  Each uncertain input stays separate across run successors and unstarted
+  in-run retries, including a stopped ancestor's admitted steering message
+  without delivery proof, until a newer run of the chain has started a process
+  with it. Inline quotes share a 2,048-character
+  budget filled newest first; every cut gives the shown and complete character
+  counts and an absolute path to the complete text. The engine reuses the saved
+  work order when it contains that text, otherwise it saves a context file.
+  That try's `run.continuity` receipt names the
+  predecessor (`from.runId`) and `workspace` `same_root` / `different_root`;
+  its later tries continue in-run with the predecessor's sticky `acted` and
+  evidence sources for the whole predecessor chain (steering delivery, retained
+  answer, unresolved tools and artifact paths). A later native rejection or
+  typed-limit hop whose session cannot be moved re-briefs from those sources
+  as well as the successor's own run, so a
+  failed first try never falls back to a context-free replay. Workspace: an
+  explicit `execution.workspaceRoot` or live isolation wins; otherwise a
+  predecessor whose isolated envelope was kept (below) is continued IN that
+  envelope — same path, files and base, one cumulative patch. Delegate-belt
+  children start from the project base even when their predecessor has a kept
+  envelope; that predecessor's custody stays retained. A successor that
+  fails before adoption remains the head: continuation walks its ancestors to
+  the nearest retained envelope and available session/evidence. An Ask head
+  leaves the retained tree available for a later Agent successor. Adopting that
+  ancestor's tree or explicitly selecting the same retained root reports
+  `same_root`, even when the Ask ran at the project base.
+  Predecessor
+  references are recorded in `context/continuation.json` before announcement;
+  a failed head's `resumable` projection names its inherited carriers. Without
+  an ancestor's terminal block, its retained custody supplies the cause, or
+  `host_restart` is derived from that ancestor's interrupted state. `GET
+  /v2/runs/:id` projects `continueFrom`, `resumable` (the engine's terminal
+  block with the CURRENT workspace overlaid; a run the daemon found running at
+  its restart gets a derived block, cause `host_restart`, from its session
+  capsule and custody), `continuity` (the per-try receipts; run detail only —
+  list rows omit it) and `retainedEnvelope` (root, disk use, cause).
+  `continueFrom` appears in `GET /v2/agent-capabilities` `runControlKeys`.
 - Threads are the chat/session-first conversation SSOT (run lineage + native
   harness sessions). A thread declares a `workspace.mode`: `in_place` (default)
   mutates the live project tree; `isolated` keeps a persistent git worktree per
@@ -2813,6 +2898,35 @@ the purged (or would-be-purged) expired trash and `purge_leftovers` the
 finished (or would-be-finished) purges; like `data_root_unrecognized` both are
 opt-in (`trash_purge_report`, sent only by a lockstep CLI), the startup pass
 requests them for its log line, and `claudexor gc` prints them.
+STOPPED ISOLATED WORK IS KEPT for `continueFrom` (A9): a daemon-owned,
+single-candidate, mutating Agent run records `live` custody of its isolated
+envelope (`continuation-custody.json` in the envelope base, written before
+any harness runs). Retention settles with the final run outcome, after review
+and budget reconciliation: any non-success terminal, or a `succeeded` run
+with a `needs_input` / `incomplete` report, keeps the envelope when there is
+something to continue (a diff, a session capsule, or a tree that differs from
+its base), the envelope — tree and scoped home — is kept (custody
+`retained`, the run-dir pointer `final/retained-envelope.json`, a
+`workspace.retained` event; disk use is measured once and projected as
+`retainedEnvelope`) instead of disposed. Terminal deferral is released even
+when settlement or its terminal artifact update throws. Route-scoped auth that Claudexor
+itself seeds in that home (the Codex API-key `auth.json`, the Claude Keychain
+bridge link) is removed when it is kept; the adapters re-create it on the next
+spawn. Nothing removes a kept envelope automatically: a successor adopting it
+(custody moves, the tree is never deleted), applying the run's result, or the
+`discard` decision releases it, and disk retention keeps a run tree that holds
+one. Discard releases the kept tree; a later accepted continuation starts from
+the project base. Command pruning also exempts retained holders and successor commands
+while their predecessor record remains in the kept set, preserving the
+continuation handle and its single-successor claim across journal compaction.
+After a predecessor is pruned, its successor becomes eligible on a later pass.
+The crash sweep never treats a kept envelope as an orphan (its auth is
+stripped again, and a missing holder pointer is rebuilt from authoritative
+custody); an envelope whose holder died mid-attempt with a changed tree or a
+valid session capsule is kept with cause `host_restart`. Delegate belt children
+start from the project base even if their predecessor holds a retained envelope;
+they do not adopt or retain it. In-place runs and race/synthesis/review envelopes
+keep their ordinary lifecycle.
 While running it snapshots its live harness child process groups to
 `daemon/pids.json`; the NEXT startup reaps recorded orphans that survived a
 crash (pid liveness + command-name recycling guard) and sweeps workspace
@@ -3997,7 +4111,9 @@ resume keeps the id; codex compares the `thread/resume` reply before
 session) and the adapter's typed rejection of carried state. "Acted" is a
 sticky fact of the attempt (an accepted answer, agent progress, a file change
 or a diff in any try). An attempt that did not act keeps the rotation and
-transient rules above byte for byte. After progress: a typed vendor limit on an
+transient rules above byte for byte, except that a context exhaustion ends the
+attempt with `resumable` cause `context_exhausted` instead of a structural
+rotation (another account has the same window). After progress: a typed vendor limit on an
 unpinned `rotate` route hops to the next eligible account and the next try
 carries the work — `native_moved` when the adapter's `continuity` located the
 session and moved it into the target store (claude: `<sid>.jsonl` + `<sid>/`

@@ -17,11 +17,21 @@
  * FRESH (24h window over the newest of base/tree/home/owner.json mtimes) —
  * a declared tradeoff: brief proof-less windows never kill in-flight work,
  * while a recycled pid cannot pin a seeded-credential home forever.
+ *
+ * CONTINUATION CUSTODY: an envelope retained for `continueFrom` is never an
+ * orphan — it is kept (route-scoped auth stripped again) until adoption or
+ * discard; an envelope whose holder run died mid-attempt with changed files is
+ * kept the same way (`host_restart`), so the interrupted run can be continued.
  */
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WorkspaceManager, git, processStartTime } from "@claudexor/workspace";
+import {
+  WorkspaceManager,
+  git,
+  processStartTime,
+  recoverOrphanCustody,
+} from "@claudexor/workspace";
 import { projectRuntimeDir } from "@claudexor/util";
 
 const RO_HOME_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -95,6 +105,13 @@ async function sweepEnvelopesUnder(execRoot: string): Promise<string[]> {
       if (owner) {
         actions.push(
           `kept envelope ${taskId}/${attemptId} under ${execRoot}: live owner pid ${owner}`,
+        );
+        continue;
+      }
+      const held = await recoverOrphanCustody(join(taskDir, attemptId));
+      if (held) {
+        actions.push(
+          `${held === "kept" ? "kept retained" : "retained interrupted"} envelope ${taskId}/${attemptId} under ${execRoot} for continueFrom`,
         );
         continue;
       }

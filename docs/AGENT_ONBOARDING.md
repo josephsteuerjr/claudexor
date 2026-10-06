@@ -207,7 +207,13 @@ Every mutating result carries a `runId`. The decision tree:
 3. `status: blocked` → a HUMAN decision is required:
    `claudexor decision <runId> --accept-risk | --override | --revert |
    --rerun --feedback "..."`. Do NOT auto-accept risk on a user's behalf.
-4. Lost the handle? `claudexor inspect <runId>`, `claudexor follow <runId>`,
+4. The run stopped before its work finished (`resumable` present on
+   `GET /v2/runs/:id` — a usage limit, a crash, a cancel, a daemon restart, a
+   question for you) → continue it, never restart it: `POST /v2/runs`
+   `{continueFrom: <runId>, prompt: "<what next, may be empty>"}`. The engine
+   resumes the same vendor session when it can and briefs a new one with the
+   evidence otherwise; the receipt says which.
+5. Lost the handle? `claudexor inspect <runId>`, `claudexor follow <runId>`,
    or the MCP durable tools `claudexor_runs` / `claudexor_run_status` /
    `claudexor_run_result` / `claudexor_apply_check`.
 

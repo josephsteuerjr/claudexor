@@ -19,10 +19,13 @@ import {
   validateApplyGate,
   verifyAndDeliver,
 } from "@claudexor/delivery";
-import { appendRunEvent, lastSeqInFile } from "@claudexor/event-log";
+import { lastSeqInFile } from "@claudexor/event-log";
 import { isVanishedErrno, safeArtifactPath, safeArtifactRoot } from "./artifact-paths.js";
 import { TERMINAL_STATES } from "./sse-shared.js";
 import { readFilesWorkProduct } from "./files-work-product.js";
+import { appendRunAuditEvent } from "./run-audit.js";
+import { discardRunResult } from "./run-discard.js";
+import { continuationSummary } from "./run-continuation-projection.js";
 import { applyFilesResult } from "./files-apply-route.js";
 import { deliverableWorkspaceChanges } from "@claudexor/workspace";
 import { streamRunEvents } from "./run-events-stream.js";
@@ -193,7 +196,6 @@ import {
   ModeKind,
   RoutingGoal,
   ReviewFinding,
-  RunEventType,
   RunFailure,
   RunTelemetry,
   StructuredOutputConformance,
@@ -1192,33 +1194,7 @@ export class DaemonControlApiServer {
               key: decisionKey,
               operation: "run.decision.discard",
               request: { runId: rec.runId ?? rec.id, body },
-              work: async () => {
-                const files = readFilesWorkProduct(rec);
-                const state = controlRunResult(rec).applyState;
-                if (
-                  !TERMINAL_STATES.has(rec.state) ||
-                  !files ||
-                  files.manifest.isolation !== "envelope" ||
-                  (state !== "not_applied" && state !== "discarded")
-                )
-                  throw Object.assign(
-                    new Error(
-                      "Only an unapplied copied files result can be discarded; direct effects remain in place",
-                    ),
-                    { status: 409 },
-                  );
-                markRunApplyState(rec, "discarded", undefined, true);
-                appendRunAuditEvent(rec, "control.applied", {
-                  decision: "discard",
-                  manifest_sha256: files.manifestSha256,
-                });
-                return ControlRunDecisionResponse.parse({
-                  accepted: true,
-                  status: "discarded",
-                  message:
-                    "Pending file application discarded; retained result follows normal retention.",
-                });
-              },
+              work: () => discardRunResult(rec),
             }),
           );
           return this.json(res, 200, response);
@@ -2387,29 +2363,6 @@ function readFailure(rec: DaemonRunRecord): RunFailure | null {
   });
 }
 
-function appendRunAuditEvent(
-  rec: DaemonRunRecord,
-  type: RunEventType,
-  payload: Record<string, unknown>,
-): void {
-  if (!rec.runDir) return;
-  try {
-    // Single-counter invariant: while the run is active its EventLog owns the
-    // seq space, so audit records MUST route through it (appendRunEvent does;
-    // file-tail stamping only applies once the run is terminal). A tail-read
-    // here would duplicate ids and break SSE Last-Event-ID resume.
-    appendRunEvent(
-      join(rec.runDir, "events.jsonl"),
-      rec.runId ?? rec.id,
-      rec.taskId ?? "unknown",
-      type,
-      payload,
-    );
-  } catch {
-    /* audit append must not change control behavior */
-  }
-}
-
 /** v0.9 strategy flags projected back so surfaces can tell a race from a repair loop. */
 function strategyFromParams(
   p: Record<string, unknown>,
@@ -2548,6 +2501,7 @@ function summarizeRun(
       task?.run_lineage.delegated_from_run_id ??
       null,
     delegation: telemetry?.delegation ?? null,
+    ...continuationSummary(rec, eventsSnapshot),
     taskId: rec.taskId,
     state: rec.state,
     runDir: rec.runDir,

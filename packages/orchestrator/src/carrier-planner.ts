@@ -79,6 +79,7 @@ export interface CarrierIo {
   /** In-memory facts the loop already holds (the collector reads the rest from the run dir). */
   retainedOutput?: string;
   diffStat?: string | null;
+  completed?: boolean;
 }
 
 export type CarrierPrepared =
@@ -176,12 +177,13 @@ function preparePacket(io: CarrierIo): CarrierPrepared {
     cause: io.facts.cause,
     retainedOutput: io.retainedOutput ?? "",
     diffStat: io.diffStat ?? null,
+    completed: io.completed,
   });
   return { carrier: "packet", packet: buildEvidenceIndex(input) };
 }
 
 /** Locate through the adapter: the refreshed capsule, "miss", or "unverified"
- * when the adapter has no `continuity` (resume by id, engine-side id check). */
+ * when the adapter has no `continuity` (resume by id; a new id is recorded as before). */
 async function locateSafe(
   continuity: HarnessAdapter["continuity"],
   capsule: SessionCapsule,

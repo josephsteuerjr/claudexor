@@ -447,6 +447,22 @@
               "$ref": "#/definitions/ControlRunAgainDraft/properties/sourceRunId",
               "description": "Server-owned Exact Retry lineage; direct POST /runs rejects it."
             },
+            "continueFrom": {
+              "$ref": "#/definitions/ControlRunAgainDraft/properties/sourceRunId",
+              "description": "Continue a terminal predecessor run owned by this daemon; one accepted successor per predecessor. Omitted mode, scope, execution, harness and model come from the predecessor; prompt is the continuation text and may be empty."
+            },
+            "continueCarrier": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "packet"
+              ],
+              "description": "Carrier preference for continueFrom; omitted = auto."
+            },
+            "continueModelInherited": {
+              "type": "boolean",
+              "description": "Internal continuation model provenance; direct POST /runs rejects it."
+            },
             "planRunId": {
               "$ref": "#/definitions/ControlRunAgainDraft/properties/sourceRunId",
               "description": "Internal daemon handoff only; rejected (400) on POST /runs. When set, the turn implements an approved plan from that run."

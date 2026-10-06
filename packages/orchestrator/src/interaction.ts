@@ -45,6 +45,9 @@ export function resolveInteractionTimeoutPolicy(
   return { kind: "finite", timeoutMs: value };
 }
 
+/** Default wait for one interactive answer before a benign decline. */
+const DEFAULT_INTERACTION_TIMEOUT_MS = 900_000;
+
 export function interactionChannelFor(
   input: InteractionChannelWiring,
   log: EventLog,
@@ -52,8 +55,10 @@ export function interactionChannelFor(
   taskId: string,
   attemptId: string,
   harnessId: string,
+  // REQUIRED (no default): every call site must state the routed manifest's
+  // `interactive` capability, or a future site would silently bypass the gate.
   supportsInteractive: boolean,
-  defaultTimeoutMs: number,
+  defaultTimeoutMs = DEFAULT_INTERACTION_TIMEOUT_MS,
 ): InteractionChannel | undefined {
   if (!supportsInteractive) return undefined;
   const handler = input.onInteraction;

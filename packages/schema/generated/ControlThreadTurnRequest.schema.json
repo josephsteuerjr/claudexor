@@ -320,6 +320,10 @@
           },
           "description": "Typed per-run approvals for changing auto-protected gate/test paths; does not bypass built-in critical/security path human gates."
         },
+        "continueModelInherited": {
+          "type": "boolean",
+          "description": "Internal continuation model provenance; direct POST /runs rejects it."
+        },
         "planRunId": {
           "type": "string",
           "minLength": 1,

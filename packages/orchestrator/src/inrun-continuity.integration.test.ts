@@ -168,6 +168,38 @@ describe("in-run continuation (agent lane, in place)", () => {
     });
   });
 
+  it.each([
+    { continuity: "file", resumedAs: "sid-A", identity: "matched_before_effects" },
+    { continuity: "none", resumedAs: "sid-B", identity: "not_applicable" },
+  ] as const)(
+    "a same-account resume reports only the identity it compared ($continuity continuity, resumed as $resumedAs)",
+    async ({ continuity, resumedAs, identity }) => {
+      const o = await run({
+        mode: "agent",
+        profiles: ["a"],
+        maxRetries: 2,
+        ...(continuity === "none" ? { continuity: null } : {}),
+        script: function* ({ spec, emit, resume, tryOfProfile }) {
+          if (tryOfProfile === 1) {
+            seedSession(spec.cwd, "a", "sid-A");
+            yield emit({ type: "started", payload: { native_session_id: "sid-A" } });
+            writeFileSync(join(spec.cwd, "part1.txt"), "x\n");
+            yield emit({ type: "file_change", payload: { path: "part1.txt" } });
+            yield* crash(emit);
+            return;
+          }
+          expect(resume).toBe("sid-A");
+          yield emit({ type: "started", payload: { native_session_id: resumedAs } });
+          yield emit({ type: "message", text: "finished", final: true });
+          yield emit({ type: "completed" });
+        },
+      });
+      expect(o.result.lifecycle, o.result.summary).toBe("succeeded");
+      expect(o.receipts).toHaveLength(1);
+      expect(o.receipts[0]).toMatchObject({ carrier: "native", identityCheck: identity });
+    },
+  );
+
   it("transport death after an edit with NO session reported → same-account PACKET (1B), bounded by max_retries", async () => {
     const continued = await run({
       mode: "agent",

@@ -20,6 +20,7 @@ import {
 } from "@claudexor/schema";
 import { decideCarrier, prepareCarrier, type CarrierFacts } from "./carrier-planner.js";
 import { diffStatFromPatch, steeringFromRunLog } from "./continuation-evidence-io.js";
+import { completeInputPath, type UncertainInput } from "./continuation-input.js";
 import { continuationNotice, packetContinuationPrompt } from "./continuity-notice.js";
 import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-continuity-types.js";
 import { routeListsModel } from "./modelGovernance.js";
@@ -38,6 +39,11 @@ export interface ContinuedTry {
   toProfileId: string | null;
   memory: RunContinuityReceipt["memory"];
   inputDelivery: RunContinuityReceipt["inputDelivery"];
+  /** The first try of a `continueFrom` successor: the predecessor's run and
+   * attempt, and whether this run executes in its root. In-run tries leave
+   * both unset (this run, same root). */
+  from?: { runId: string; attemptId: string };
+  workspace?: RunContinuityReceipt["workspace"];
   summarized: boolean;
 }
 
@@ -85,6 +91,7 @@ export async function composeContinuedTry(
   delayMs: number,
 ): Promise<ComposedContinuedTry> {
   const { deps } = ctx;
+  const completed = deps.seed?.completed;
   const from = facts.runSpec.credential_profile?.profile_id ?? null;
   const to = base.credential_profile?.profile_id ?? null;
   const effectiveModel = facts.telemetry.observedModel ?? base.model_hint ?? null;
@@ -110,10 +117,12 @@ export async function composeContinuedTry(
       attemptId: deps.attemptId,
       workOrder: deps.workOrder,
       steering: [],
+      predecessors: deps.seed?.evidenceSources,
     },
     targetCwd: base.cwd,
     retainedOutput: ctx.retainedOutput,
     diffStat: facts.currentDiff ? diffStatFromPatch(facts.currentDiff) : null,
+    completed,
   });
   if (prepared.carrier === "fresh") {
     return {
@@ -124,6 +133,7 @@ export async function composeContinuedTry(
   }
   const notice = continuationNotice({
     cause,
+    completed,
     uncertainInput: ctx.uncertainInput,
     callerText: null,
   });
@@ -159,6 +169,7 @@ export async function composeContinuedTry(
         notice,
         evidencePath,
         evidenceMarkdown: prepared.packet.markdown,
+        completed,
       }),
     });
     return { verdict: { kind: "continue", spec, delayMs }, continued, capsule: null };
@@ -186,16 +197,33 @@ export async function composeContinuedTry(
 
 /** The predecessor's input that may not be in the vendor history: the last
  * caller-authored work order if the first try died before `started`, plus unconfirmed
- * steering messages (`message.accepted` with no `message.delivered`). */
+ * steering messages (`message.accepted` with no `message.delivered`), the chain's
+ * included while no newer run has started. */
 export function uncertainInputFor(
   runDir: string,
-  previousTryUnstarted: string | null,
+  previousInputs: readonly UncertainInput[],
   attemptId: string,
+  currentRunDir = runDir,
 ): string | null {
-  const parts: string[] = [];
-  if (previousTryUnstarted) parts.push(previousTryUnstarted.slice(0, 2048));
-  for (const message of steeringFromRunLog(runDir, attemptId))
-    if (message.delivery === "uncertain") parts.push(message.text.slice(0, 2048));
+  // Caller inputs arrive newest first. Steering is newer than the caller
+  // text of its own run, but older than any subsequent continuation's text.
+  const inputs = [...previousInputs];
+  const sameRun = inputs.findIndex((input) => input.runDir === runDir);
+  const steering = steeringFromRunLog(runDir, attemptId)
+    .filter((message) => message.delivery === "uncertain")
+    .reverse()
+    .map(({ text }) => ({ text, runDir }))
+    .filter((message) => !inputs.some((i) => i.runDir === runDir && i.text === message.text));
+  inputs.splice(sameRun < 0 ? inputs.length : sameRun, 0, ...steering);
+  let remaining = 2048;
+  const parts = inputs.map((input) => {
+    const shown = Math.min(remaining, input.text.length);
+    remaining -= shown;
+    const quote = input.text.slice(0, shown);
+    return shown === input.text.length
+      ? quote
+      : `${quote}\n[cut: ${shown} of ${input.text.length} characters; the complete text is in ${completeInputPath(input, currentRunDir)}]`;
+  });
   return parts.length ? parts.join("\n\n") : null;
 }
 
@@ -216,9 +244,13 @@ export function continuityReceipt(input: {
     attemptId: deps.attemptId,
     carrier: continued.carrier,
     cause: continued.cause,
-    from: { runId: deps.runId, attemptId: deps.attemptId, profileId: continued.fromProfileId },
+    from: {
+      runId: continued.from?.runId ?? deps.runId,
+      attemptId: continued.from?.attemptId ?? deps.attemptId,
+      profileId: continued.fromProfileId,
+    },
     to: { profileId: continued.toProfileId },
-    workspace: "same_root",
+    workspace: continued.workspace ?? "same_root",
     memory: continued.memory === "full" && input.nativeRejected ? "unknown" : continued.memory,
     instructions: "as_sent",
     reingestedTokens: input.reingestedTokens,

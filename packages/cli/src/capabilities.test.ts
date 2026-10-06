@@ -70,6 +70,7 @@ describe("AgentCapabilityCatalog surfaces", () => {
     // key that 400s. threadId joined the list under D10: a thread turn is
     // created through POST /threads/:id/turns, never POST /runs.
     expect([...RUN_START_CLIENT_REJECTED_KEYS].sort()).toEqual([
+      "continueModelInherited",
       "delegatedFromRunId",
       "parentRunId",
       "planRef",

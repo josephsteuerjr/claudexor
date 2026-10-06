@@ -51,6 +51,7 @@ export const RUN_START_CLIENT_REJECTED_KEYS = [
   "retryOf",
   "parentRunId",
   "delegatedFromRunId",
+  "continueModelInherited",
 ] as const;
 
 /**

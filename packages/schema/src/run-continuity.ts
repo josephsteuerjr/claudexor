@@ -63,7 +63,7 @@ export const ContinuityIdentityCheck = z
     "not_applicable",
   ])
   .describe(
-    "Whether the resumed vendor session was the one requested, judged at the earliest handshake (codex thread/resume before turn/start; claude system/init): matched, mismatch caught before the child could act, mismatch caught after it may have acted, or no resume was requested.",
+    "Whether the resumed vendor session was the one requested, judged at the earliest handshake (codex thread/resume before turn/start; claude system/init): matched, mismatch caught before the child could act, mismatch caught after it may have acted, or not applicable (no resume was requested, or a harness without the continuity capability answered with another session id, which is recorded as before).",
   );
 export type ContinuityIdentityCheck = z.infer<typeof ContinuityIdentityCheck>;
 

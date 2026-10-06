@@ -261,6 +261,9 @@ importers:
       '@claudexor/util':
         specifier: workspace:*
         version: link:../util
+      '@claudexor/workspace':
+        specifier: workspace:*
+        version: link:../workspace
       yaml:
         specifier: ^2.9.1
         version: 2.9.1

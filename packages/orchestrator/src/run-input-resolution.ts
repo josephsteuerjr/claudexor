@@ -79,6 +79,17 @@ export function resolveRunInputDefaults(input: RunInput, deps: RunInputResolutio
   }
   return {
     ...input,
+    continuation: input.continuation?.from
+      ? {
+          ...input.continuation,
+          from: {
+            ...input.continuation.from,
+            inheritModel:
+              input.continuation.from.inheritModel ??
+              (input.model === undefined && input.models === undefined),
+          },
+        }
+      : input.continuation,
     harnesses,
     primaryHarness,
     primaryHarnessExplicit: explicitPrimary !== undefined,

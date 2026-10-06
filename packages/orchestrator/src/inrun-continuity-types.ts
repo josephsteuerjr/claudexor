@@ -14,6 +14,9 @@ import type { ProfilePolicy, rotateSpecOnTypedLimit } from "./credential-profile
 import type { PreProgressRefusalSubject } from "./pre-progress-refusal.js";
 import type { TransientRetryPolicy } from "./runSupport.js";
 
+import type { ContinuedTry } from "./inrun-continuity-carrier.js";
+import type { PredecessorEvidenceSource } from "./continuation-evidence.js";
+
 type ContinuityEmit = (type: RunEventType, payload: Record<string, unknown>) => void;
 
 export interface InRunContinuityDeps {
@@ -53,6 +56,13 @@ export interface InRunContinuityDeps {
   /** The model-governed route: an attested model is pinned only if it lists the id. */
   route?: ModelGovernedRoute;
   newSessionId: () => string;
+  /** First try of a continueFrom successor: predecessor progress and receipt. */
+  seed?: {
+    acted: boolean;
+    completed?: boolean;
+    continued: ContinuedTry;
+    evidenceSources?: readonly PredecessorEvidenceSource[];
+  } | null;
   /** Thread facts for the moved-session disclosure (INV-137); null outside a thread. */
   thread: {
     threadId: string;

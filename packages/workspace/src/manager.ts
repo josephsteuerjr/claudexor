@@ -20,6 +20,11 @@ import {
 } from "./directory-workspace.js";
 import { processStartTime, readEnvelopeRecoveryRecord } from "./envelope-recovery.js";
 import {
+  isRetainedEnvelope,
+  liveEnvelopeCustody,
+  writeEnvelopeCustody,
+} from "./envelope-custody.js";
+import {
   excludePlainDiffPathPrefix,
   plainDiffFlaggedBinaries,
   relativizePlainDiffHeaders,
@@ -73,6 +78,9 @@ export interface CreateEnvelopeOptions {
    * snapshot backs `diff()` and reviewers also read the live tree directly.
    */
   inPlace?: boolean;
+  /** Holder run of an isolated Git envelope whose stopped work may be kept for
+   * continuation: `live` custody is recorded before any harness runs. */
+  custody?: { runId: string; runDir: string };
 }
 
 /**
@@ -276,6 +284,7 @@ export class WorkspaceManager {
       this.bridgeCreatedEnvelopes.add(envelope.id);
       writeBridgeCreatedMarker(base, envelope.id);
     }
+    if (opts.custody) writeEnvelopeCustody(base, liveEnvelopeCustody(envelope, opts.custody));
     return envelope;
   }
 
@@ -476,7 +485,7 @@ export class WorkspaceManager {
   }
 
   async dispose(env: WorkspaceEnvelope): Promise<void> {
-    if (this.retainedEnvelopes.has(env.id)) return;
+    if (this.retainedEnvelopes.has(env.id) || isRetainedEnvelope(env)) return;
     // Drop the created-this-run bridge fact so a long-lived manager doesn't
     // accumulate envelope ids (a disposed envelope is never diffed again).
     this.bridgeCreatedEnvelopes.delete(env.id);

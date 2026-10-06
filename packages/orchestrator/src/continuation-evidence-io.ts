@@ -122,13 +122,22 @@ export function steeringFromRunLog(runDir: string, attemptId?: string): Evidence
 /** Resolve the pure builder's input from the run dir plus the loop's in-memory facts. */
 export function collectEvidenceIndexInput(
   sources: EvidenceIndexSources,
-  extras: { cause: ResumableCause; retainedOutput: string; diffStat: string | null },
+  extras: {
+    cause: ResumableCause;
+    retainedOutput: string;
+    diffStat: string | null;
+    completed?: boolean;
+  },
 ): EvidenceIndexInput {
   const attemptDir = join(sources.runDir, "attempts", sources.attemptId);
   const eventsLog = join(sources.runDir, "events.jsonl");
-  const patch = join(attemptDir, "patch.diff");
-  return {
+  const attemptPatch = join(attemptDir, "patch.diff");
+  const patch = existsSync(attemptPatch)
+    ? attemptPatch
+    : join(sources.runDir, "final", "patch.diff");
+  const current: EvidenceIndexInput = {
     cause: extras.cause,
+    ...(extras.completed ? { completed: true } : {}),
     workOrder: sources.workOrder,
     steering:
       sources.steering.length > 0
@@ -142,6 +151,28 @@ export function collectEvidenceIndexInput(
       attemptDir: existsSync(attemptDir) ? attemptDir : null,
       patch: existsSync(patch) ? patch : null,
     },
+  };
+  const preceding =
+    sources.predecessors?.map((source) =>
+      collectEvidenceIndexInput(source, {
+        cause: extras.cause,
+        retainedOutput: source.retainedOutput,
+        diffStat: source.diffStat,
+      }),
+    ) ?? [];
+  if (preceding.length === 0) return current;
+  const all = [...preceding, current];
+  return {
+    ...current,
+    steering: all.flatMap((input) => input.steering),
+    retainedOutput: all
+      .map((input) => input.retainedOutput)
+      .filter(Boolean)
+      .join("\n\n"),
+    toolCalls: all.flatMap((input) => input.toolCalls),
+    diffStat:
+      [...new Set(all.flatMap((input) => input.diffStat?.split("\n") ?? []))].join("\n") || null,
+    predecessorArtifacts: preceding.map((input) => input.artifacts),
   };
 }
 

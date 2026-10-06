@@ -119,6 +119,8 @@ export const ControlThreadTurnRequest = ControlRunStartRequest.omit({
   delegatedFromRunId: true,
   retryOf: true,
   planRef: true,
+  continueFrom: true,
+  continueCarrier: true,
 })
   .extend({
     mode: ModeKind.optional().describe(

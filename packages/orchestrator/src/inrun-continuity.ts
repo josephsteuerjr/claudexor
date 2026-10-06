@@ -26,6 +26,7 @@
  * `triedProfiles`; same-account continuations by `max_retries` (A2).
  */
 import { CONTINUITY_IDENTITY_MISMATCH_CODE, acceptedTryOutput } from "@claudexor/core";
+import { readContinuationSources } from "@claudexor/workspace";
 import {
   HarnessRunSpec as HarnessRunSpecSchema,
   type ContinuityIdentityCheck,
@@ -62,6 +63,7 @@ import type { AfterTryVerdict, InRunContinuityDeps, TryFacts } from "./inrun-con
 import { discloseContinuedTry } from "./inrun-continuity-thread.js";
 import type { ContinuityTerminalFacts } from "./continuity-terminal.js";
 import { RetainedAttemptOutput } from "./inrun-retained-output.js";
+import { unconfirmedContinuationInputs, type UncertainInput } from "./continuation-input.js";
 
 const TYPED_REFUSALS = new Set(["auth_failed", "capability_refused", "config_error"]);
 
@@ -90,10 +92,12 @@ export class InRunContinuity {
   private readonly retainedOutput = new RetainedAttemptOutput();
   /** Carrier of the try that just settled (null = the first try or a fresh replay). */
   private settledCarrier: RunContinuityReceipt["carrier"] | null = null;
-  private previousTryUnstarted: string | null = null;
+  private unstartedInputs: UncertainInput[] = [];
 
   constructor(private readonly deps: InRunContinuityDeps) {
     this.capsule = readSessionCapsule(deps.attemptDir);
+    this.acted = deps.seed?.acted === true;
+    this.pending = deps.seed?.continued ?? null;
   }
 
   /** The loop calls this before each try spawns; `abort` is THIS try's controller. */
@@ -170,7 +174,8 @@ export class InRunContinuity {
       void this.deps.adapter.cancel?.(runSpec.session_id)?.catch(() => {});
       return `resumed native session ${nid} is not the requested ${this.expectedSessionId}; the try was stopped${markers.sawAgentProgress ? " (effects may have occurred)" : " before any effect"}`;
     }
-    if (this.expectedSessionId) this.tryIdentity = "matched_before_effects";
+    if (this.expectedSessionId && nid === this.expectedSessionId)
+      this.tryIdentity = "matched_before_effects";
     // Packet-born history lacks earlier thread turns, even on later native resumes.
     this.packetSession =
       this.continued?.carrier === "packet" ||
@@ -208,8 +213,17 @@ export class InRunContinuity {
     await this.relocate(facts.runSpec);
     this.settledCarrier = this.continued?.carrier ?? null;
     this.emitReceipt(facts.runSpec);
-    this.previousTryUnstarted =
-      !this.tryStarted && this.tryIndex === 0 ? this.deps.workOrder : null;
+    if (this.tryStarted) this.unstartedInputs = [];
+    else if (this.tryIndex === 0) {
+      const { runDir, runId, workOrder } = this.deps;
+      const sources = readContinuationSources(runDir);
+      // A successor's workOrder is the whole joined chain. Keep the individual
+      // undelivered callers newest first, including this run's own correction.
+      // Further unstarted tries keep these references until a try starts.
+      this.unstartedInputs = sources.length
+        ? unconfirmedContinuationInputs([{ runDir, runId, state: "running" }, ...sources])
+        : [{ text: workOrder, runDir }];
+    }
     if (facts.budgetStopped) return this.breakWith("other");
     if (!facts.harnessErrored || facts.aborted) return { kind: "break" };
     if (facts.requestRefused) return this.breakWith("other");
@@ -497,7 +511,7 @@ export class InRunContinuity {
         tryIndex: this.tryIndex,
         uncertainInput: uncertainInputFor(
           this.deps.runDir,
-          this.previousTryUnstarted,
+          this.unstartedInputs,
           this.deps.attemptId,
         ),
         retainedOutput: this.retainedOutput.text(),

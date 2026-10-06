@@ -1376,9 +1376,10 @@ describe("DaemonControlApiServer", () => {
       const { body } = await fetchRunList(base, { limit: "2" });
       expect(body.runs).toHaveLength(2);
       // Only the 2 paged terminal records are fingerprinted, and each terminal
-      // fingerprint short-circuits to delivery_state + the retention tombstone:
-      // 4 total, not 6 records x 13 paths.
-      expect(runListFingerprintProbeCountForTests()).toBe(4);
+      // fingerprint short-circuits to delivery_state + the retention tombstone
+      // + the kept-envelope pointer (adoption/discard move it): 6 total, not
+      // 6 records x 13 paths.
+      expect(runListFingerprintProbeCountForTests()).toBe(6);
     });
 
     const running = [pagedRunRecord(0, "running", runDir)];

@@ -31,7 +31,14 @@ export interface EvidenceIndexSources {
   attemptId: string;
   workOrder: string;
   steering: EvidenceSteering[];
+  /** Earlier runs, oldest first; each keeps its own tool-result pairing boundary. */
+  predecessors?: readonly PredecessorEvidenceSource[];
 }
+
+export type PredecessorEvidenceSource = Omit<EvidenceIndexSources, "predecessors"> & {
+  retainedOutput: string;
+  diffStat: string | null;
+};
 
 export interface EvidenceToolCall {
   name: string;
@@ -43,6 +50,7 @@ export interface EvidenceToolCall {
 /** Fully-resolved inputs of the pure builder (the collector reads them from the run dir). */
 export interface EvidenceIndexInput {
   cause: ResumableCause;
+  completed?: boolean;
   workOrder: string;
   steering: EvidenceSteering[];
   /** The retained assistant output (`final/retained-output.md` or the attempt's answer), "" when none. */
@@ -52,6 +60,7 @@ export interface EvidenceIndexInput {
   diffStat: string | null;
   /** Absolute paths readable from the new environment; null when absent. */
   artifacts: { eventsLog: string | null; attemptDir: string | null; patch: string | null };
+  predecessorArtifacts?: EvidenceIndexInput["artifacts"][];
 }
 
 export interface EvidenceIndex {
@@ -116,9 +125,13 @@ export function buildEvidenceIndex(input: EvidenceIndexInput): EvidenceIndex {
   };
   const unresolved = input.toolCalls.filter((call) => !call.resolved);
   const parts: string[] = [
-    "# Evidence index of the interrupted work",
+    input.completed
+      ? "# Evidence index of the previous work"
+      : "# Evidence index of the interrupted work",
     "",
-    `The previous process stopped (${CAUSE_LINE[input.cause]}) before finishing. This index is mechanical evidence of what it was asked, told and did; it is not a summary. The workspace is as it was left.`,
+    input.completed
+      ? "This index records the completed predecessor's work order, messages and actions. Check the current workspace before relying on its changes."
+      : `The previous process stopped (${CAUSE_LINE[input.cause]}) before finishing. This index is mechanical evidence of what it was asked, told and did; it is not a summary. The workspace is as it was left.`,
     "",
     "## Original work order",
     "",
@@ -152,17 +165,19 @@ export function buildEvidenceIndex(input: EvidenceIndexInput): EvidenceIndex {
   }
   parts.push("", "## Changed files", "");
   parts.push(input.diffStat && input.diffStat.trim() ? section(input.diffStat) : "(no diff stat)");
-  const refs = [
-    input.artifacts.eventsLog && `- Event log: ${input.artifacts.eventsLog}`,
-    input.artifacts.attemptDir && `- Attempt artifacts: ${input.artifacts.attemptDir}`,
-    input.artifacts.patch && `- Patch so far: ${input.artifacts.patch}`,
-  ].filter((line): line is string => typeof line === "string");
+  const refs = [input.artifacts, ...(input.predecessorArtifacts ?? [])]
+    .flatMap((artifacts) => [
+      artifacts.eventsLog && `- Event log: ${artifacts.eventsLog}`,
+      artifacts.attemptDir && `- Attempt artifacts: ${artifacts.attemptDir}`,
+      artifacts.patch && `- Patch so far: ${artifacts.patch}`,
+    ])
+    .filter((line): line is string => typeof line === "string");
   const footer = [
     "",
     "",
     "## Full evidence",
     "",
-    ...(refs.length ? refs : ["(no artifact paths available)"]),
+    refs.length ? section(refs.join("\n")) : "(no artifact paths available)",
     "",
     `Tool calls: ${input.toolCalls.length}; unresolved: ${unresolved.length}.`,
     "",

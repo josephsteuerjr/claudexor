@@ -73,8 +73,8 @@ export function registryProfile(
 /**
  * Re-locate the capsule's holder file through the adapter (best-effort I/O).
  * A located file refreshes `file`/`mtimeMs`/`sidecars`; a miss leaves the
- * capsule as it was (the engine-side session-id comparison still guards a
- * resume by id on adapters without `continuity`). Never throws.
+ * capsule as it was (a resume by id; only adapters with `continuity` have the
+ * engine compare the resumed session id). Never throws.
  */
 export async function relocateSessionCapsule(
   capsule: SessionCapsule,

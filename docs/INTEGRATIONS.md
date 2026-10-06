@@ -425,6 +425,20 @@ already in place and have no separate apply/full-rollback promise. The source
 root, preimages, verifier and retention boundaries are defined once in
 [ARCHITECTURE](ARCHITECTURE.md#directory-execution).
 
+Unfinished work is continued, never restarted: a terminal run whose work is
+unfinished carries `resumable` on `GET /v2/runs/:id` (cause, the vendor's
+reset when known, the available `carriers`, the native session and where the
+tree is), and every continued try a `continuity` receipt (carrier, accounts,
+memory, the try's attested model). Continue it with `POST /v2/runs` and the
+body `{continueFrom: <runId>, prompt: <next text, may be empty>}` and, to force
+a re-brief instead of a resume, `continueCarrier: "packet"`; read support from
+`continueFrom` in `GET /v2/agent-capabilities` `runControlKeys`, never from a
+harness name. One accepted successor per run: a second request answers `409
+continuation_superseded` with the chain's `head`. The same `discard` decision
+releases a stopped run's kept isolated envelope (`retainedEnvelope`). The
+semantics are defined once in
+[ARCHITECTURE](ARCHITECTURE.md#7-control-api).
+
 Terminal state may include diagnostic non-success states such as
 `stuck_no_progress` (the same diff repeated while a required gate still failed).
 Telemetry attempts can include adapter-declared transient failures; integrations
