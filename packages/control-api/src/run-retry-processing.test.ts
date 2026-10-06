@@ -62,10 +62,37 @@ function fixture(explicit?: "standard" | "fast") {
     services: { preflightRunRequirements: preflight },
   } as RunRetryRouteContext;
   const req = { headers: { "idempotency-key": "exact-retry" } } as unknown as IncomingMessage;
-  return { ctx, req, enqueue, findAccepted, json, preflight };
+  return { ctx, req, enqueue, findAccepted, json, preflight, source };
 }
 
 describe("exact retry processing custody", () => {
+  it.each([true, false])(
+    "omits internal continuation model provenance from an editable draft (%s)",
+    async (inherited) => {
+      const f = fixture();
+      f.source.params = {
+        ...(f.source.params as object),
+        continueFrom: "predecessor",
+        continueModelInherited: inherited,
+        model: "selected",
+      };
+      await handleRunRetryRoute(
+        f.ctx,
+        "GET",
+        "/runs/source/run-again",
+        f.req,
+        {} as ServerResponse,
+      );
+      const draft = f.json.mock.calls[0]?.[2];
+      expect(draft.request).toHaveProperty("model", "selected");
+      expect(draft.request).not.toHaveProperty("continueModelInherited");
+      expect(draft.differences).toContainEqual({
+        field: "continueModelInherited",
+        change: "omitted",
+        reason: "model intent is resolved from the edited request",
+      });
+    },
+  );
   it.each([undefined, "fast"] as const)(
     "preserves original processing and scope (explicit=%s)",
     async (explicit) => {

@@ -317,9 +317,19 @@ async function runAgain(ctx: RunRetryRouteContext, id: string, res: ServerRespon
       threadId,
       parentRunId,
       delegatedFromRunId,
+      continueModelInherited,
       ...request
     } = parsed;
     const differences = [
+      ...(continueModelInherited !== undefined
+        ? [
+            {
+              field: "continueModelInherited",
+              change: "omitted" as const,
+              reason: "model intent is resolved from the edited request",
+            },
+          ]
+        : []),
       ...(turnId
         ? [{ field: "turnId", change: "omitted" as const, reason: "server-owned turn binding" }]
         : []),
