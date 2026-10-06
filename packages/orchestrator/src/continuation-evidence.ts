@@ -50,6 +50,7 @@ export interface EvidenceToolCall {
 /** Fully-resolved inputs of the pure builder (the collector reads them from the run dir). */
 export interface EvidenceIndexInput {
   cause: ResumableCause;
+  completed?: boolean;
   workOrder: string;
   steering: EvidenceSteering[];
   /** The retained assistant output (`final/retained-output.md` or the attempt's answer), "" when none. */
@@ -124,9 +125,13 @@ export function buildEvidenceIndex(input: EvidenceIndexInput): EvidenceIndex {
   };
   const unresolved = input.toolCalls.filter((call) => !call.resolved);
   const parts: string[] = [
-    "# Evidence index of the interrupted work",
+    input.completed
+      ? "# Evidence index of the previous work"
+      : "# Evidence index of the interrupted work",
     "",
-    `The previous process stopped (${CAUSE_LINE[input.cause]}) before finishing. This index is mechanical evidence of what it was asked, told and did; it is not a summary. The workspace is as it was left.`,
+    input.completed
+      ? "This index records the completed predecessor's work order, messages and actions. Check the current workspace before relying on its changes."
+      : `The previous process stopped (${CAUSE_LINE[input.cause]}) before finishing. This index is mechanical evidence of what it was asked, told and did; it is not a summary. The workspace is as it was left.`,
     "",
     "## Original work order",
     "",

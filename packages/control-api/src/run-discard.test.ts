@@ -61,6 +61,7 @@ describe("discard decision", () => {
     await expect(discardRunResult(rec)).resolves.toMatchObject({
       accepted: true,
       status: "discarded",
+      message: expect.stringContaining("A continuation starts from the project base"),
     });
     expect(existsSync(envelopeBaseOf(env))).toBe(false);
     expect(retainedEnvelopeOfRun(runDir, "run-d")).toBeNull();

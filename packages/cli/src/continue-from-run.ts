@@ -10,7 +10,7 @@
  * accumulate. Admission (INTERFACES §1) already proved the predecessor is a
  * terminal run of this daemon; this resolves it from the same records.
  */
-import type { ControlRunStartRequest } from "@claudexor/schema";
+import { RunScope, type ControlRunStartRequest } from "@claudexor/schema";
 import type { RunInput } from "@claudexor/orchestrator";
 import { retainedEnvelopeInChain } from "@claudexor/workspace";
 
@@ -58,11 +58,18 @@ export function continuationForRun(
   if (!predecessor?.runId || !predecessor.runDir) return { retain };
   // An explicit live root or another project runs elsewhere: the kept envelope stays kept.
   const chain = predecessorChain(records, predecessor);
-  const sources = chain.flatMap((record) =>
-    record.runId && record.runDir
-      ? [{ runId: record.runId, runDir: record.runDir, state: record.state }]
-      : [],
-  );
+  const sources = chain.flatMap((record) => {
+    if (!record.runId || !record.runDir) return [];
+    const scope = RunScope.safeParse(paramsOf(record)["scope"]).data;
+    return [
+      {
+        runId: record.runId,
+        runDir: record.runDir,
+        state: record.state,
+        ...(scope?.kind === "project" ? { scopeRoot: scope.root } : {}),
+      },
+    ];
+  });
   const kept = retainedEnvelopeInChain(sources);
   const ownWorkspace =
     p.execution.isolation !== "live" &&
@@ -73,9 +80,7 @@ export function continuationForRun(
     retain,
     adopt: ownWorkspace ? kept : null,
     from: {
-      runId: predecessor.runId,
-      runDir: predecessor.runDir,
-      state: predecessor.state,
+      ...sources[0]!,
       workOrder: chain
         .map((record) => paramsOf(record)["prompt"])
         .filter((prompt): prompt is string => typeof prompt === "string" && !!prompt.trim())

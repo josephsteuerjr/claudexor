@@ -75,6 +75,7 @@ export const ContinuationSources = z.array(
     runId: Id,
     runDir: z.string().min(1),
     state: z.string(),
+    scopeRoot: z.string().min(1).optional(),
   }),
 );
 export type ContinuationSources = z.infer<typeof ContinuationSources>;

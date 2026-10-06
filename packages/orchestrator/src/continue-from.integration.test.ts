@@ -723,3 +723,83 @@ describe("continueFrom model selection", () => {
     },
   );
 });
+
+describe("continueFrom root and completed-work notices", () => {
+  it("names the saved patch when finished isolated work continues from the project base", async () => {
+    let f!: Fixture;
+    f = fixture(["a"], function* (ctx) {
+      if (ctx.phase === "predecessor") seedSession(f.stores[ctx.profile]!, "sid-A");
+      yield* finishing(ctx.emit, ctx.cwd, "sid-A");
+    });
+    const { pred, succ } = await chain(f, { predecessor: { inPlace: false } });
+    expect(pred.result.lifecycle, pred.result.summary).toBe("succeeded");
+    const patch = join(pred.result.runDir, "final", "patch.diff");
+    expect(existsSync(patch)).toBe(true);
+    const next = f.spawns.find((s) => s.phase === "successor")!;
+    expect(next.prompt).toContain("different working tree");
+    expect(next.prompt).toContain(patch);
+    expect(succ.receipts[0]).toMatchObject({ workspace: "different_root" });
+  });
+
+  it("treats an unknown root as the same inherited project scope", async () => {
+    let f!: Fixture;
+    f = fixture(["a"], function* (ctx) {
+      yield ctx.emit({
+        type: "message",
+        text: "The work can proceed in the project root.",
+        final: true,
+      });
+      yield ctx.emit({ type: "completed" });
+    });
+    const a = await runOnce(f, { inPlace: true, continuation: { retain: true } });
+    const continuation = continuationForRun(
+      ControlRunStartRequest.parse({
+        continueFrom: a.result.runId,
+        scope: { kind: "project", root: f.root },
+        execution: { isolation: "live" },
+      }),
+      {
+        all: () => [
+          {
+            records: () => [
+              {
+                runId: a.result.runId,
+                runDir: a.result.runDir,
+                state: a.result.lifecycle,
+                params: { prompt: WORK_ORDER, scope: { kind: "project", root: f.root } },
+              },
+            ],
+          },
+        ],
+      },
+    );
+    f.phase.current = "successor";
+    const b = await runOnce(f, { inPlace: true, prompt: "Continue", continuation });
+    expect(b.result.lifecycle, b.result.summary).toBe("succeeded");
+    expect(b.receipts[0]).toMatchObject({ workspace: "same_root" });
+    expect(f.spawns.at(-1)!.prompt).not.toContain("different working tree");
+  });
+
+  it.each(["auto", "packet"] as const)(
+    "uses a neutral notice for an empty follow-up to succeeded work (%s)",
+    async (preference) => {
+      let f!: Fixture;
+      f = fixture(["a"], function* (ctx) {
+        if (ctx.phase === "predecessor") seedSession(f.stores[ctx.profile]!, "sid-A");
+        yield* finishing(
+          ctx.emit,
+          ctx.cwd,
+          ctx.phase === "successor" && preference === "packet" ? "sid-new" : "sid-A",
+        );
+      });
+      const { pred, succ } = await chain(f, { preference, successor: { prompt: "" } });
+      expect(pred.result.lifecycle, pred.result.summary).toBe("succeeded");
+      expect(pred.resumable).toBeUndefined();
+      expect(succ.result.lifecycle, succ.result.summary).toBe("succeeded");
+      const prompt = f.spawns.find((s) => s.phase === "successor")!.prompt;
+      expect(prompt).not.toContain("previous process stopped");
+      expect(prompt).not.toContain("could not finish");
+      expect(prompt).toContain("Continue from the previous work");
+    },
+  );
+});

@@ -68,6 +68,8 @@ export interface ContinueFromSource {
   ancestors?: ContinuationSources;
   /** Captured before inheritance/defaults; a caller-selected model always wins. */
   inheritModel?: boolean;
+  /** Inherited project scope, used only when no capsule/workspace records the root. */
+  scopeRoot?: string;
 }
 
 const WORK_ORDER_FILE = join("context", "work-order.md");
@@ -171,14 +173,17 @@ function readSource(store: ArtifactStore, from: ContinueFromSource): Predecessor
     workOrder: readTextSafe(join(from.runDir, WORK_ORDER_FILE))?.trim() || from.workOrder,
     output,
     diffStat: diffStatFromPatch(patch),
-    root: held?.capsule.cwd ?? resumable?.workspace.root ?? null,
+    root: held?.capsule.cwd ?? resumable?.workspace.root ?? from.scopeRoot ?? null,
   };
 }
 
 function readPredecessor(store: ArtifactStore, from: ContinueFromSource): PredecessorFacts {
   const own = readSource(store, from);
   for (const source of [from, ...(from.ancestors ?? [])]) {
-    const facts = source === from ? own : readSource(store, { ...from, ...source });
+    const facts =
+      source === from
+        ? own
+        : readSource(store, { ...from, ...source, scopeRoot: source.scopeRoot });
     if (facts.capsule || facts.resumable || facts.hasEvidence)
       return { ...facts, workOrder: own.workOrder };
   }
@@ -216,6 +221,7 @@ export async function openContinuity(
   if (!continuation || !from) return { continuity: new InRunContinuity(deps), spec };
   continuation.from = null;
   const pred = readPredecessor(store, from);
+  const completed = pred.resumable === null && from.state === "succeeded";
   const evidenceSources: PredecessorEvidenceSource[] = [from, ...(from.ancestors ?? [])]
     .reverse()
     .map((source) => {
@@ -261,13 +267,19 @@ export async function openContinuity(
     steering: [],
     predecessors: evidenceSources.filter((source) => source.runDir !== pred.runDir),
   };
-  const extras = { cause: pred.cause, retainedOutput: pred.output, diffStat: pred.diffStat };
+  const extras = {
+    cause: pred.cause,
+    retainedOutput: pred.output,
+    diffStat: pred.diffStat,
+    completed,
+  };
   const prepared = await prepareCarrier(decideCarrier(facts), {
     facts,
     evidence,
     targetCwd: deps.cwd,
     retainedOutput: pred.output,
     diffStat: pred.diffStat,
+    completed,
   });
   const uncertainInput = uncertainInputFor(
     pred.runDir,
@@ -277,7 +289,15 @@ export async function openContinuity(
   const sameRoot = samePath(pred.root, deps.cwd);
   // The notice says the workspace is as it was left; in another tree that is
   // not known, so the child is told to check before relying on it.
-  const treeNote = sameRoot ? "" : DIFFERENT_ROOT_NOTE;
+  const patchPath = join(pred.runDir, "final", "patch.diff");
+  const treeNote = sameRoot
+    ? ""
+    : [
+        DIFFERENT_ROOT_NOTE,
+        existsSync(patchPath) ? `The predecessor's saved patch is at: ${patchPath}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
   const withNote = (text: string) => [treeNote, text.trim()].filter(Boolean).join("\n\n");
   const native = prepared.carrier === "native" || prepared.carrier === "native_moved";
   let composed: HarnessRunSpec;
@@ -290,7 +310,7 @@ export async function openContinuity(
     }
     // A follow-up on finished work is the caller's text alone; unfinished
     // work gets the continuation notice (cause, undelivered input) first.
-    const followUp = pred.resumable === null && from.state === "succeeded" && callerText.trim();
+    const followUp = completed && callerText.trim() && uncertainInput === null;
     composed = HarnessRunSpecSchema.parse({
       ...spec,
       model_hint: model,
@@ -299,6 +319,7 @@ export async function openContinuity(
         ? withNote(callerText)
         : continuationNotice({
             cause: pred.cause,
+            completed,
             uncertainInput,
             callerText: withNote(callerText),
           }),
@@ -320,9 +341,15 @@ export async function openContinuity(
       model_hint: model,
       prompt: packetContinuationPrompt({
         originalPrompt: spec.prompt,
-        notice: continuationNotice({ cause: pred.cause, uncertainInput, callerText: withNote("") }),
+        notice: continuationNotice({
+          cause: pred.cause,
+          completed,
+          uncertainInput,
+          callerText: withNote(""),
+        }),
         evidencePath,
         evidenceMarkdown: index.markdown,
+        completed,
       }),
     });
   }

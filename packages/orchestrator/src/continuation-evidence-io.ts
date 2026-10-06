@@ -114,7 +114,12 @@ export function steeringFromRunLog(runDir: string, attemptId?: string): Evidence
 /** Resolve the pure builder's input from the run dir plus the loop's in-memory facts. */
 export function collectEvidenceIndexInput(
   sources: EvidenceIndexSources,
-  extras: { cause: ResumableCause; retainedOutput: string; diffStat: string | null },
+  extras: {
+    cause: ResumableCause;
+    retainedOutput: string;
+    diffStat: string | null;
+    completed?: boolean;
+  },
 ): EvidenceIndexInput {
   const attemptDir = join(sources.runDir, "attempts", sources.attemptId);
   const eventsLog = join(sources.runDir, "events.jsonl");
@@ -124,6 +129,7 @@ export function collectEvidenceIndexInput(
     : join(sources.runDir, "final", "patch.diff");
   const current: EvidenceIndexInput = {
     cause: extras.cause,
+    ...(extras.completed ? { completed: true } : {}),
     workOrder: sources.workOrder,
     steering:
       sources.steering.length > 0

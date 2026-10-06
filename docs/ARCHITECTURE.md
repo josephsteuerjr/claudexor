@@ -2160,7 +2160,11 @@ Endpoint semantics beyond the inventory:
   and `continueCarrier: "packet"` forces the re-brief. A native carrier never
   resends the original prompt: the continuation notice (cause, any undelivered
   input) plus the caller's text is the user prompt, and a follow-up on
-  finished work is the caller's text alone. The chain's work order
+  finished work uses the caller's text alone when delivery is certain; an empty
+  follow-up gets a neutral continue notice, including with a packet carrier.
+  A different-root notice includes the predecessor's saved `final/patch.diff`
+  path when available. If no capsule/workspace recorded a root, the predecessor's
+  inherited project scope root is the comparison baseline. The chain's work order
   (predecessor's work order + continuation text) is recorded as
   `context/work-order.md`. An earlier continuation's caller text without a
   confirmed first-try delivery is carried as an uncertain reference to reconcile,
@@ -2889,7 +2893,8 @@ bridge link) is removed when it is kept; the adapters re-create it on the next
 spawn. Nothing removes a kept envelope automatically: a successor adopting it
 (custody moves, the tree is never deleted), applying the run's result, or the
 `discard` decision releases it, and disk retention keeps a run tree that holds
-one. Command pruning also exempts retained holders and successor commands
+one. Discard releases the kept tree; a later accepted continuation starts from
+the project base. Command pruning also exempts retained holders and successor commands
 while their predecessor record remains in the kept set, preserving the
 continuation handle and its single-successor claim across journal compaction.
 After a predecessor is pruned, its successor becomes eligible on a later pass.

@@ -27,7 +27,7 @@ export async function discardRunResult(rec: DaemonRunRecord): Promise<ControlRun
       accepted: true,
       status: "discarded",
       message:
-        "Stopped work discarded; its kept envelope was removed and the run can no longer be continued.",
+        "Stopped work discarded; its kept envelope was removed. A continuation starts from the project base.",
     });
   }
   const files = readFilesWorkProduct(rec);
