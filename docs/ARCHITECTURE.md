@@ -2137,8 +2137,11 @@ Endpoint semantics beyond the inventory:
   attempts/until-clean, deep-scan or council) and `continuation_superseded`
   (409, context `head` = the newest link of the chain). The daemon applies it
   inside the enqueue RPC immediately before acceptance, so the accepted
-  successor command is the durable claim: one accepted successor per
-  predecessor across every ingress and restart; a successor refused before
+  successor command is the durable claim: while the predecessor's command
+  record is kept, its successor claim is exempt from command pruning, preserving
+  one accepted successor across every ingress and restart. After the predecessor
+  record is pruned, its id is unknown and the successor can be pruned on a later
+  pass. A successor refused before
   its run started holds no claim, one that ran and failed stays the head.
   Exact Retry and `rerun_with_feedback` replay the original request, so for a
   successor that ran they answer the same `continuation_superseded`: the
@@ -2178,7 +2181,9 @@ Endpoint semantics beyond the inventory:
   failed first try never falls back to a context-free replay. Workspace: an
   explicit `execution.workspaceRoot` or live isolation wins; otherwise a
   predecessor whose isolated envelope was kept (below) is continued IN that
-  envelope — same path, files and base, one cumulative patch. A successor that
+  envelope — same path, files and base, one cumulative patch. Delegate-belt
+  children start from the project base even when their predecessor has a kept
+  envelope; that predecessor's custody stays retained. A successor that
   fails before adoption remains the head: continuation walks its ancestors to
   the nearest retained envelope and available session/evidence. An Ask head
   leaves the retained tree available for a later Agent successor. Predecessor
@@ -2901,9 +2906,10 @@ After a predecessor is pruned, its successor becomes eligible on a later pass.
 The crash sweep never treats a kept envelope as an orphan (its auth is
 stripped again, and a missing holder pointer is rebuilt from authoritative
 custody); an envelope whose holder died mid-attempt with a changed tree or a
-valid session capsule is kept with cause `host_restart`. Delegate belt children,
-in-place runs and race/synthesis/review envelopes keep their ordinary
-lifecycle.
+valid session capsule is kept with cause `host_restart`. Delegate belt children
+start from the project base even if their predecessor holds a retained envelope;
+they do not adopt or retain it. In-place runs and race/synthesis/review envelopes
+keep their ordinary lifecycle.
 While running it snapshots its live harness child process groups to
 `daemon/pids.json`; the NEXT startup reaps recorded orphans that survived a
 crash (pid liveness + command-name recycling guard) and sweeps workspace
