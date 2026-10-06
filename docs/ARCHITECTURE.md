@@ -2865,8 +2865,9 @@ requests them for its log line, and `claudexor gc` prints them.
 STOPPED ISOLATED WORK IS KEPT for `continueFrom` (A9): a daemon-owned,
 single-candidate, mutating Agent run records `live` custody of its isolated
 envelope (`continuation-custody.json` in the envelope base, written before
-any harness runs). When the candidate ends unfinished (cancelled, wall
-clock, errored, or a `needs_input` / `incomplete` report) AND there is
+any harness runs). Retention settles with the final run outcome, after review
+and budget reconciliation: any non-success terminal, or a `succeeded` run
+with a `needs_input` / `incomplete` report, keeps the envelope when there is
 something to continue (a diff, a session capsule, or a tree that differs from
 its base), the envelope — tree and scoped home — is kept (custody
 `retained`, the run-dir pointer `final/retained-envelope.json`, a

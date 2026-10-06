@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EventLog } from "@claudexor/event-log";
-import type { WorkspaceEnvelope } from "@claudexor/schema";
+import { makeOutcomeFacts, type WorkspaceEnvelope } from "@claudexor/schema";
 import {
   WorkspaceManager,
   envelopeBaseOf,
@@ -39,6 +39,7 @@ function initRepo(): string {
 function fakeLog() {
   const events: { type: string; payload: Record<string, unknown> }[] = [];
   const log = {
+    deferTerminal() {},
     emit: (type: string, payload: Record<string, unknown> = {}) => {
       events.push({ type, payload });
       return {} as never;
@@ -85,6 +86,7 @@ describe("candidate envelope custody (A9)", () => {
     const env = await create();
     expect(readEnvelopeCustody(envelopeBaseOf(env))?.state).toBe("live");
     await kept.settle(wsm, env, [candidate(env, { diff: "diff --git a/a b/a\n", errored: true })]);
+    await kept.finish(makeOutcomeFacts("failed"));
     expect(existsSync(env.worktree_path)).toBe(true);
     expect(retainedEnvelopeOfRun(runDir, "run-1")?.envelope.id).toBe(env.id);
     expect(events).toEqual([
@@ -102,6 +104,7 @@ describe("candidate envelope custody (A9)", () => {
     await waiting.kept.settle(waiting.wsm, env, [
       candidate(env, { diff: "x", workState: "needs_input" }),
     ]);
+    await waiting.kept.finish(makeOutcomeFacts("succeeded"));
     expect(readEnvelopeCustody(envelopeBaseOf(env))?.cause).toBe("input_required");
 
     // A cancelled run with no diff but a native session capsule is kept too.
@@ -112,6 +115,7 @@ describe("candidate envelope custody (A9)", () => {
     writeFileSync(sessionCapsuleFile(join(cancelled.paths.attemptsDir, "a01")), "{}\n");
     abort.abort("wall_clock_exceeded");
     await cancelled.kept.settle(cancelled.wsm, env2, [candidate(env2, { errored: true })]);
+    await cancelled.kept.finish(makeOutcomeFacts("cancelled"));
     expect(readEnvelopeCustody(envelopeBaseOf(env2))?.cause).toBe("wall_clock");
   });
 
@@ -119,11 +123,13 @@ describe("candidate envelope custody (A9)", () => {
     const done = setup(true);
     const env = await done.create();
     await done.kept.settle(done.wsm, env, [candidate(env, { diff: "x", workState: "completed" })]);
+    await done.kept.finish(makeOutcomeFacts("succeeded"));
     expect(existsSync(envelopeBaseOf(env))).toBe(false);
 
     const empty = setup(true);
     const env2 = await empty.create();
     await empty.kept.settle(empty.wsm, env2, [candidate(env2, { errored: true })]);
+    await empty.kept.finish(makeOutcomeFacts("failed"));
     expect(existsSync(envelopeBaseOf(env2))).toBe(false);
 
     const local = setup(false);
@@ -138,6 +144,7 @@ describe("candidate envelope custody (A9)", () => {
     const env = await first.create();
     writeFileSync(join(env.worktree_path, "a.txt"), "edited\n");
     await first.kept.settle(first.wsm, env, [candidate(env, { diff: "x", errored: true })]);
+    await first.kept.finish(makeOutcomeFacts("failed"));
     const custody = retainedEnvelopeOfRun(first.runDir, "run-1")!;
 
     const succRunDir = temp("succ");
@@ -165,6 +172,7 @@ describe("candidate envelope custody (A9)", () => {
     await next.settle(first.wsm, adopted, [
       { ...candidate(adopted, { diff: "x", errored: true }), attemptId: "a01" },
     ]);
+    await next.finish(makeOutcomeFacts("failed"));
     expect(retainedEnvelopeOfRun(succRunDir, "run-2")?.envelope.id).toBe(env.id);
     expect(retainedEnvelopeOfRun(first.runDir, "run-1")).toBeNull();
   });

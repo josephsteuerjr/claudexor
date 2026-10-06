@@ -5,7 +5,7 @@
  * (same path, base and files); any other single-candidate mutating run gets a
  * fresh isolated envelope with `live` custody recorded before the harness runs.
  * End: the envelope is kept (`retained`) when the work stopped unfinished
- * (cancelled, errored, or a needs_input / incomplete report) AND there is
+ * (a non-success run terminal, or a needs_input / incomplete report) AND there is
  * something to continue (a tree that differs from its base, or a native
  * session capsule); otherwise it is disposed as before. Race candidates,
  * synthesis, review and in-place envelopes are untouched.
@@ -13,18 +13,26 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { EventLog } from "@claudexor/event-log";
-import type { EnvelopeCustody, ResumableCause, WorkspaceEnvelope } from "@claudexor/schema";
+import {
+  RunResumable,
+  type EnvelopeCustody,
+  type ResumableCause,
+  type RunOutcomeFacts,
+  type WorkspaceEnvelope,
+} from "@claudexor/schema";
 import {
   adoptRetainedEnvelope,
   envelopeBaseOf,
   envelopeTreeChanged,
   readEnvelopeCustody,
   retainForContinuation,
+  retainedEnvelopeOfRun,
   type CreateEnvelopeOptions,
   type WorkspaceManager,
 } from "@claudexor/workspace";
 import type { CandidateRun } from "./candidateEvidence.js";
 import type { ContinueFromSource } from "./continue-from.js";
+import type { AnnouncedRunContext } from "./runTerminalContext.js";
 
 interface EnvelopeHolder {
   runId: string;
@@ -52,7 +60,7 @@ export interface RunContinuation {
 /**
  * The custody hooks of one run's candidate slot: `envelope` creates (or, for a
  * `continueFrom` successor, adopts) the candidate's envelope; `settle` keeps or
- * disposes it when the candidate ends. Only a daemon-owned, single-candidate,
+ * stages it until the final run outcome. Only a daemon-owned, single-candidate,
  * mutating run (`keepable`) records custody; every other run keeps today's
  * create/dispose behaviour.
  */
@@ -65,20 +73,47 @@ export function forRun(
 ) {
   const holder: EnvelopeHolder | null =
     input.continuation?.retain && keepable ? { runId, runDir: paths.root } : null;
-  return {
-    envelope: (wsm: WorkspaceManager, opts: CreateEnvelopeOptions) =>
-      candidateEnvelope(wsm, holder, holder ? (input.continuation?.adopt ?? null) : null, opts),
-    settle: (
-      wsm: WorkspaceManager,
-      env: WorkspaceEnvelope,
-      runs: readonly (CandidateRun | undefined)[],
-    ) =>
-      settleCandidateEnvelope(wsm, env, {
+  const pending = new Map<
+    string,
+    { wsm: WorkspaceManager; env: WorkspaceEnvelope; runs: readonly (CandidateRun | undefined)[] }
+  >();
+  const finish = async (facts: RunOutcomeFacts) => {
+    for (const { wsm, env, runs } of pending.values()) {
+      await settleCandidateEnvelope(wsm, env, {
         runs,
         signal: input.signal,
         attemptsDir: paths.attemptsDir,
         log,
-      }),
+        facts,
+      });
+      pending.delete(env.id);
+    }
+  };
+  if (holder && log) {
+    log.deferTerminal();
+    pendingRuns.set(log, finish);
+  }
+  return {
+    envelope: async (wsm: WorkspaceManager, opts: CreateEnvelopeOptions) => {
+      const env = await candidateEnvelope(
+        wsm,
+        holder,
+        holder ? (input.continuation?.adopt ?? null) : null,
+        opts,
+      );
+      if (holder && readEnvelopeCustody(envelopeBaseOf(env))?.holder_run_id === holder.runId)
+        pending.set(env.id, { wsm, env, runs: [] });
+      return env;
+    },
+    settle: async (
+      wsm: WorkspaceManager,
+      env: WorkspaceEnvelope,
+      runs: readonly (CandidateRun | undefined)[],
+    ) => {
+      if (pending.has(env.id)) pending.set(env.id, { wsm, env, runs });
+      else await wsm.dispose(env);
+    },
+    finish,
   };
 }
 
@@ -103,11 +138,15 @@ async function candidateEnvelope(
 function unfinishedCause(
   run: CandidateRun | undefined,
   signal: AbortSignal | undefined,
+  facts: RunOutcomeFacts,
 ): ResumableCause | null | undefined {
   if (signal?.aborted) return signal.reason === "wall_clock_exceeded" ? "wall_clock" : "cancelled";
-  if (!run || run.errored) return null;
-  const state = run.telemetry.outcome?.workState?.state;
+  const state = run?.telemetry.outcome?.workState?.state;
   if (state === "needs_input") return "input_required";
+  if (facts.lifecycle !== "succeeded")
+    return facts.reason === "context_capacity_exhausted"
+      ? "context_exhausted"
+      : (run?.resumable?.cause ?? null);
   return state === "incomplete" ? null : undefined;
 }
 
@@ -138,24 +177,51 @@ async function settleCandidateEnvelope(
     signal?: AbortSignal;
     attemptsDir: string;
     log?: EventLog;
+    facts: RunOutcomeFacts;
   },
 ): Promise<void> {
   const custody = readEnvelopeCustody(envelopeBaseOf(env));
   if (custody?.state !== "live" || custody.envelope.id !== env.id) return wsm.dispose(env);
   const run = ctx.runs.find((candidate) => candidate?.reviewCwd === env.worktree_path);
-  const cause = unfinishedCause(run, ctx.signal);
+  const cause = unfinishedCause(run, ctx.signal, ctx.facts);
   if (cause === undefined || !(await worthKeeping(env, run, ctx.attemptsDir))) {
     return wsm.dispose(env);
   }
   const holder = { runId: custody.holder_run_id, runDir: custody.holder_run_dir };
   const retained = retainForContinuation(env, holder, cause);
   // The terminal `resumable` block (written after this settle) names the kept tree.
-  if (run?.resumable)
-    run.resumable.workspace = { kind: "retained_envelope", root: env.worktree_path };
+  // Deferred terminal payloads share these workspace objects, including a
+  // resumableOnFailure promoted by the final budget verdict.
+  for (const resumable of [run?.resumable, run?.resumableOnFailure])
+    if (resumable)
+      Object.assign(resumable.workspace, { kind: "retained_envelope", root: env.worktree_path });
   ctx.log?.emit("workspace.retained", {
     attempt_id: run?.attemptId ?? env.attempt_id,
     root: env.worktree_path,
     cause,
     bytes: retained.bytes,
   });
+}
+
+const pendingRuns = new WeakMap<EventLog, (facts: RunOutcomeFacts) => Promise<void>>();
+
+/** Settle custody after the strategy and Delegate budget verdict, before terminal publication. */
+export async function flushContinuationTerminal(
+  context: AnnouncedRunContext,
+  facts: RunOutcomeFacts,
+): Promise<void> {
+  const finish = pendingRuns.get(context.log);
+  if (finish) {
+    await finish(facts);
+    pendingRuns.delete(context.log);
+    const kept = retainedEnvelopeOfRun(context.paths.root, context.runId);
+    const path = join(context.paths.finalDir, "resumable.yaml");
+    const resumable = RunResumable.safeParse(context.store.readYaml(path)).data;
+    if (kept && resumable)
+      context.store.writeYaml(path, {
+        ...resumable,
+        workspace: { kind: "retained_envelope", root: kept.envelope.worktree_path },
+      });
+  }
+  context.log.flushDeferredTerminal();
 }

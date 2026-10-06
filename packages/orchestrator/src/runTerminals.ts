@@ -29,6 +29,7 @@ import { reconcileDecisionTerminal } from "./decisionTerminalReconciliation.js";
 import type { OrchestratorResult } from "./orchestrator.js";
 import { prepareRunFactsFailureReceipt, prepareRunFactsReceipt } from "./runFacts.js";
 import type { AnnouncedRunContext } from "./runTerminalContext.js";
+import { flushContinuationTerminal } from "./continuation-custody.js";
 import { publishRetainedOutput } from "./retainedOutput.js";
 import {
   cancelledResult,
@@ -390,7 +391,7 @@ export async function guardAnnouncedRun(
             context.store,
             reconciledCancelFacts,
           );
-          context.log.flushDeferredTerminal();
+          await flushContinuationTerminal(context, cancelled.facts);
           result = {
             ...result,
             lifecycle: "cancelled",
@@ -404,10 +405,10 @@ export async function guardAnnouncedRun(
           if (budgetTerminal && result.lifecycle === "succeeded") {
             context.log.clearDeferredTerminal();
             result = postDrainBudgetFailure(context, budgetTerminal, budget, result);
-            context.log.flushDeferredTerminal();
+            await flushContinuationTerminal(context, result.facts);
           } else {
             if (delegateBarrierArmed) reconcileDecisionBudget(context, budget);
-            context.log.flushDeferredTerminal();
+            await flushContinuationTerminal(context, result.facts);
             if (budget.spendUsd !== null) result = { ...result, spendUsd: budget.spendUsd };
           }
         }
@@ -485,7 +486,7 @@ export async function guardAnnouncedRun(
             a.store,
             reconciledCancelFacts,
           );
-          a.log.flushDeferredTerminal();
+          await flushContinuationTerminal(a, cancelled.facts);
           result = preparedResult
             ? {
                 ...preparedResult,
@@ -526,7 +527,7 @@ export async function guardAnnouncedRun(
             spendUsd,
             { priorFacts: reconciledFailureFacts },
           );
-          a.log.flushDeferredTerminal();
+          await flushContinuationTerminal(a, failed.facts);
           result = preparedResult
             ? {
                 ...preparedResult,
