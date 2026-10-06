@@ -1,6 +1,8 @@
+import { retainedEnvelopeOfRun } from "@claudexor/workspace";
 import type { JobRecord } from "./server.js";
 import {
   CommandListQuery,
+  continuedRunOf,
   directDelegatedChildrenFromRecords,
   isModelOperation,
 } from "@claudexor/schema";
@@ -68,11 +70,31 @@ function isNeedsDecision(record: JobRecord): boolean {
   return facts.review === "blocked" || facts.checks === "failed";
 }
 
+/** Pure exemptions: keep custody addressable and claims while their predecessor is retained.
+ * The input is the current kept set; if a predecessor is removed in this pass,
+ * its successor becomes eligible on the next pass. No lifetime is invented. */
+function continuationExemptions(records: readonly JobRecord[]): Set<string> {
+  const identities = new Set(
+    records.flatMap((record) => [record.id, ...(record.runId ? [record.runId] : [])]),
+  );
+  return new Set(
+    records
+      .filter((record) => {
+        const predecessor = continuedRunOf(record.params);
+        return (
+          (predecessor !== null && identities.has(predecessor)) ||
+          !!(record.runDir && record.runId && retainedEnvelopeOfRun(record.runDir, record.runId))
+        );
+      })
+      .map((record) => record.id),
+  );
+}
+
 /** Cap on the serialized `params` bytes retained across terminal product
  * commands (journal sprint owner decision D3, release 1). Prompts stay inline
  * in the command journal, so once their sum passes this bound the OLDEST
  * terminal product commands are pruned regardless of age; the 500/30-day rule
- * is unchanged. Model-operation receipts and needs-decision runs are exempt;
+ * is unchanged. Model-operation receipts, needs-decision and continuation references are exempt;
  * delivery commands (`delivery-*`, which carry a copy of the applied run's
  * params) keep their own age/cap policy and neither count nor get pruned here. */
 export const MAX_RETAINED_COMMAND_PARAMS_BYTES = 256 * 1024 * 1024;
@@ -97,10 +119,12 @@ export function prunableCommandIds(
     )
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   const pruned = new Set<string>();
+  const continuation = continuationExemptions(records);
+  const exempt = (record: JobRecord) => isNeedsDecision(record) || continuation.has(record.id);
   if (terminal.length > cap) {
     for (const record of terminal
       .filter((record) => {
-        if (isNeedsDecision(record)) return false;
+        if (exempt(record)) return false;
         const settledAt = Date.parse(record.finishedAt ?? "");
         return Number.isFinite(settledAt) && now - settledAt >= retentionMs;
       })
@@ -116,7 +140,7 @@ export function prunableCommandIds(
   let bytes = 0;
   const sizes = new Map<string, number>();
   for (const record of terminal) {
-    if (pruned.has(record.id) || isNeedsDecision(record) || isDeliveryCommand(record)) continue;
+    if (pruned.has(record.id) || exempt(record) || isDeliveryCommand(record)) continue;
     const size = paramsBytes(record);
     sizes.set(record.id, size);
     bytes += size;

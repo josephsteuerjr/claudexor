@@ -2878,7 +2878,11 @@ bridge link) is removed when it is kept; the adapters re-create it on the next
 spawn. Nothing removes a kept envelope automatically: a successor adopting it
 (custody moves, the tree is never deleted), applying the run's result, or the
 `discard` decision releases it, and disk retention keeps a run tree that holds
-one. The crash sweep never treats a kept envelope as an orphan (its auth is
+one. Command pruning also exempts retained holders and successor commands
+while their predecessor record remains in the kept set, preserving the
+continuation handle and its single-successor claim across journal compaction.
+After a predecessor is pruned, its successor becomes eligible on a later pass.
+The crash sweep never treats a kept envelope as an orphan (its auth is
 stripped again); an envelope whose holder run died mid-attempt with changes is
 kept the same way with cause `host_restart`. Delegate belt children,
 in-place runs and race/synthesis/review envelopes keep their ordinary
