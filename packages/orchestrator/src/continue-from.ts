@@ -287,7 +287,7 @@ export async function openContinuity(
     pred.attemptId,
     deps.runDir,
   );
-  const sameRoot = samePath(pred.root, deps.cwd);
+  const sameRoot = samePath(continuation.adopt?.envelope.worktree_path ?? pred.root, deps.cwd);
   // The notice says the workspace is as it was left; in another tree that is
   // not known, so the child is told to check before relying on it.
   const patchPath = join(pred.runDir, "final", "patch.diff");
