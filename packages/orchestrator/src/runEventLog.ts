@@ -3,6 +3,7 @@ import type { BudgetLedger } from "@claudexor/budget";
 import { EventLog } from "@claudexor/event-log";
 import type { ModeKind, QuotaSnapshot, RunEvent, TaskContract } from "@claudexor/schema";
 import { redactSecrets, safeInvoke } from "@claudexor/util";
+import { writeContinuationSources } from "@claudexor/workspace";
 import type { DelegationBudgetAuthority } from "./delegationBudgetAuthority.js";
 import type { RunInput } from "./orchestrator.js";
 import { createRootLedger } from "./root-ledger.js";
@@ -93,6 +94,10 @@ export function beginAnnouncedRun(
       authority,
       quotaSnapshots,
     });
+    if (input.continuation?.from) {
+      const from = input.continuation.from;
+      writeContinuationSources(paths.root, [from, ...(from.ancestors ?? [])]);
+    }
     log.emit("run.created", { mode, prompt: redactSecrets(start.prompt) });
     return preparedLedger;
   });

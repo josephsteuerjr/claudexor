@@ -2163,7 +2163,12 @@ Endpoint semantics beyond the inventory:
   failed first try never falls back to a context-free replay. Workspace: an
   explicit `execution.workspaceRoot` or live isolation wins; otherwise a
   predecessor whose isolated envelope was kept (below) is continued IN that
-  envelope — same path, files and base, one cumulative patch. `GET
+  envelope — same path, files and base, one cumulative patch. A successor that
+  fails before adoption remains the head: continuation walks its ancestors to
+  the nearest retained envelope and available session/evidence. An Ask head
+  leaves the retained tree available for a later Agent successor. Predecessor
+  references are recorded in `context/continuation.json` before announcement;
+  a failed head's `resumable` projection names its inherited carriers. `GET
   /v2/runs/:id` projects `continueFrom`, `resumable` (the engine's terminal
   block with the CURRENT workspace overlaid; a run the daemon found running at
   its restart gets a derived block, cause `host_restart`, from its session

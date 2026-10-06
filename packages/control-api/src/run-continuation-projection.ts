@@ -13,13 +13,18 @@
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { readRunEvents } from "@claudexor/event-log";
 import {
   RunContinuityReceipt,
   RunResumable,
   SessionCapsule,
   type ControlRunSummary,
 } from "@claudexor/schema";
-import { retainedEnvelopeOfRun } from "@claudexor/workspace";
+import {
+  readContinuationSources,
+  retainedEnvelopeInChain,
+  retainedEnvelopeOfRun,
+} from "@claudexor/workspace";
 import { safeReadStructuredArtifact } from "./run-artifact-read.js";
 import { paramsRecord, type DaemonRunRecord } from "./run-record.js";
 import { TERMINAL_STATES } from "./sse-shared.js";
@@ -84,10 +89,33 @@ export function continuationSummary(
         cause: kept.cause,
       }
     : null;
-  const keptWorkspace = kept
-    ? { kind: "retained_envelope" as const, root: kept.envelope.worktree_path }
+  const sources = readContinuationSources(rec.runDir);
+  const available = kept ?? retainedEnvelopeInChain(sources);
+  const keptWorkspace = available
+    ? { kind: "retained_envelope" as const, root: available.envelope.worktree_path }
     : null;
-  const written = safeReadStructuredArtifact(rec, "final/resumable.yaml", RunResumable);
+  let written = safeReadStructuredArtifact(rec, "final/resumable.yaml", RunResumable);
+  let capsule = newestCapsule(rec.runDir);
+  let inherited = false;
+  if (!written && !capsule && rec.state !== "succeeded") {
+    for (const source of sources) {
+      const ancestor = { ...source, id: source.runId };
+      written = safeReadStructuredArtifact(ancestor, "final/resumable.yaml", RunResumable);
+      capsule = newestCapsule(source.runDir);
+      inherited =
+        !!written ||
+        !!capsule ||
+        ["answer.md", "retained-output.md", "patch.diff"].some((file) =>
+          existsSync(join(source.runDir, "final", file)),
+        ) ||
+        readRunEvents(join(source.runDir, "events.jsonl")).events.some(
+          (event) =>
+            event.type === "harness.event" &&
+            ["tool_call", "file_change", "message"].includes(String(event.payload["type"])),
+        );
+      if (inherited) break;
+    }
+  }
   if (written) {
     const workspace =
       keptWorkspace ??
@@ -98,8 +126,7 @@ export function continuationSummary(
   }
   const restarted =
     rec.state === "interrupted" && !existsSync(join(rec.runDir, "final", "run_facts.yaml"));
-  if (!restarted && !kept) return { ...base, resumable: null, retainedEnvelope };
-  const capsule = newestCapsule(rec.runDir);
+  if (!restarted && !kept && !inherited) return { ...base, resumable: null, retainedEnvelope };
   const root = inPlaceRoot(params);
   return {
     ...base,

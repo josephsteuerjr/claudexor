@@ -68,3 +68,13 @@ export const ControlRetainedEnvelope = z
     "An isolated envelope kept for continuation: continue it with continueFrom, or release it with the discard decision.",
   );
 export type ControlRetainedEnvelope = z.infer<typeof ControlRetainedEnvelope>;
+
+/** Daemon-resolved predecessor references, newest first, persisted before run announcement. */
+export const ContinuationSources = z.array(
+  z.object({
+    runId: Id,
+    runDir: z.string().min(1),
+    state: z.string(),
+  }),
+);
+export type ContinuationSources = z.infer<typeof ContinuationSources>;

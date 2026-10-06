@@ -27,6 +27,7 @@ import {
   RunResumable,
   RunTelemetry,
   type HarnessRunSpec,
+  type ContinuationSources,
   type ResumableCause,
   type SessionCapsule,
 } from "@claudexor/schema";
@@ -61,6 +62,8 @@ export interface ContinueFromSource {
   /** The predecessor's work order: every prompt of its chain, root first. */
   workOrder: string;
   preference: CarrierPreference;
+  /** Earlier chain links, newest first; a refused head may own no carrier yet. */
+  ancestors?: ContinuationSources;
 }
 
 const WORK_ORDER_FILE = join("context", "work-order.md");
@@ -72,10 +75,12 @@ const DIFFERENT_ROOT_NOTE =
 interface PredecessorFacts {
   /** Attempt whose evidence the index reads (the one holding the session, else the final one). */
   attemptId: string;
+  runDir: string;
   capsule: SessionCapsule | null;
   resumable: RunResumable | null;
   cause: ResumableCause;
   acted: boolean;
+  hasEvidence: boolean;
   nativeRejected: boolean;
   observedModel: string | null;
   profileId: string | null;
@@ -110,7 +115,7 @@ function heldSession(
   );
 }
 
-function readPredecessor(store: ArtifactStore, from: ContinueFromSource): PredecessorFacts {
+function readSource(store: ArtifactStore, from: ContinueFromSource): PredecessorFacts {
   const finalDir = join(from.runDir, "final");
   const resumable = RunResumable.safeParse(store.readYaml(join(finalDir, "resumable.yaml"))).data;
   const telemetry = RunTelemetry.safeParse(store.readYaml(join(finalDir, "telemetry.yaml"))).data;
@@ -126,6 +131,14 @@ function readPredecessor(store: ArtifactStore, from: ContinueFromSource): Predec
     readTextSafe(join(finalDir, "answer.md"))?.trim() ||
     retainedOutput(events.events, events.malformed) ||
     "";
+  const hasEvidence =
+    !!patch.trim() ||
+    !!output ||
+    events.events.some(
+      (event) =>
+        event.type === "harness.event" &&
+        ["tool_call", "file_change"].includes(String(event.payload["type"])),
+    );
   const cause: ResumableCause =
     resumable?.cause ??
     (from.state === "interrupted"
@@ -135,6 +148,7 @@ function readPredecessor(store: ArtifactStore, from: ContinueFromSource): Predec
         : "other");
   return {
     attemptId,
+    runDir: from.runDir,
     capsule: held?.capsule ?? null,
     resumable: resumable ?? null,
     cause,
@@ -142,7 +156,8 @@ function readPredecessor(store: ArtifactStore, from: ContinueFromSource): Predec
     // exactly when it acted; without the block, the evidence decides.
     acted: resumable
       ? resumable.carriers.includes("packet")
-      : patch.trim().length > 0 || output.length > 0 || from.state === "succeeded",
+      : hasEvidence || from.state === "succeeded",
+    hasEvidence,
     // The predecessor's controller dropped the session on a typed fact.
     nativeRejected: resumable !== undefined && resumable.session === null && held !== null,
     observedModel: attempt?.observed_model ?? held?.capsule.requestedModel ?? null,
@@ -153,6 +168,16 @@ function readPredecessor(store: ArtifactStore, from: ContinueFromSource): Predec
     diffStat: diffStatFromPatch(patch),
     root: held?.capsule.cwd ?? resumable?.workspace.root ?? null,
   };
+}
+
+function readPredecessor(store: ArtifactStore, from: ContinueFromSource): PredecessorFacts {
+  const own = readSource(store, from);
+  for (const source of [from, ...(from.ancestors ?? [])]) {
+    const facts = source === from ? own : readSource(store, { ...from, ...source });
+    if (facts.capsule || facts.resumable || facts.hasEvidence)
+      return { ...facts, workOrder: own.workOrder };
+  }
+  return own;
 }
 
 function samePath(a: string | null, b: string): boolean {
@@ -205,7 +230,7 @@ export async function openContinuity(
     nativeRejected: pred.nativeRejected,
   };
   const evidence = {
-    runDir: from.runDir,
+    runDir: pred.runDir,
     attemptId: pred.attemptId,
     workOrder: pred.workOrder,
     steering: [],
@@ -218,7 +243,7 @@ export async function openContinuity(
     retainedOutput: pred.output,
     diffStat: pred.diffStat,
   });
-  const uncertainInput = uncertainInputFor(from.runDir, null, pred.attemptId);
+  const uncertainInput = uncertainInputFor(pred.runDir, null, pred.attemptId);
   const sameRoot = samePath(pred.root, deps.cwd);
   // The notice says the workspace is as it was left; in another tree that is
   // not known, so the child is told to check before relying on it.

@@ -21,6 +21,7 @@ import { join } from "node:path";
 import type { HarnessAdapter, HarnessContinuityCapability } from "@claudexor/core";
 import {
   ConformanceReport,
+  ControlRunStartRequest,
   HarnessManifest,
   type HarnessEvent,
   type HarnessRunSpec,
@@ -29,6 +30,10 @@ import {
 import { retainedEnvelopeOfRun } from "@claudexor/workspace";
 import { Orchestrator, type RunInput } from "./orchestrator.js";
 import { readSessionCapsule } from "./session-capsule.js";
+
+import { continuationForRun } from "../../cli/src/continue-from-run.js";
+import { summaryFingerprint } from "../../control-api/src/run-list-fingerprint.js";
+import { continuationSummary } from "../../control-api/src/run-continuation-projection.js";
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -511,4 +516,93 @@ describe("continueFrom successor: kept isolated envelope", () => {
     // The predecessor's kept tree stays kept until its own disposition.
     expect(retainedEnvelopeOfRun(pred.result.runDir, pred.result.runId)).not.toBeNull();
   });
+});
+
+describe("continueFrom through an unadopted head", () => {
+  it.each(["preflight", "ask"] as const)(
+    "reaches the retained tree after a %s successor",
+    async (middle) => {
+      let f!: Fixture;
+      const predScript = editThenLimit(() => f);
+      f = fixture(["a"], function* (ctx) {
+        if (ctx.phase === "predecessor") return yield* predScript(ctx);
+        if (ctx.spec.access === "readonly") {
+          yield ctx.emit({
+            type: "started",
+            observed_model: "m1",
+            payload: { native_session_id: "sid-A" },
+          });
+          yield ctx.emit({
+            type: "message",
+            text: "The first half remains; finish the second half.",
+            final: true,
+          });
+          yield ctx.emit({ type: "completed" });
+        } else {
+          expect(readFileSync(join(ctx.cwd, "part1.txt"), "utf8")).toBe("first half\n");
+          yield* finishing(ctx.emit, ctx.cwd, "sid-A");
+        }
+      });
+      const a = await runOnce(f, { continuation: { retain: true } });
+      const held = retainedEnvelopeOfRun(a.result.runDir, a.result.runId)!;
+      expect(held).not.toBeNull();
+      const records = [
+        {
+          id: a.result.runId,
+          runId: a.result.runId,
+          runDir: a.result.runDir,
+          state: a.result.lifecycle,
+          params: { prompt: WORK_ORDER, continueFrom: undefined as string | undefined },
+        },
+      ];
+      const continuation = (runId: string) =>
+        continuationForRun(
+          ControlRunStartRequest.parse({
+            prompt: "",
+            continueFrom: runId,
+            scope: { kind: "project", root: f.root },
+          }),
+          { all: () => [{ records: () => records }] },
+        );
+      f.phase.current = "successor";
+      const b = await runOnce(f, {
+        mode: middle === "ask" ? "ask" : "agent",
+        prompt: "Explain what is left",
+        ...(middle === "preflight"
+          ? { credentialProfileId: "missing-profile" }
+          : { access: "readonly" as const }),
+        continuation: continuation(a.result.runId),
+      });
+      expect(b.result.lifecycle, b.result.summary).toBe(middle === "ask" ? "succeeded" : "failed");
+      records.push({
+        id: b.result.runId,
+        runId: b.result.runId,
+        runDir: b.result.runDir,
+        state: b.result.lifecycle,
+        params: { prompt: "Explain what is left", continueFrom: a.result.runId },
+      } as (typeof records)[number]);
+      if (middle === "preflight") {
+        expect(continuationSummary(records[1]!).resumable).toMatchObject({
+          carriers: ["native", "native_moved", "packet"],
+          session: { nativeSessionId: "sid-A" },
+          workspace: { kind: "retained_envelope", root: held.envelope.worktree_path },
+        });
+      }
+      const fingerprint = summaryFingerprint(records[1]!);
+      const c = await runOnce(f, {
+        prompt: "Finish it",
+        continuation: continuation(b.result.runId),
+      });
+      expect(summaryFingerprint(records[1]!)).not.toBe(fingerprint);
+      expect(continuationSummary(records[1]!).resumable?.workspace.kind).not.toBe(
+        "retained_envelope",
+      );
+      expect(c.result.lifecycle, c.result.summary).toBe("succeeded");
+      expect(f.spawns.at(-1)).toMatchObject({ resume: "sid-A", cwd: held.envelope.worktree_path });
+      expect(c.receipts[0]).toMatchObject({ carrier: "native", from: { runId: b.result.runId } });
+      expect(readFileSync(join(c.result.runDir, "final", "patch.diff"), "utf8")).toContain(
+        "first half",
+      );
+    },
+  );
 });

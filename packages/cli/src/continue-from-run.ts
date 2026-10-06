@@ -12,7 +12,7 @@
  */
 import type { ControlRunStartRequest } from "@claudexor/schema";
 import type { RunInput } from "@claudexor/orchestrator";
-import { retainedEnvelopeOfRun } from "@claudexor/workspace";
+import { retainedEnvelopeInChain } from "@claudexor/workspace";
 
 interface CommandRecords {
   all(): ReadonlyArray<{
@@ -28,23 +28,23 @@ function paramsOf(record: ChainRecord): Record<string, unknown> {
     : {};
 }
 
-/** The predecessor's work order: every prompt of its chain, root first (a
- * retained-history ancestor that was pruned simply ends the walk). */
-function chainWorkOrder(records: readonly ChainRecord[], predecessor: ChainRecord): string {
-  const prompts: string[] = [];
+/** Head first, with cycle protection for malformed historical links. */
+function predecessorChain(
+  records: readonly ChainRecord[],
+  predecessor: ChainRecord,
+): ChainRecord[] {
+  const chain: ChainRecord[] = [];
   const seen = new Set<string>();
   for (
     let record: ChainRecord | undefined = predecessor;
     record?.runId && !seen.has(record.runId);
   ) {
     seen.add(record.runId);
-    const params = paramsOf(record);
-    if (typeof params["prompt"] === "string" && params["prompt"].trim())
-      prompts.unshift(params["prompt"].trim());
-    const parent = params["continueFrom"];
+    chain.push(record);
+    const parent: unknown = paramsOf(record)["continueFrom"];
     record = typeof parent === "string" ? records.find((r) => r.runId === parent) : undefined;
   }
-  return prompts.join("\n\n");
+  return chain;
 }
 
 export function continuationForRun(
@@ -57,7 +57,13 @@ export function continuationForRun(
   const predecessor = records.find((record) => record.runId === p.continueFrom);
   if (!predecessor?.runId || !predecessor.runDir) return { retain };
   // An explicit live root or another project runs elsewhere: the kept envelope stays kept.
-  const kept = retainedEnvelopeOfRun(predecessor.runDir, predecessor.runId);
+  const chain = predecessorChain(records, predecessor);
+  const sources = chain.flatMap((record) =>
+    record.runId && record.runDir
+      ? [{ runId: record.runId, runDir: record.runDir, state: record.state }]
+      : [],
+  );
+  const kept = retainedEnvelopeInChain(sources);
   const ownWorkspace =
     p.execution.isolation !== "live" &&
     !p.execution.workspaceRoot &&
@@ -70,7 +76,13 @@ export function continuationForRun(
       runId: predecessor.runId,
       runDir: predecessor.runDir,
       state: predecessor.state,
-      workOrder: chainWorkOrder(records, predecessor),
+      workOrder: chain
+        .map((record) => paramsOf(record)["prompt"])
+        .filter((prompt): prompt is string => typeof prompt === "string" && !!prompt.trim())
+        .reverse()
+        .map((prompt) => prompt.trim())
+        .join("\n\n"),
+      ancestors: sources.slice(1),
       preference: p.continueCarrier ?? "auto",
     },
   };

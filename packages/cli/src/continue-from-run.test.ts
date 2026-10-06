@@ -99,6 +99,7 @@ describe("continuationForRun (daemon runner)", () => {
       state: "cancelled",
       workOrder: "build it",
       preference: "packet",
+      ancestors: [],
     });
     // A live successor and another project run elsewhere: the tree stays kept.
     expect(continuationForRun(request({ execution: { isolation: "live" } }), commands).adopt).toBe(
