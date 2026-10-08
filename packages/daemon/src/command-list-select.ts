@@ -85,11 +85,14 @@ function threadRecords(
   ids: ReadonlySet<string>,
   activeOnly = false,
 ): JobRecord[] {
-  const members = records.filter(
-    (r) =>
-      ids.has(String(param(r, "threadId"))) &&
-      (!activeOnly || r.state === "queued" || r.state === "running"),
-  );
+  const members = records.filter((r) => {
+    const threadId = param(r, "threadId");
+    return (
+      typeof threadId === "string" &&
+      ids.has(threadId) &&
+      (!activeOnly || r.state === "queued" || r.state === "running")
+    );
+  });
   if (activeOnly) return members;
   const memberSet = new Set(members);
   const parents = new Set(members.map((r) => r.runId ?? r.id));

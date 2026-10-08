@@ -146,6 +146,8 @@ describe("addressed command selection", () => {
       params: { prompt: "original prompt" },
     });
     expect(publicCommandList(all, { threadId: "missing" })).toEqual([]);
+    expect(publicCommandList(all, { threadId: "undefined" })).toEqual([]);
+    expect(publicCommandList(all, { threadIds: ["null", "undefined"] })).toEqual([]);
     expect(selectProductCommands(all, { delegatedDescendantsOf: "run-parent" })).toEqual(children);
   });
 });
