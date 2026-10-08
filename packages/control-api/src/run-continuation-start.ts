@@ -3,7 +3,7 @@
  * chain. The daemon's enqueue RPC owns the atomic one-successor claim; this
  * module resolves what a continuation inherits BEFORE ordinary request
  * defaults fill it, and answers the same admission verdict with its typed
- * context (the chain `head`), which the daemon socket does not carry.
+ * context (the chain `head`), preserved by the daemon socket as well.
  */
 import {
   continuationPredecessor,

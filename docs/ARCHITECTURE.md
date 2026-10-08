@@ -2126,6 +2126,13 @@ validator dump, and validates the per-run SSE cursor as a nonnegative integer
 
 Endpoint semantics beyond the inventory:
 
+Local daemon RPC timeouts retain the ten-second transport bound and answer
+`503 daemon_busy`; connection failures, closed sockets and invalid responses
+answer `503 daemon_unavailable`. Both are retryable and preserve an unknown
+mutation outcome. Daemon-authored refusals keep their status, code, safe context
+and required actions through RPC and HTTP, including continuation chain heads.
+Request validation remains a typed 400; transport does not retry automatically.
+
 - `POST /v2/runs` with `continueFrom: <runId>` continues a terminal run of this
   daemon — stopped, limited, cancelled, interrupted or finished — as a new
   run, the next link of its continuation chain. One shared admission rule

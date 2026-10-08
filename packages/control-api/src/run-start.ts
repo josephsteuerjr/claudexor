@@ -23,10 +23,6 @@ import { assertContinuationAdmissible, resolveContinuationBody } from "./run-con
 
 const NO_PROJECT_ROOT = noProjectRepoRoot();
 
-function errorCodeOf(error: unknown): unknown {
-  return error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
-}
-
 export function validateAbsoluteRepoRoot(repoRoot: string): string | null {
   return isAbsolute(repoRoot) ? null : "project root must be an absolute path";
 }
@@ -256,7 +252,7 @@ function projectNotRegisteredError(error: unknown): Error | null {
 export interface RunCreateRouteContext {
   daemon: DaemonFacadeClient;
   readBody(req: IncomingMessage): Promise<unknown>;
-  requestError(res: ServerResponse, error: unknown): void;
+  requestError(res: ServerResponse, error: unknown, fallbackStatus?: 400 | 500): void;
   json(res: ServerResponse, status: number, body: unknown): void;
   respondToAcceptedJob(res: ServerResponse, jobId: string): Promise<void>;
   validateResources?: (refs: NonNullable<ControlRunStartRequest["attachments"]>) => Promise<void>;
@@ -460,30 +456,9 @@ export async function handleRunCreate(
       idempotencyRequest: params,
     });
   } catch (error) {
-    // A concurrent continuation won the daemon's atomic claim after our check:
-    // answer the same typed refusal with its chain head.
-    if (errorCodeOf(error) === "continuation_superseded") {
-      return assertContinuationAdmissible(ctx.daemon, params).then(
-        () => ctx.requestError(res, error),
-        (refusal: unknown) => ctx.requestError(res, refusal),
-      );
-    }
     // A root unregistered between the lookup and enqueue answers the same
     // typed refusal as the lookup; every typed enqueue error keeps its facts.
-    const typed = (projectNotRegisteredError(error) ?? error) as {
-      status?: unknown;
-      code?: unknown;
-      retryable?: unknown;
-      requiredActions?: unknown;
-    } | null;
-    const status =
-      typed && typeof typed === "object" && "status" in typed ? Number(typed.status) : 500;
-    return ctx.json(res, status, {
-      error: error instanceof Error ? error.message : "enqueue failed",
-      ...(typeof typed?.code === "string" ? { code: typed.code } : {}),
-      ...(typeof typed?.retryable === "boolean" ? { retryable: typed.retryable } : {}),
-      ...(Array.isArray(typed?.requiredActions) ? { requiredActions: typed.requiredActions } : {}),
-    });
+    return ctx.requestError(res, projectNotRegisteredError(error) ?? error, 500);
   }
   try {
     return await ctx.respondToAcceptedJob(res, job.id);

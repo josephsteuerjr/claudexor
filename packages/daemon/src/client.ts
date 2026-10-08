@@ -1,3 +1,4 @@
+import { DaemonTransportError } from "./client-errors.js";
 import type { CancelReasonCode, CommandListQuery } from "@claudexor/schema";
 import { type Socket, connect } from "node:net";
 import { randomUUID } from "node:crypto";
@@ -28,23 +29,34 @@ export class DaemonClient {
       // A socket that accepts but never replies must not hang the caller
       // (`daemon status`) forever — fail loudly after a bounded wait.
       const timer = setTimeout(
-        () => finish(() => reject(new Error(`daemon RPC timeout (${method})`))),
+        () => finish(() => reject(new DaemonTransportError(method, "timeout"))),
         10_000,
       );
       timer.unref?.();
       // Attach the error handler first so connect failures (ENOENT/ECONNREFUSED)
       // never become an unhandled 'error' event.
-      sock.on("error", (err) => finish(() => reject(err)));
-      sock.on("close", () => finish(() => reject(new Error("daemon connection closed"))));
+      sock.on("error", (err) =>
+        finish(() => reject(new DaemonTransportError(method, "unavailable", err))),
+      );
+      sock.on("close", () => finish(() => reject(new DaemonTransportError(method, "unavailable"))));
       rl = createInterface({ input: sock });
-      rl.on("error", (err) => finish(() => reject(err))); // readline re-emits input 'error'
+      rl.on("error", (err) =>
+        finish(() => reject(new DaemonTransportError(method, "unavailable", err))),
+      ); // readline re-emits input 'error'
       sock.on("connect", () => {
         sock.write(JSON.stringify({ id, method, params, token: this.token }) + "\n");
       });
       rl.on("line", (line) => {
         try {
           const msg = JSON.parse(line);
-          if (msg.id !== id) return;
+          if (
+            !msg ||
+            typeof msg !== "object" ||
+            msg.id !== id ||
+            (msg.error ? typeof msg.error.message !== "string" : !("result" in msg))
+          ) {
+            throw new Error("invalid daemon RPC response");
+          }
           if (msg.error) {
             const error = Object.assign(new Error(msg.error.message), {
               ...(typeof msg.error.code === "string" ? { code: msg.error.code } : {}),
@@ -52,11 +64,17 @@ export class DaemonClient {
               ...(typeof msg.error.retryable === "boolean"
                 ? { retryable: msg.error.retryable }
                 : {}),
+              ...(msg.error.context && typeof msg.error.context === "object"
+                ? { context: msg.error.context }
+                : {}),
+              ...(Array.isArray(msg.error.requiredActions)
+                ? { requiredActions: msg.error.requiredActions }
+                : {}),
             });
             finish(() => reject(error));
           } else finish(() => resolve(msg.result as T));
-        } catch {
-          /* ignore */
+        } catch (error) {
+          finish(() => reject(new DaemonTransportError(method, "unavailable", error)));
         }
       });
     });

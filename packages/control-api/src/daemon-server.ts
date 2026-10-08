@@ -768,7 +768,7 @@ export class DaemonControlApiServer {
         {
           daemon: this.opts.daemon,
           readBody: (request) => this.readBody(request),
-          requestError: (response, error) => this.requestError(response, error),
+          requestError: (response, error, fallback) => this.requestError(response, error, fallback),
           json: (response, status, body) => this.json(response, status, body),
           respondToAcceptedJob: (response, jobId) => this.respondToAcceptedJob(response, jobId),
           validateResources: this.opts.services?.validateResources,

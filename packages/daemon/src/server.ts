@@ -1,3 +1,4 @@
+import { rpcProblem } from "./rpc-problem.js";
 import { type Server, type Socket, createServer } from "node:net";
 
 import {
@@ -13,14 +14,7 @@ import {
 } from "@claudexor/schema";
 import { daemonHealth, daemonConcurrencyLimit } from "./daemon-health.js";
 import { RpcFollowers } from "./rpc-followers.js";
-import {
-  assertNoInlineSecretValues,
-  errorCode,
-  newId,
-  nowIso,
-  pathExists,
-  redactSecrets,
-} from "@claudexor/util";
+import { assertNoInlineSecretValues, newId, nowIso, pathExists } from "@claudexor/util";
 import {
   commandStoreForId,
   commandStoreForRequest,
@@ -57,11 +51,7 @@ import {
 } from "./serving-admission.js";
 import { socketAlive } from "./socket-probe.js";
 import { isWindowsPipePath } from "./token.js";
-import {
-  dispatchShutdownRpc,
-  replacementRefusal,
-  type RuntimeReplacementAuthority,
-} from "./daemon-shutdown-rpc.js";
+import { dispatchShutdownRpc, type RuntimeReplacementAuthority } from "./daemon-shutdown-rpc.js";
 export { JOB_STATES, jobStateFromResult, socketAlive, type JobRecord };
 
 export interface RunContext {
@@ -269,24 +259,7 @@ export class DaemonServer {
     try {
       this.send(sock, { id, result: await this.dispatch(method, params) });
     } catch (err) {
-      const code = errorCode(err);
-      this.send(sock, {
-        id,
-        error: {
-          message: redactSecrets(err instanceof Error ? err.message : String(err)),
-          ...(code ? { code } : {}),
-          ...(err && typeof err === "object" && "status" in err
-            ? { status: Number((err as { status: unknown }).status) }
-            : {}),
-          ...(err &&
-          typeof err === "object" &&
-          typeof (err as { retryable?: unknown }).retryable === "boolean"
-            ? { retryable: (err as { retryable: boolean }).retryable }
-            : replacementRefusal(err)
-              ? { retryable: true }
-              : {}),
-        },
-      });
+      this.send(sock, { id, error: rpcProblem(err) });
     }
   }
 
