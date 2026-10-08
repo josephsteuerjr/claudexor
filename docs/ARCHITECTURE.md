@@ -4742,8 +4742,7 @@ plain `node <entry> --probe`; put the returned `nodeArgs` before the entry on
 daemon launch. An explicit `--max-old-space-size` in the child
 `NODE_OPTIONS` wins: add no flag. The CLI applies this rule without changing
 `NODE_OPTIONS`, re-executing the daemon, or affecting harness child heaps.
-The macOS app launcher still needs this additive probe field wired in; that
-path was left unchanged because its Swift tests could not run in this environment.
+The macOS app launcher has not yet adopted the probe’s heap arguments.
 Before replacing a live closure, run the SERVING closure as
 `node claudexord.bundle.cjs --stop <observed-version> <observed-buildSha>` and
 require its typed stopped receipt; busy or unknown refuses the swap. The daemon

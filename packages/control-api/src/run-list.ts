@@ -16,14 +16,8 @@ import { ControlRunState } from "@claudexor/schema";
 import { assertOnlyQueryParams, singleQuery } from "./query.js";
 
 import { decodeRunCursor, type RunListQuery } from "@claudexor/schema";
-export {
-  orderRunRecords,
-  indexAfterCursor,
-  encodeRunCursor,
-  decodeRunCursor,
-  selectRunListPage,
-} from "@claudexor/schema";
-export type { RunListRecord, RunListQuery } from "@claudexor/schema";
+export { selectRunListPage } from "@claudexor/schema";
+export type { RunListQuery } from "@claudexor/schema";
 
 /** Default page size when the caller sends no `limit` — newest-first, so the
  * default page always contains every active (queued/running) run a thread-first
