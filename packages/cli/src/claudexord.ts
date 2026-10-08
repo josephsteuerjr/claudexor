@@ -70,7 +70,8 @@ import { runStartupAccountsMigration } from "./accounts-unified-migration.js";
 import { runStopIfRequested } from "./runtime-replacement-stop.js";
 import { createDaemonAgentRunner } from "./daemon-agent-runner.js";
 import { createModelServices } from "./model-services.js";
-import { isModelOperation } from "@claudexor/schema";
+import { createImageServices } from "./image-services.js";
+import { isImageOperation, isModelOperation } from "@claudexor/schema";
 
 export async function main(): Promise<void> {
   // Probe and identity-proven stop must run before any durable startup.
@@ -195,6 +196,12 @@ export async function main(): Promise<void> {
       quota: () => quotaStoreSlot.current(),
       warn: (message) => logLine(logPath(), message),
     });
+    const images = createImageServices({
+      commands: threads,
+      resources,
+      client: selfClient,
+      warn: (message) => logLine(logPath(), message),
+    });
     const agentRunner = createDaemonAgentRunner({
       delegationBudgetAuthority,
       quotaStore: () => quotaStoreSlot.current(),
@@ -213,7 +220,10 @@ export async function main(): Promise<void> {
       runtimeConcurrencyCaps: startupConcurrencyCaps,
       servingMode: admission.snapshot,
       delegationAuthority: delegationBudgetAuthority,
-      onCommandTerminal: (record) => models.operations.onCommandTerminal(record),
+      onCommandTerminal: (record) => {
+        models.operations.onCommandTerminal(record);
+        images.operations.onCommandTerminal(record);
+      },
       onRunTerminal: (runId, threadId) => {
         interactions.dropForRun(runId);
         liveInputs.dropForRun(runId);
@@ -240,7 +250,9 @@ export async function main(): Promise<void> {
       runner: (params, ctx) =>
         isModelOperation(params)
           ? models.operations.execute(params, ctx)
-          : agentRunner(params, ctx),
+          : isImageOperation(params)
+            ? images.operations.execute(params, ctx)
+            : agentRunner(params, ctx),
     });
     bindDelegationDaemon(server);
 
@@ -266,6 +278,7 @@ export async function main(): Promise<void> {
         stop: async () => {
           const maintenanceDrain = journalMaintenance.stop();
           models.close();
+          images.close();
           await Promise.all([server.stop(), maintenanceDrain]);
         },
       },
@@ -295,8 +308,9 @@ export async function main(): Promise<void> {
       startupConcurrencyCaps,
     );
     const runRetention = services.runRetention;
-    services.runRetention = models.withRetention(runRetention);
+    services.runRetention = images.withRetention(models.withRetention(runRetention));
     Object.assign(services, models.routes);
+    Object.assign(services, images.routes);
     control = !controlApiEnabledForStartup({
       disabledByEnv: process.env.CLAUDEXOR_NO_CONTROL_API === "1",
       blockedPartitions: startupBlockedPartitions,

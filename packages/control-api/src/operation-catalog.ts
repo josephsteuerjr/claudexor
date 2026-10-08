@@ -8,6 +8,7 @@ import {
 import { queryParam, resumeHeader } from "./operation-parameters.js";
 import { REMOTE_OPERATION_DRAFTS } from "./remote-operation-descriptors.js";
 import { MODEL_OPERATION_DRAFTS } from "./model-routes.js";
+import { IMAGE_OPERATION_DRAFTS } from "./image-routes.js";
 import type { OperationDraft } from "./operation-draft.js";
 import { OPERATION_SUMMARIES } from "./operation-summaries.js";
 
@@ -69,6 +70,7 @@ const j = (
 
 const operations: ControlOperationDescriptor[] = [
   ...MODEL_OPERATION_DRAFTS.map(descriptor),
+  ...IMAGE_OPERATION_DRAFTS.map(descriptor),
   j("POST", "/v2/uploads", "mutating", "ControlUploadCreateRequest", "ControlUploadStatus", {
     idempotency: "key_required",
   }),
