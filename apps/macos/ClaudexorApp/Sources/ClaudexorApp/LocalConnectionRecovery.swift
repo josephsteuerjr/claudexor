@@ -11,7 +11,7 @@ enum LocalConnectionProbeResult: Equatable {
 
 /// Owns the bounded local-daemon start allowance for one connection generation.
 /// A confirmed connection rearms one later outage; a start attempt consumes the
-/// allowance before the synchronous launcher runs. The shared lifecycle lease
+/// allowance before the launcher schedules its spawn. The shared lifecycle lease
 /// keeps outage recovery from overlapping installation or reconciliation.
 @MainActor
 struct LocalConnectionRecoveryLoop {
@@ -118,8 +118,9 @@ struct LocalConnectionRecoveryLoop {
                     let started = startDaemon()
                     lifecycleOwner.release(lease)
                     if started {
-                        // Preserve the existing Connecting boot window. A
-                        // synchronous launch failure instead publishes Offline.
+                        // Preserve the existing Connecting boot window; a spawn
+                        // that fails off-thread surfaces at the next probe. Missing
+                        // assets fail synchronously and publish Offline at once.
                         await pause()
                         continue
                     }
