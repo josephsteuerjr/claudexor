@@ -10,6 +10,7 @@
  * accumulate. Admission (INTERFACES §1) already proved the predecessor is a
  * terminal run of this daemon; this resolves it from the same records.
  */
+import { statSync } from "node:fs";
 import { RunScope, type ControlRunStartRequest } from "@claudexor/schema";
 import type { RunInput } from "@claudexor/orchestrator";
 import { retainedEnvelopeInChain } from "@claudexor/workspace";
@@ -55,7 +56,21 @@ export function continuationForRun(
   if (!p.continueFrom) return { retain };
   const records = commands.all().flatMap((store) => store.records());
   const predecessor = records.find((record) => record.runId === p.continueFrom);
-  if (!predecessor?.runId || !predecessor.runDir) return { retain };
+  let sourceAvailable = false;
+  try {
+    sourceAvailable = !!predecessor?.runDir && statSync(predecessor.runDir).isDirectory();
+  } catch {
+    /* A vanished or unreadable source cannot become fresh work. */
+  }
+  if (!predecessor?.runId || !predecessor.runDir || !sourceAvailable) {
+    throw Object.assign(new Error("admitted continuation predecessor is no longer available"), {
+      code: "continuation_predecessor_unavailable",
+      status: 404,
+      retryable: false,
+      context: { predecessor: p.continueFrom },
+      requiredActions: ["Restore the predecessor's run artifacts or explicitly start a new run."],
+    });
+  }
   // An explicit live root or another project runs elsewhere: the kept envelope stays kept.
   const chain = predecessorChain(records, predecessor);
   const sources = chain.flatMap((record) => {

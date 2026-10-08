@@ -2036,6 +2036,10 @@ percent-encoding in the path with a typed `400 malformed_request_path` (never a
 validator dump, and validates the per-run SSE cursor as a nonnegative integer
 `seq` before opening the stream.
 
+An admitted continuation whose predecessor record or run directory disappears
+before execution fails with `continuation_predecessor_unavailable` (404, not
+retryable), before orchestrator or harness startup. It never becomes a fresh run.
+
 The authenticated read-only `GET /v2/daemon/status` exposes daemon health and
 current memory facts (heap used/limit, RSS, external bytes, effective heap args),
 plus the first normal-admission snapshot. It is also available in recovery-only
@@ -2872,11 +2876,10 @@ leaving run artifacts to normal GC and disclosing all of that in a typed
 receipt. It is refused with a typed `409` while any non-purged thread or
 live/queued run still references the project. The live/queued-run fence is a
 SNAPSHOT, disclosed as such in the receipt (`activeRunCheck: "snapshot"`): the
-active-run root set is read once through the in-process command activity projection BEFORE
-the synchronous removal, so a run that starts in the narrow window between the
-snapshot and the removal is not fenced. Closing that TOCTOU would require the
-activity snapshot to be consumed synchronously inside the removal, so the receipt states the guarantee honestly rather than
-implying atomicity. Activity includes the global and healthy project partitions,
+active-run root set is read once through the in-process command activity
+projection and consumed by the synchronous removal in the same event-loop turn.
+There is no await where enqueue could interleave between check and mutation.
+Activity includes the global and healthy project partitions,
 and retention consumes that same prompt-free projection without a self-RPC. The CLI
 projects the same surface as `claudexor project list|register|relink|remove` and
 auto-registers the current root before a run; no v1 config, thread, or run path

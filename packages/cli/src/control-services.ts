@@ -96,9 +96,7 @@ export function controlServices(
    * routes touch it, so the recovery plane must never materialize it. */
   resources: () => ResourceStore,
   quotaRegistry: () => QuotaRegistry,
-  daemonJobs: () => Promise<
-    Array<{ runId?: string; state: string; finishedAt?: string; params?: unknown }>
-  >,
+  daemonJobs: () => Array<{ runId?: string; state: string; finishedAt?: string; params?: unknown }>,
   effectiveConcurrencyCaps?: RuntimeConcurrencyCaps,
 ) {
   const secretStore = new SecretStore();
@@ -210,11 +208,11 @@ export function controlServices(
     // QA-049 minimal project remove: retire the durable registry entry + archive
     // the journal partition, fenced against non-purged threads and live/queued
     // runs. The thread fence lives in ProjectPartitions; the active-run set is
-    // derived here from the daemon job list (project-scoped, non-terminal runs),
+    // read in process with no await before removal (project-scoped, non-terminal runs),
     // canonicalized to match the store's realpath'd roots.
     removeProject: async (id: string) => {
       const activeRunRoots = new Set<string>();
-      for (const job of await daemonJobs()) {
+      for (const job of daemonJobs()) {
         if ((TERMINAL_LIFECYCLES as ReadonlySet<string>).has(job.state)) continue;
         const root = activeRunProjectRoot(job);
         if (root === null) continue;

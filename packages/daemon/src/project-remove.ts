@@ -80,10 +80,8 @@ export function removeProjectFromPartitions(
     journalPartitionArchived: archivedPartitionPath !== null,
     archivedPartitionPath,
     artifactsRetained: true,
-    // W2: `activeRunRoots` was snapshotted by the caller via an async daemon
-    // IPC job-list read BEFORE this synchronous removal. A run that starts in
-    // the window between that snapshot and this point is not fenced — disclose
-    // it honestly rather than implying an atomic guarantee we cannot make.
+    // The in-process caller snapshots and removes in one synchronous turn.
+    // Keep the existing wire literal for older receipt readers.
     activeRunCheck: "snapshot",
   };
 }

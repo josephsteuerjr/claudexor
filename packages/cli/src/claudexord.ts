@@ -291,7 +291,7 @@ export async function main(): Promise<void> {
       authReadiness,
       resources,
       () => quotaStoreSlot.current(),
-      async () => commandActivityRecords(threads.all().flatMap((store) => store.records())),
+      () => commandActivityRecords(threads.all().flatMap((store) => store.records())),
       startupConcurrencyCaps,
     );
     const runRetention = services.runRetention;

@@ -26,9 +26,9 @@ import { logLine } from "./daemon-lifecycle.js";
 export interface RetentionRunnerDeps {
   projects: () => ProjectStore;
   threads: ProjectPartitions;
-  daemonJobs: () => Promise<
-    Array<{ runId?: string; state: string; finishedAt?: string; params?: unknown }>
-  >;
+  daemonJobs: () =>
+    | Array<{ runId?: string; state: string; finishedAt?: string; params?: unknown }>
+    | Promise<Array<{ runId?: string; state: string; finishedAt?: string; params?: unknown }>>;
   /** The ONE thread purge owner (thread-purge.ts): journals the purge, then
    * deletes the isolated worktree/branch and every lane home of the thread. */
   purgeThread: (id: string) => Promise<unknown>;
