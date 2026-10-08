@@ -2,7 +2,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ProjectPartitions, ProjectStore } from "@claudexor/daemon";
+import {
+  commandActivityRecords,
+  type ProjectPartitions,
+  type ProjectStore,
+} from "@claudexor/daemon";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import { noProjectRepoRoot, projectRuntimeDir } from "@claudexor/util";
 import { createRetentionRunner, scheduleStartupRetention } from "./retention-service.js";
@@ -289,6 +293,44 @@ describe("expired trash purge in the retention pass (owner decision E2)", () => 
     expect(receipt.errors).toEqual([
       "expired trash thread t-expired kept: a turn is still running",
     ]);
+  });
+
+  it("sees a live turn through the in-process activity projection the daemon feeds it", async () => {
+    // claudexord.ts feeds retention commandActivityRecords(...), not full records:
+    // the projection must keep the thread id the trash fence matches on.
+    const turn = (state: "running" | "succeeded") =>
+      commandActivityRecords([
+        {
+          id: "job-turn",
+          runId: "run-turn",
+          state,
+          createdAt: "2026-10-08T00:00:00Z",
+          params: { threadId: "t-expired", mode: "ask", scope: { kind: "none" }, prompt: "p" },
+        },
+      ]);
+    const purged: string[] = [];
+    const kept = await createRetentionRunner(
+      deps({
+        projectRoots: [],
+        healthyRoots: [],
+        threads: trashThreads,
+        records: turn("running"),
+        purged,
+      }),
+    )({ dry_run: false, trash_purge_report: true });
+    expect(purged).toEqual([]);
+    expect(kept.purged_threads).toEqual([]);
+    expect(kept.errors).toEqual(["expired trash thread t-expired kept: a turn is still running"]);
+    // A finished turn no longer holds the expired thread back.
+    const preview = await createRetentionRunner(
+      deps({
+        projectRoots: [],
+        healthyRoots: [],
+        threads: trashThreads,
+        records: turn("succeeded"),
+      }),
+    )({ dry_run: true, trash_purge_report: true });
+    expect(preview.purged_threads).toEqual(["t-expired"]);
   });
 
   it("discloses a cleanup error after the purge commit, and the next pass finishes that purge", async () => {

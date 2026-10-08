@@ -26,6 +26,12 @@ describe("in-process project and retention activity", () => {
         params: { scope: (r.params as { scope: unknown }).scope },
       })),
     );
+    // The retention trash fence matches a live turn by its thread id.
+    const turn = { ...rows[1]!, params: { ...(rows[1]!.params as object), threadId: "t-1" } };
+    expect(commandActivityRecords([turn])[0]?.params).toEqual({
+      scope: (rows[1]!.params as { scope: unknown }).scope,
+      threadId: "t-1",
+    });
     expect(() => rows.map(publicJobRecord)).toThrow("body traversed");
     expect(
       commandActivityRecords([
