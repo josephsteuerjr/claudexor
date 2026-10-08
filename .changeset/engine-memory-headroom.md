@@ -10,4 +10,4 @@ Select retained commands by an explicit address before compact collection projec
 
 Report daemon transport failures as retryable 503 problems while preserving typed refusal context and required actions. Refuse an admitted continuation whose source vanished before starting any harness work.
 
-Expose current and admission memory through authenticated GET /v2/daemon/status without changing the handshake. Publish engine heap launch arguments in the additive probe contract and apply them in the CLI, honoring explicit NODE_OPTIONS. The macOS launcher remains unchanged. Resident journal-history growth and archive continuation remain outside this patch.
+Expose current and admission memory through authenticated GET /v2/daemon/status without changing the handshake. Publish engine heap launch arguments in the additive probe contract and apply them in the CLI and the macOS app launcher, honoring explicit NODE_OPTIONS. Resident journal-history growth and archive continuation remain outside this patch.
