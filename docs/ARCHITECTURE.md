@@ -4735,9 +4735,10 @@ manifest or its derived host pin. Current probes additionally advertise the
 additive `roles:["setup_attach"]` marker; its absence remains readable as an
 older closure without packaged external-terminal recovery, while unknown roles
 are ignored. The additive `launch:{nodeArgs,basis:{memoryBytes,source}}` gives
-the engine-selected Node heap flag: half of constrained container memory (when
-positive), otherwise physical memory, capped at 16384 MiB and never below the
-plain Node process default. `source` is `cgroup` or `physical`. Run probes with
+the engine-selected Node heap flag: half of the container memory limit when one
+is below physical memory (an unlimited Linux cgroup reports `UINT64_MAX` and does
+not count), otherwise half of physical memory, capped at 16384 MiB and never below
+the plain Node process default. `source` is `cgroup` or `physical`. Run probes with
 plain `node <entry> --probe`; put the returned `nodeArgs` before the entry on
 daemon launch. An explicit `--max-old-space-size` in the child
 `NODE_OPTIONS` wins: add no flag. The CLI applies this rule without changing

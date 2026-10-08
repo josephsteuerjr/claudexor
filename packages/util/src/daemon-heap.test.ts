@@ -9,6 +9,8 @@ it.each([
   [8, 0, 4, [], "physical"],
   [128, 2, 4, [], "cgroup"],
   [128, 16, 4, ["--max-old-space-size=8192"], "cgroup"],
+  // A cgroup limit at or above physical memory is no constraint.
+  [8, 8, 2, ["--max-old-space-size=4096"], "physical"],
 ] as const)(
   "selects capacity for host=%s GiB, cgroup=%s GiB, default=%s GiB",
   (host, cgroup, baseline, args, source) => {
@@ -18,9 +20,25 @@ it.each([
         constrainedMemoryBytes: cgroup * GiB,
         defaultHeapLimitBytes: baseline * GiB,
       }),
-    ).toEqual({ nodeArgs: args, basis: { memoryBytes: (cgroup || host) * GiB, source } });
+    ).toEqual({
+      nodeArgs: args,
+      basis: { memoryBytes: (source === "cgroup" ? cgroup : host) * GiB, source },
+    });
   },
 );
+
+it("reads an unlimited Linux cgroup (UINT64_MAX) as no constraint", () => {
+  expect(
+    selectDaemonHeap({
+      physicalMemoryBytes: 8 * GiB,
+      constrainedMemoryBytes: 2 ** 64,
+      defaultHeapLimitBytes: 2 * GiB,
+    }),
+  ).toEqual({
+    nodeArgs: ["--max-old-space-size=4096"],
+    basis: { memoryBytes: 8 * GiB, source: "physical" },
+  });
+});
 
 it.each([
   "--max-old-space-size=2048",
