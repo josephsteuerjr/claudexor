@@ -4731,7 +4731,16 @@ The lifecycle handshake is intentionally tiny. Before activation, run
 manifest or its derived host pin. Current probes additionally advertise the
 additive `roles:["setup_attach"]` marker; its absence remains readable as an
 older closure without packaged external-terminal recovery, while unknown roles
-are ignored.
+are ignored. The additive `launch:{nodeArgs,basis:{memoryBytes,source}}` gives
+the engine-selected Node heap flag: half of constrained container memory (when
+positive), otherwise physical memory, capped at 16384 MiB and never below the
+plain Node process default. `source` is `cgroup` or `physical`. Run probes with
+plain `node <entry> --probe`; put the returned `nodeArgs` before the entry on
+daemon launch. An explicit `--max-old-space-size` in the child
+`NODE_OPTIONS` wins: add no flag. The CLI applies this rule without changing
+`NODE_OPTIONS`, re-executing the daemon, or affecting harness child heaps.
+The macOS app launcher still needs this additive probe field wired in; that
+path was left unchanged because its Swift tests could not run in this environment.
 Before replacing a live closure, run the SERVING closure as
 `node claudexord.bundle.cjs --stop <observed-version> <observed-buildSha>` and
 require its typed stopped receipt; busy or unknown refuses the swap. The daemon

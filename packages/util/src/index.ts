@@ -531,3 +531,4 @@ export function engineBuildIdentity(): EngineBuildIdentity {
   return cachedBuildIdentity;
 }
 export * from "./node-heap-args.js";
+export * from "./daemon-heap.js";

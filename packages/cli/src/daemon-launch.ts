@@ -4,6 +4,7 @@ import { lstatSync } from "node:fs";
 import type { Readable } from "node:stream";
 import { logPath } from "@claudexor/daemon";
 import {
+  daemonHeapLaunch,
   safeProblemContext,
   safeProblemMessage,
   safeProblemRequiredActions,
@@ -216,11 +217,16 @@ export function launchDetachedDaemon(options: LaunchDetachedDaemonOptions): Deta
   };
   let child: ChildProcess | undefined;
   try {
-    child = spawn(options.nodePath ?? process.execPath, [options.entryPath], {
-      detached: true,
-      stdio: ["ignore", "ignore", "pipe"],
-      env: daemonLaunchEnvironment(options.env ?? process.env, options.launchSource),
-    });
+    const env = daemonLaunchEnvironment(options.env ?? process.env, options.launchSource);
+    child = spawn(
+      options.nodePath ?? process.execPath,
+      [...daemonHeapLaunch(env).nodeArgs, options.entryPath],
+      {
+        detached: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        env,
+      },
+    );
     stderrCapture = capturePreAuthorityStderr(child.stderr);
     child.once("error", (error) => {
       const code =
