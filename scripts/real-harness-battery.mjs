@@ -469,9 +469,7 @@ async function startBatteryDaemon(startup = "primary") {
     entrySha256: evidence.daemon.entrySha256,
   };
   if (startup === "primary") evidence.daemon.handshake = handshakeEvidence;
-  runtimeState.baselineJobIds = new Set(
-    (await runtimeState.daemonClient.list()).map((job) => job.id),
-  );
+  runtimeState.baselineJobIds = new Set((await allDaemonJobs()).map((job) => job.id));
   pass(
     startup === "primary" ? "phase0" : "state",
     startup === "primary"
@@ -680,13 +678,30 @@ function inspectRun(runId, cwd) {
   return out.json;
 }
 
+/** Every retained command, read in addressed keyset pages (INV-142: the daemon
+ * refuses an un-addressed list). Pages hold compact summaries: id, runId, taskId,
+ * runDir and state are all this battery reads from a collection. */
+async function allDaemonJobs() {
+  const jobs = [];
+  let cursor = null;
+  for (;;) {
+    const page = await runtimeState.daemonClient.list({
+      page: { limit: 1000, state: null, cursor },
+    });
+    jobs.push(...page.slice(0, 1000));
+    if (page.length <= 1000) return jobs;
+    const last = page[999];
+    cursor = { createdAt: String(last.createdAt ?? ""), id: last.id };
+  }
+}
+
 async function verifyNativeSessionRoutes() {
   if (layout.mode !== "existing_default") return;
   const requiredHarnesses = requestedHarnesses.filter((h) => h === "codex" || h === "claude");
   const observed = [];
   let jobs;
   try {
-    jobs = await runtimeState.daemonClient.list();
+    jobs = await allDaemonJobs();
   } catch (error) {
     fail("acceptance", "complete battery run inventory", {
       error: error instanceof Error ? error.message : String(error),
@@ -2889,7 +2904,7 @@ async function runNativeAccessSuccessRow(phase, row, profileEntry) {
           item.verifiedDeniedPath === null &&
           item.unavailableReason === DELIBERATE_NO_OUTER_BOUNDARY_REASON,
       );
-    const job = (await runtimeState.daemonClient.list()).find(
+    const job = (await runtimeState.daemonClient.list({ id: outcome.runId })).find(
       (candidate) => candidate.runId === outcome.runId,
     );
     const params =
@@ -2990,7 +3005,7 @@ async function runNativeAccessSuccessRow(phase, row, profileEntry) {
 async function runNativeAccessRefusalRow(phase, row, wantedCode) {
   const stable = makeMathRepo(`${phase}-${row.id}-stable`, { addBug: true });
   const execution = makeExecutionClone(stable, `${phase}-${row.id}`);
-  const beforeJobs = new Set((await runtimeState.daemonClient.list()).map((job) => job.id));
+  const beforeJobs = new Set((await allDaemonJobs()).map((job) => job.id));
   let problem = null;
   let outcome = null;
   try {
@@ -3023,7 +3038,7 @@ async function runNativeAccessRefusalRow(phase, row, wantedCode) {
       message: error instanceof Error ? error.message : String(error),
     };
   }
-  const afterJobs = await runtimeState.daemonClient.list();
+  const afterJobs = await allDaemonJobs();
   const newJobs = afterJobs.filter((job) => !beforeJobs.has(job.id));
   const spawned = newJobs.some((job) => {
     if (!job.runDir || !existsSync(join(job.runDir, "events.jsonl"))) return false;

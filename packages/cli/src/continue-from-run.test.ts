@@ -58,7 +58,7 @@ describe("continuationForRun (daemon runner)", () => {
       },
       {
         runId: "run-c",
-        runDir: "/r/c",
+        runDir: temp("source-c"),
         state: "cancelled",
         params: { prompt: "now the tests", continueFrom: "run-b" },
       },

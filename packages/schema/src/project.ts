@@ -115,7 +115,7 @@ export const ControlProjectRemoveReceipt = z
     activeRunCheck: z
       .literal("snapshot")
       .describe(
-        "How the live/queued-run fence was evaluated. Always 'snapshot': the active-run set is read once (an async daemon IPC job-list read) BEFORE the synchronous removal, so a run that starts in the narrow window between the snapshot and the removal is NOT fenced. Honest disclosure of a TOCTOU race the current architecture cannot close inside the sync section; see docs/ARCHITECTURE.md.",
+        "How the live/queued-run fence was evaluated. Always 'snapshot': the daemon reads its in-process activity projection and removes the project in the same synchronous turn, with no await between the snapshot and registry/partition mutation.",
       ),
   })
   .strict()
@@ -125,8 +125,8 @@ export const ControlProjectRemoveReceipt = z
 export type ControlProjectRemoveReceipt = z.infer<typeof ControlProjectRemoveReceipt>;
 
 /** The one caller remedy for the typed `project_not_registered` refusal (404):
- * the daemon raises it and the control API restores it on the wire, because the
- * daemon socket transport carries code/status/retryable but not requiredActions. */
+ * the daemon raises it and the control API preserves it on the wire; both
+ * transports carry the safe requiredActions alongside code/status/retryable. */
 export const PROJECT_NOT_REGISTERED_REQUIRED_ACTIONS: readonly string[] = [
   'Register the root with POST /v2/projects {"root": …} (Idempotency-Key required), or declare scope.ephemeral=true for a one-shot tree.',
 ];

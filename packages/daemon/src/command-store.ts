@@ -120,6 +120,10 @@ export class CommandStore {
     return this.recordsById.get(id);
   }
 
+  get count(): number {
+    return this.recordsById.size;
+  }
+
   records(): JobRecord[] {
     return [...this.recordsById.values()];
   }
@@ -147,15 +151,11 @@ export class CommandStore {
     for (const root of roots) this.prunedRoots.add(root);
   }
 
-  /** Project roots of commands this store pruned, across restarts and folds. */
   prunedScopeRoots(): string[] {
     return [...this.prunedRoots];
   }
 
-  /**
-   * Reconcile one command after the partition journal accepted its terminal
-   * but local receipt/tail finalization failed.
-   */
+  /** Reconcile after durable terminal acceptance but failed local receipt/tail finalization. */
   recoverDurableTerminal(id: string): JobRecord | null {
     const record = this.recordsById.get(id);
     if (!record?.runId) return null;

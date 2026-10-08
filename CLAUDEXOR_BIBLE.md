@@ -850,6 +850,15 @@ invariant or operator decision before proceeding.
   capability plus explicit residual disclosure unless evidence shows those
   controls are insufficient. verify: review; trust gating tests; positive
   capability-preservation tests.
+- **INV-142** Retained-command reads name an address or a bounded keyset page
+  before public projection. Collection answers contain summary facts and a
+  redacted prompt preview, never unrelated prompt bodies, instructions or full
+  results. Full detail and Exact Retry remain addressed; transitive cancellation
+  stays uncapped, and the synchronous durable enqueue owns successor admission.
+  This bounds transport amplification, not resident journal history. verify:
+  `[INV-142:addressed-reads]`;
+  `packages/daemon/src/command-list-select.test.ts`;
+  `packages/daemon/src/addressed-command-read.test.ts`.
 - **INV-123** Dead code is deleted, not allowlisted (justified, dated
   baseline entries tied to a locked decision are the only exception). Docs
   claims about endpoints, mode ids, and CLI flags are checked against

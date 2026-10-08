@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type DaemonWriterLeaseStatus } from "@claudexor/daemon";
-import { CLAUDEXOR_VERSION } from "@claudexor/util";
+import { CLAUDEXOR_VERSION, daemonHeapLaunch } from "@claudexor/util";
 import { runProbeIfRequested } from "./claudexord-entry.js";
 import {
   admitAndAwaitRuntimeReplacementStop,
@@ -102,10 +102,12 @@ describe("claudexord --probe (D-2 install probe)", () => {
       version: string;
       buildSha: string;
       roles?: string[];
+      launch?: ReturnType<typeof daemonHeapLaunch>;
     };
     expect(parsed.version).toBe(CLAUDEXOR_VERSION);
     expect(parsed.buildSha).toBe(sha);
     expect(parsed.roles).toEqual(["setup_attach"]);
+    expect(parsed.launch).toEqual(daemonHeapLaunch());
   });
 });
 

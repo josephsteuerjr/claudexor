@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   commandProjection,
+  memoryFacts,
   interactionProjection,
   JournalManager,
   operatorDecisionProjection,
@@ -124,6 +125,11 @@ describe("two-stage startup admission ordering (issue #165 D5)", () => {
     const mode = await completeStartupAdmission({ ...input, blockedPartitions: [] });
     expect(mode).toBe("normal");
     expect(admission.snapshot()).toBe("normal");
+    expect(memoryFacts().atAdmission).toMatchObject({
+      heapUsedBytes: expect.any(Number),
+      rssBytes: expect.any(Number),
+      at: expect.any(String),
+    });
     expect(order).toEqual([
       "global.revalidatePreparation",
       "partitions.revalidatePreparation",

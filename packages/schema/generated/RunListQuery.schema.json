@@ -1,0 +1,66 @@
+{
+  "$ref": "#/definitions/RunListQuery",
+  "definitions": {
+    "RunListQuery": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "interrupted"
+              ],
+              "description": "Control-plane run state = the run LIFECYCLE (D8): queued/running while live, then exactly one of succeeded / failed / cancelled / interrupted. Outcome quality (checks/review/delivery) is orthogonal — see outcomeFacts."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Control-plane run state = the run LIFECYCLE (D8): queued/running while live, then exactly one of succeeded / failed / cancelled / interrupted. Outcome quality (checks/review/delivery) is orthogonal — see outcomeFacts."
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "createdAt": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "createdAt",
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "limit",
+        "state",
+        "cursor"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

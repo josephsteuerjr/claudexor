@@ -2036,6 +2036,17 @@ percent-encoding in the path with a typed `400 malformed_request_path` (never a
 validator dump, and validates the per-run SSE cursor as a nonnegative integer
 `seq` before opening the stream.
 
+An admitted continuation whose predecessor record or run directory disappears
+before execution fails with `continuation_predecessor_unavailable` (404, not
+retryable), before orchestrator or harness startup. It never becomes a fresh run.
+
+The authenticated read-only `GET /v2/daemon/status` exposes daemon health and
+current memory facts (heap used/limit, RSS, external bytes, effective heap args),
+plus the first normal-admission snapshot. It is also available in recovery-only
+mode, where admission memory is null until normal admission has opened. Sampling
+does not force GC or traverse retained commands; job counts use store sizes.
+The protocol handshake remains unchanged. No memory thresholds affect admission.
+
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
 - `GET /healthz`
 - `GET /v2/account-pools`
@@ -2045,6 +2056,7 @@ validator dump, and validates the per-run SSE cursor as a nonnegative integer
 - `POST /v2/credential-profiles`
 - `DELETE /v2/credential-profiles/:harness/:profileId`
 - `PATCH /v2/credential-profiles/:harness/:profileId`
+- `GET /v2/daemon/status`
 - `GET /v2/filesystem/directories`
 - `GET /v2/global/events`
 - `POST /v2/handshake`
@@ -2125,6 +2137,13 @@ validator dump, and validates the per-run SSE cursor as a nonnegative integer
 <!-- END GENERATED ENDPOINTS -->
 
 Endpoint semantics beyond the inventory:
+
+Local daemon RPC timeouts retain the ten-second transport bound and answer
+`503 daemon_busy`; connection failures, closed sockets and invalid responses
+answer `503 daemon_unavailable`. Both are retryable and preserve an unknown
+mutation outcome. Daemon-authored refusals keep their status, code, safe context
+and required actions through RPC and HTTP, including continuation chain heads.
+Request validation remains a typed 400; transport does not retry automatically.
 
 - `POST /v2/runs` with `continueFrom: <runId>` continues a terminal run of this
   daemon — stopped, limited, cancelled, interrupted or finished — as a new
@@ -2397,20 +2416,23 @@ Endpoint semantics beyond the inventory:
   retention-owned `tombstone.yaml` transition (all other artifacts are frozen once
   the run is terminal). The bare parameterless call stays valid — it now yields the
   newest 200 with a cursor to page the rest.
-- An ADDRESSED read never pays for unrelated runs. The daemon's retained-command
-  list RPC takes an optional query that names exactly one subject — `id` (the job
-  id or the bound run id) XOR `delegatedFromRunId` (that parent's bounded direct
-  Delegate children) — and `selectProductCommands` applies it BEFORE
-  `publicJobRecord`, whose recursive redaction is what makes a whole-list answer
-  expensive. `GET /v2/runs/:id` uses both: the record lookup addresses the run,
-  and parent detail addresses that parent's children. A query naming neither
-  subject is the unchanged whole-list answer; one naming both is a typed refusal,
-  not a silent full scan. The honest contract is a reference/metadata scan over
-  the retained records plus a sort over the matching children only — not constant
-  time and not constant memory, and separate from journal cold-replay memory. The
-  transitive cancellation cascade is deliberately UNCAPPED and keeps reading the
-  whole list. Callers re-apply their own exact match and bounded child rule on the
-  result, because an engine older than the query ignores it and answers in full.
+- Retained-command RPC reads require one strict addressed selector: a job/run
+  `id`, a set of `ids`, `turnId`, `threadId` (optionally active only), `threadIds`,
+  active commands, direct Delegate children, transitive Delegate descendants,
+  a predecessor's forward continuation chain, or a keyset page. Empty, omitted,
+  mixed and unknown selectors are typed 400 refusals. Selection precedes public
+  projection inside the daemon. Single-id and latest-turn reads retain full
+  params for detail and Exact Retry; collections carry only the typed summary
+  whitelist and the existing redacted 240-character prompt preview, with no raw
+  prompt, instructions, arbitrary params or full results. Thread selections also
+  include their direct Delegate children for turn cards, even when the child
+  has no thread id. A page crosses RPC
+  with at most `limit+1` records; HTTP keeps its existing summary and cursor
+  contract. Reference/metadata scans remain O(N), separate from journal replay
+  memory. The transitive cancellation cascade stays uncapped; traversal runs
+  inside the daemon before serialization. Continuation preflight reads only the
+  predecessor and forward chain, while the authoritative synchronous enqueue
+  check still uses all records immediately before durable acceptance.
 - `claudexor settings show|set` is a thin client of `GET|POST /v2/settings`.
   Validation, persistence, cache invalidation, and the returned effective
   `ControlSettingsSnapshot` come from the daemon; the CLI has no second config
@@ -2854,12 +2876,11 @@ leaving run artifacts to normal GC and disclosing all of that in a typed
 receipt. It is refused with a typed `409` while any non-purged thread or
 live/queued run still references the project. The live/queued-run fence is a
 SNAPSHOT, disclosed as such in the receipt (`activeRunCheck: "snapshot"`): the
-active-run root set is read once via an async daemon IPC job-list read BEFORE
-the synchronous removal, so a run that starts in the narrow window between the
-snapshot and the removal is not fenced. Closing that TOCTOU would require the
-job list to be readable synchronously inside the removal (it is a cross-process
-socket call today), so the receipt states the guarantee honestly rather than
-implying atomicity. The CLI
+active-run root set is read once through the in-process command activity
+projection and consumed by the synchronous removal in the same event-loop turn.
+There is no await where enqueue could interleave between check and mutation.
+Activity includes the global and healthy project partitions,
+and retention consumes that same prompt-free projection without a self-RPC. The CLI
 projects the same surface as `claudexor project list|register|relink|remove` and
 auto-registers the current root before a run; no v1 config, thread, or run path
 is imported as a project registration. Relink updates project-thread root
@@ -4713,7 +4734,17 @@ The lifecycle handshake is intentionally tiny. Before activation, run
 manifest or its derived host pin. Current probes additionally advertise the
 additive `roles:["setup_attach"]` marker; its absence remains readable as an
 older closure without packaged external-terminal recovery, while unknown roles
-are ignored.
+are ignored. The additive `launch:{nodeArgs,basis:{memoryBytes,source}}` gives
+the engine-selected Node heap flag: half of the container memory limit when one
+is below physical memory (an unlimited Linux cgroup reports `UINT64_MAX` and does
+not count), otherwise half of physical memory, capped at 16384 MiB and never below
+the plain Node process default. `source` is `cgroup` or `physical`. Run probes with
+plain `node <entry> --probe`; put the returned `nodeArgs` before the entry on
+daemon launch. An explicit `--max-old-space-size` in the child
+`NODE_OPTIONS` wins: add no flag. The CLI applies this rule without changing
+`NODE_OPTIONS`, re-executing the daemon, or affecting harness child heaps.
+The macOS app launcher runs the same probe before each daemon start and
+passes `nodeArgs` the same way (all-or-nothing on the exact flag form).
 Before replacing a live closure, run the SERVING closure as
 `node claudexord.bundle.cjs --stop <observed-version> <observed-buildSha>` and
 require its typed stopped receipt; busy or unknown refuses the swap. The daemon

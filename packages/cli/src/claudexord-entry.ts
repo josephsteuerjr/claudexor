@@ -1,7 +1,7 @@
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { engineBuildIdentity } from "@claudexor/util";
+import { daemonHeapLaunch, engineBuildIdentity } from "@claudexor/util";
 import { setupAttachCommand } from "./setup-attach-command.js";
 
 /**
@@ -10,7 +10,7 @@ import { setupAttachCommand } from "./setup-attach-command.js";
  * ratchet and the entry decision can be tested without daemon initialization.
  */
 /** Handle `claudexord --probe`: print the engine build identity as ONE JSON line
- * ({version, buildSha, roles}) and exit WITHOUT any durable startup — no writer lease,
+ * ({version, buildSha, roles, launch}) and exit WITHOUT any durable startup — no writer lease,
  * no socket bind, no journal open, no runtime root. This is the pre-swap
  * handshake the macOS installer's RuntimeInstallCoordinator.probeVersion runs
  * against a freshly-unpacked closure with the app-bundled Node (D-2). Returns
@@ -19,7 +19,7 @@ export function runProbeIfRequested(argv: readonly string[]): boolean {
   if (argv.length !== 1 || argv[0] !== "--probe") return false;
   const id = engineBuildIdentity();
   process.stdout.write(
-    `${JSON.stringify({ version: id.version, buildSha: id.sha, roles: ["setup_attach"] })}\n`,
+    `${JSON.stringify({ version: id.version, buildSha: id.sha, roles: ["setup_attach"], launch: daemonHeapLaunch() })}\n`,
   );
   return true;
 }

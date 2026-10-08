@@ -1,5 +1,26 @@
 # @claudexor/orchestrator
 
+## 3.22.1
+
+### Patch Changes
+
+- Updated dependencies [902532e]
+  - @claudexor/schema@3.22.1
+  - @claudexor/util@3.22.1
+  - @claudexor/arbitration@3.22.1
+  - @claudexor/budget@3.22.1
+  - @claudexor/config@3.22.1
+  - @claudexor/context@3.22.1
+  - @claudexor/core@3.22.1
+  - @claudexor/delivery@3.22.1
+  - @claudexor/event-log@3.22.1
+  - @claudexor/gateway@3.22.1
+  - @claudexor/policy@3.22.1
+  - @claudexor/review@3.22.1
+  - @claudexor/workspace@3.22.1
+  - @claudexor/artifact-store@3.22.1
+  - @claudexor/synthesis@3.22.1
+
 ## 3.22.0
 
 ### Minor Changes

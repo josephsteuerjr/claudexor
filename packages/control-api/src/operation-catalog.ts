@@ -84,6 +84,7 @@ const operations: ControlOperationDescriptor[] = [
     { idempotency: "key_required" },
   ),
   j("POST", "/v2/handshake", "read_only", "ControlHandshakeRequest", "ControlHandshakeResponse"),
+  j("GET", "/v2/daemon/status", "read_only", null, "ControlDaemonStatus"),
   j("GET", "/v2/operations", "read_only", null, "ControlOperationCatalog"),
   j("POST", "/v2/maintenance/gc", "mutating", "ControlGcRequest", "ControlGcReceipt", {
     idempotency: "natural",

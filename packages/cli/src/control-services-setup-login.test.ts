@@ -52,7 +52,7 @@ function services(create: (...args: unknown[]) => unknown) {
     undefined as never,
     undefined as never,
     (() => quota) as never,
-    async () => [],
+    () => [],
   );
 }
 

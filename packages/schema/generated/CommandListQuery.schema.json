@@ -1,0 +1,204 @@
+{
+  "$ref": "#/definitions/CommandListQuery",
+  "definitions": {
+    "CommandListQuery": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Non-empty identifier string."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "delegatedFromRunId": {
+              "$ref": "#/definitions/CommandListQuery/anyOf/0/properties/id"
+            }
+          },
+          "required": [
+            "delegatedFromRunId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/CommandListQuery/anyOf/0/properties/id"
+              },
+              "minItems": 1,
+              "maxItems": 1000
+            }
+          },
+          "required": [
+            "ids"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "continuationChainOf": {
+              "$ref": "#/definitions/CommandListQuery/anyOf/0/properties/id"
+            }
+          },
+          "required": [
+            "continuationChainOf"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "delegatedDescendantsOf": {
+              "$ref": "#/definitions/CommandListQuery/anyOf/0/properties/id"
+            }
+          },
+          "required": [
+            "delegatedDescendantsOf"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "$ref": "#/definitions/CommandListQuery/anyOf/0/properties/id"
+            },
+            "activeOnly": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "threadId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "threadIds": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/CommandListQuery/anyOf/0/properties/id"
+              },
+              "minItems": 1,
+              "maxItems": 1000
+            }
+          },
+          "required": [
+            "threadIds"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "turnId": {
+              "$ref": "#/definitions/CommandListQuery/anyOf/0/properties/id"
+            }
+          },
+          "required": [
+            "turnId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "activeOnly": {
+              "type": "boolean",
+              "const": true
+            }
+          },
+          "required": [
+            "activeOnly"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "page": {
+              "type": "object",
+              "properties": {
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "state": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "running",
+                        "succeeded",
+                        "failed",
+                        "cancelled",
+                        "interrupted"
+                      ],
+                      "description": "Control-plane run state = the run LIFECYCLE (D8): queued/running while live, then exactly one of succeeded / failed / cancelled / interrupted. Outcome quality (checks/review/delivery) is orthogonal — see outcomeFacts."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Control-plane run state = the run LIFECYCLE (D8): queued/running while live, then exactly one of succeeded / failed / cancelled / interrupted. Outcome quality (checks/review/delivery) is orthogonal — see outcomeFacts."
+                },
+                "cursor": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "createdAt",
+                        "id"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "limit",
+                "state",
+                "cursor"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "page"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Required addressed selection for retained product commands; collections are compact."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

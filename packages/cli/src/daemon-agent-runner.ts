@@ -54,6 +54,7 @@ export function createDaemonAgentRunner(deps: {
   const NO_PROJECT_ROOT = noProjectRepoRoot();
   return async (params, ctx) => {
     const p = restoreRecordedRunReviewRequest(normalizeRunStartRequest(params));
+    const continuation = continuationForRun(p, threads);
     const mode = p.mode;
     const noProjectAsk = mode === "ask" && p.scope.kind === "none";
     const repoRoot = p.scope.kind === "project" ? p.scope.root : NO_PROJECT_ROOT;
@@ -189,7 +190,7 @@ export function createDaemonAgentRunner(deps: {
         onLiveAttempt: (attempt) => liveInputs.register(attempt),
         threadId,
         executionRoot,
-        continuation: continuationForRun(p, threads),
+        continuation,
         retryOf: p.retryOf ?? null,
         projectGitInitialization,
         ...threadRunResumeInputs(threads, threadId, requestedProfileId),

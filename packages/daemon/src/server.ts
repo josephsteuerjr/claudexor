@@ -1,3 +1,4 @@
+import { rpcProblem } from "./rpc-problem.js";
 import { type Server, type Socket, createServer } from "node:net";
 
 import {
@@ -13,14 +14,7 @@ import {
 } from "@claudexor/schema";
 import { daemonHealth, daemonConcurrencyLimit } from "./daemon-health.js";
 import { RpcFollowers } from "./rpc-followers.js";
-import {
-  assertNoInlineSecretValues,
-  errorCode,
-  newId,
-  nowIso,
-  pathExists,
-  redactSecrets,
-} from "@claudexor/util";
+import { assertNoInlineSecretValues, newId, nowIso, pathExists } from "@claudexor/util";
 import {
   commandStoreForId,
   commandStoreForRequest,
@@ -32,7 +26,8 @@ import {
   findAcceptedCommand,
   publicAcceptedCommand,
 } from "./command-rpc.js";
-import { prunableCommandIds, selectProductCommands } from "./command-retention.js";
+import { prunableCommandIds } from "./command-retention.js";
+import { publicCommandList } from "./command-list-projection.js";
 import { clearStaleUnixSocketPath, listenOnDaemonEndpoint } from "./daemon-listen.js";
 import {
   admitDelegatedRequest,
@@ -57,11 +52,7 @@ import {
 } from "./serving-admission.js";
 import { socketAlive } from "./socket-probe.js";
 import { isWindowsPipePath } from "./token.js";
-import {
-  dispatchShutdownRpc,
-  replacementRefusal,
-  type RuntimeReplacementAuthority,
-} from "./daemon-shutdown-rpc.js";
+import { dispatchShutdownRpc, type RuntimeReplacementAuthority } from "./daemon-shutdown-rpc.js";
 export { JOB_STATES, jobStateFromResult, socketAlive, type JobRecord };
 
 export interface RunContext {
@@ -269,24 +260,7 @@ export class DaemonServer {
     try {
       this.send(sock, { id, result: await this.dispatch(method, params) });
     } catch (err) {
-      const code = errorCode(err);
-      this.send(sock, {
-        id,
-        error: {
-          message: redactSecrets(err instanceof Error ? err.message : String(err)),
-          ...(code ? { code } : {}),
-          ...(err && typeof err === "object" && "status" in err
-            ? { status: Number((err as { status: unknown }).status) }
-            : {}),
-          ...(err &&
-          typeof err === "object" &&
-          typeof (err as { retryable?: unknown }).retryable === "boolean"
-            ? { retryable: (err as { retryable: boolean }).retryable }
-            : replacementRefusal(err)
-              ? { retryable: true }
-              : {}),
-        },
-      });
+      this.send(sock, { id, error: rpcProblem(err) });
     }
   }
 
@@ -308,7 +282,9 @@ export class DaemonServer {
         this.startedAt,
         this.queue.length,
         this.active,
-        servingMode === "normal" ? this.allRecords().length : 0,
+        servingMode === "normal"
+          ? commandStores(this.opts.commands).reduce((n, s) => n + s.count, 0)
+          : 0,
         this.stopping,
         servingMode,
         this.maxConcurrent,
@@ -376,7 +352,7 @@ export class DaemonServer {
         return publicAcceptedCommand(this.opts.commands, params);
       }
       case "claudexor.list":
-        return selectProductCommands(this.allRecords(), params?.query).map(publicJobRecord);
+        return publicCommandList(this.allRecords(), params?.query);
       case "claudexor.cancel": {
         return this.cancelJob(String(params?.id), normalizeCancelReasonCode(params?.reason_code));
       }

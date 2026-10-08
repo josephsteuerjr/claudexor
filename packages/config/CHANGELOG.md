@@ -1,5 +1,13 @@
 # @claudexor/config
 
+## 3.22.1
+
+### Patch Changes
+
+- Updated dependencies [902532e]
+  - @claudexor/schema@3.22.1
+  - @claudexor/util@3.22.1
+
 ## 3.22.0
 
 ### Patch Changes

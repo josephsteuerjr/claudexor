@@ -1,3 +1,4 @@
+import { readThreadCommands } from "./command-reads.js";
 import { recoverInterruptedOutput } from "./retained-output.js";
 import { recordedExecutionRoot } from "./run-delivery-state.js";
 import * as exactPatch from "./run-exact-patch.js";
@@ -89,6 +90,7 @@ import { writeBinaryResponse } from "./binary-response.js";
 export { inlineContentDisposition } from "./binary-response.js";
 import { handleRecoveryRoute } from "./recovery-routes.js";
 import { handleJournalEventRoute } from "./journal-event-routes.js";
+import { handleDaemonStatusRoute } from "./daemon-status-routes.js";
 import { handleMaintenanceRoute, type MaintenanceRouteServices } from "./maintenance-routes.js";
 import { handleResourceRoute, type ResourceRouteServices } from "./resource-routes.js";
 import { handleModelRoute, type ModelRouteServices } from "./model-routes.js";
@@ -736,6 +738,7 @@ export class DaemonControlApiServer {
     }
     const path = protocol.path;
     const dataRoutes = {
+      daemon: this.opts.daemon,
       services: this.opts.services,
       readBody: (request: IncomingMessage) => this.readBody(request),
       json: (response: ServerResponse, status: number, body: unknown) =>
@@ -743,7 +746,12 @@ export class DaemonControlApiServer {
       requestError: (response: ServerResponse, error: unknown, fallback?: 400 | 500) =>
         this.requestError(response, error, fallback),
     };
-    for (const route of [handleResourceRoute, handleModelRoute, handleMaintenanceRoute]) {
+    for (const route of [
+      handleResourceRoute,
+      handleModelRoute,
+      handleMaintenanceRoute,
+      handleDaemonStatusRoute,
+    ]) {
       if (await route(dataRoutes, method, path, req, res)) return;
     }
     if (
@@ -768,7 +776,7 @@ export class DaemonControlApiServer {
         {
           daemon: this.opts.daemon,
           readBody: (request) => this.readBody(request),
-          requestError: (response, error) => this.requestError(response, error),
+          requestError: (response, error, fallback) => this.requestError(response, error, fallback),
           json: (response, status, body) => this.json(response, status, body),
           respondToAcceptedJob: (response, jobId) => this.respondToAcceptedJob(response, jobId),
           validateResources: this.opts.services?.validateResources,
@@ -952,7 +960,7 @@ export class DaemonControlApiServer {
       if (!svc)
         return this.json(res, 501, { error: "threads are not supported by this engine build" });
       const { threads, problems } = await svc();
-      const runs = await this.opts.daemon.list();
+      const runs = await readThreadCommands(this.opts.daemon, threads);
       const blocked = new Set(
         runs.filter((r) => this.runNeedsAttention(r)).map((r) => r.runId ?? r.id),
       );
@@ -975,7 +983,9 @@ export class DaemonControlApiServer {
         return this.json(res, 501, { error: "threads are not supported by this engine build" });
       try {
         const detail = await svc(decodeURIComponent(threadDetailMatch[1] as string));
-        const runs = await this.opts.daemon.list();
+        const runs = await this.opts.daemon.list({
+          threadId: decodeURIComponent(threadDetailMatch[1] as string),
+        });
         const byRun = new Map(runs.map((r) => [r.runId ?? r.id, r]));
         const thread = detail.thread as { head_run_id?: string | null };
         const cards = projectTurnRunCards(
@@ -1994,7 +2004,10 @@ export class DaemonControlApiServer {
   /** Persisted Delegate-only descendant graph. `parentRunId` alone is broader
    * thread/retry lineage and deliberately does not participate. */
   private async delegatedDescendants(parentRunId: string): Promise<DaemonRunRecord[]> {
-    return delegatedDescendantsFromRecords(parentRunId, await this.opts.daemon.list());
+    return delegatedDescendantsFromRecords(
+      parentRunId,
+      await this.opts.daemon.list({ delegatedDescendantsOf: parentRunId }),
+    );
   }
 
   /**
@@ -2015,7 +2028,10 @@ export class DaemonControlApiServer {
     } catch (error) {
       return this.requestError(res, error);
     }
-    const { page, hasMore, nextCursor } = selectRunListPage(await this.opts.daemon.list(), query);
+    const { page, hasMore, nextCursor } = selectRunListPage(
+      await this.opts.daemon.list({ page: query }),
+      query,
+    );
     return this.json(
       res,
       200,
@@ -2152,7 +2168,7 @@ export class DaemonControlApiServer {
     return {
       turnCtx: this.threadTurnRouteCtx(),
       services: this.opts.services,
-      listRuns: () => this.opts.daemon.list(),
+      listRuns: (query) => this.opts.daemon.list(query),
       readBody: (req) => this.readBody(req),
       json: (res, status, body) => this.json(res, status, body),
       requestError: (res, error) => this.requestError(res, error),
@@ -2510,7 +2526,9 @@ function summarizeRun(
     project: projectMetadata(rec),
     mode: parsedMode.success ? parsedMode.data : undefined,
     strategy: strategyFromParams(p),
-    prompt: typeof p["prompt"] === "string" ? redactPrompt(p["prompt"]) : undefined,
+    prompt:
+      rec.promptPreview ??
+      (typeof p["prompt"] === "string" ? redactPrompt(p["prompt"]) : undefined),
     harnesses: Array.isArray(p["harnesses"])
       ? p["harnesses"].filter((x): x is string => typeof x === "string")
       : undefined,

@@ -112,6 +112,18 @@
     },
     {
       "method": "GET",
+      "path": "/v2/daemon/status",
+      "mutating": false,
+      "applicability": "global",
+      "summary": "Read daemon activity, capacity and current/admission memory facts.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [],
+      "response_schema": "ControlDaemonStatus",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "GET",
       "path": "/v2/filesystem/directories",
       "mutating": false,
       "applicability": "global",

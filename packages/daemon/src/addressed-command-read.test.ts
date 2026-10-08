@@ -137,15 +137,16 @@ describe("addressed claudexor.list over the real socket", () => {
     }
 
     await withDaemon("ids", { current: () => store }, async ({ client }) => {
-      const whole = await client.list();
-      // Positive global compatibility: the unqualified read is unchanged.
+      const whole = await client.list({ ids: ["job-a", "job-b", "job-queued"] });
+      // Collection projection preserves identities without full prompt bodies.
       expect(whole.map((entry) => entry.id)).toEqual(["job-a", "job-b", "job-queued"]);
 
       const byJobId = await client.list({ id: "job-a" });
       const byRunId = await client.list({ id: "run-a" });
       // Producer-vs-producer: the addressed record is the SAME projection the
       // whole-list read produces, not a separately synthesized expectation.
-      expect(byJobId).toEqual([whole[0]]);
+      expect(byJobId[0]).toMatchObject({ id: "job-a", params: { prompt: "alpha" } });
+      expect(whole[0]).not.toHaveProperty("params.prompt");
       expect(byRunId).toEqual(byJobId);
 
       expect(await client.list({ id: "job-queued" })).toEqual([
@@ -247,8 +248,10 @@ describe("addressed claudexor.list over the real socket", () => {
             status: 400,
           });
         }
-        // Both selectors absent is the documented whole-list behaviour.
-        expect(await client.list({})).toHaveLength(1);
+        // @ts-expect-error An unaddressed call is no longer representable.
+        await expect(client.list()).rejects.toMatchObject({ code: "list_query_required" });
+        // @ts-expect-error An empty selector is no longer representable.
+        await expect(client.list({})).rejects.toMatchObject({ code: "invalid_command_list_query" });
       },
     );
   });
@@ -282,13 +285,16 @@ describe("addressed reads do no work for unrelated commands", () => {
       crowdedAddressed = await rawRpc(socketPath, "claudexor.list", {
         query: { id: "run-target" },
       });
-      crowdedWholeList = await rawRpc(socketPath, "claudexor.list", {});
+      crowdedWholeList = await rawRpc(socketPath, "claudexor.list", {
+        query: { page: { limit: 5, state: null, cursor: null } },
+      });
     });
 
     expect(crowdedAddressed).toBe(alone);
     // Negative control: the same daemon really is holding that payload, so the
     // byte identity above is a property of the read, not of an empty roster.
-    expect(crowdedWholeList.length).toBeGreaterThan(alone.length * 1_000);
+    expect(Buffer.byteLength(crowdedWholeList)).toBeLessThanOrEqual(64 * 1024);
+    expect(Buffer.byteLength(JSON.stringify([...heavy, target]))).toBeGreaterThan(1_600_000);
   });
 
   it("never traverses the params of a record it did not select", async () => {
@@ -323,9 +329,10 @@ describe("addressed reads do no work for unrelated commands", () => {
       expect(await client.list({ delegatedFromRunId: "run-target" })).toEqual([
         expect.objectContaining({ runId: "run-child" }),
       ]);
-      // Negative control: the poison is live and reachable — the whole-list read
-      // still walks it, so the two passes above prove selection, not a dud fixture.
-      await expect(client.list()).rejects.toThrow(/unrelated command params were traversed/);
+      // Negative control: a full addressed read still reaches the poison.
+      await expect(client.list({ id: "job-poison" })).rejects.toThrow(
+        /unrelated command params were traversed/,
+      );
     });
   });
 });

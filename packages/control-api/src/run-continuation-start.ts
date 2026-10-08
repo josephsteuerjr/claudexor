@@ -3,7 +3,7 @@
  * chain. The daemon's enqueue RPC owns the atomic one-successor claim; this
  * module resolves what a continuation inherits BEFORE ordinary request
  * defaults fill it, and answers the same admission verdict with its typed
- * context (the chain `head`), which the daemon socket does not carry.
+ * context (the chain `head`), preserved by the daemon socket as well.
  */
 import {
   continuationPredecessor,
@@ -62,7 +62,8 @@ export async function assertContinuationAdmissible(
   daemon: Pick<DaemonFacadeClient, "list">,
   request: unknown,
 ): Promise<void> {
-  if (continuedRunOf(request) === null) return;
-  const refusal = continuationRefusal(request, await daemon.list());
+  const from = continuedRunOf(request);
+  if (from === null) return;
+  const refusal = continuationRefusal(request, await daemon.list({ continuationChainOf: from }));
   if (refusal) throw continuationRefusalError(refusal);
 }

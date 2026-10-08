@@ -206,7 +206,7 @@ function services(
     undefined as never,
     undefined as never,
     (() => quota) as never,
-    async () => [],
+    () => [],
   );
 }
 

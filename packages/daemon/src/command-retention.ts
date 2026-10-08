@@ -1,55 +1,16 @@
+import { parseCommandListQuery, selectCommandRecords } from "./command-list-select.js";
 import { retainedEnvelopeOfRun } from "@claudexor/workspace";
 import type { JobRecord } from "./server.js";
-import {
-  CommandListQuery,
-  continuedRunOf,
-  directDelegatedChildrenFromRecords,
-  isModelOperation,
-} from "@claudexor/schema";
+import { continuedRunOf, isModelOperation } from "@claudexor/schema";
 
 export function productCommandRecords(records: readonly JobRecord[]): JobRecord[] {
   return records.filter((record) => !isDeliveryCommand(record) && !isModelOperation(record.params));
 }
 
-/**
- * The retained product commands a caller ADDRESSED, chosen before any public
- * projection runs.
- *
- * `publicJobRecord` recursively walks and redacts a record's params, so a
- * caller that wants ONE run (or one parent's direct children) must not pay for
- * every retained prompt in the partition: selection here is a reference and
- * metadata scan (`id`/`runId` equality, one shallow `delegatedFromRunId` read,
- * an O(M log M) sort over the matching children only), and the unselected
- * records are never traversed or serialized at all. An unqualified query keeps
- * the historical whole-list answer.
- *
- * An addressed miss is an EMPTY selection. The caller owns the distinction
- * between "this run is not retained" and "the daemon could not answer": a
- * transport failure throws and must never be read as an empty list.
- */
-export function selectProductCommands(records: readonly JobRecord[], query?: unknown): JobRecord[] {
-  const { id, delegatedFromRunId } = parseCommandListQuery(query);
-  const product = productCommandRecords(records);
-  if (id !== undefined) {
-    const addressed = product.find((record) => record.id === id || record.runId === id);
-    return addressed ? [addressed] : [];
-  }
-  if (delegatedFromRunId !== undefined) {
-    return directDelegatedChildrenFromRecords(delegatedFromRunId, product);
-  }
-  return product;
-}
-
-/** Wire boundary for the addressed read: an unusable query fails loudly rather
- * than degrading into a silent full scan the caller did not ask for. */
-function parseCommandListQuery(query: unknown): CommandListQuery {
-  if (query === undefined || query === null) return {};
-  const parsed = CommandListQuery.safeParse(query);
-  if (parsed.success) return parsed.data;
-  throw Object.assign(
-    new Error("a command list query addresses either one id or one Delegate parent"),
-    { code: "invalid_command_list_query", status: 400 },
-  );
+/** Addressed selection is shared by socket reads and in-process consumers. */
+export function selectProductCommands(records: readonly JobRecord[], query: unknown): JobRecord[] {
+  const addressed = parseCommandListQuery(query);
+  return selectCommandRecords(productCommandRecords(records), addressed);
 }
 
 /** Delivery commands persist the full run params of the apply they serve;

@@ -1,5 +1,18 @@
 # @claudexor/review
 
+## 3.22.1
+
+### Patch Changes
+
+- Updated dependencies [902532e]
+  - @claudexor/schema@3.22.1
+  - @claudexor/util@3.22.1
+  - @claudexor/budget@3.22.1
+  - @claudexor/config@3.22.1
+  - @claudexor/context@3.22.1
+  - @claudexor/core@3.22.1
+  - @claudexor/workspace@3.22.1
+
 ## 3.22.0
 
 ### Patch Changes

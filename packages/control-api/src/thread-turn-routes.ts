@@ -94,9 +94,9 @@ export function errCode(err: unknown): string | null {
 /**
  * Persist an enqueue failure on a pre-created turn (refused-turn honesty,
  * INV-093). Shared by every pre-create-then-enqueue path OUTSIDE these
- * routes (direct POST /runs with threadId, rerun_with_feedback). Marked
- * retryable=false: these are enqueue-throw paths — no job was recorded, so
- * the retry endpoint has nothing to replay. Best-effort by
+ * routes (direct POST /runs with threadId, rerun_with_feedback). A typed refusal
+ * recorded no job (retryable=false); a lost answer (retryable transport failure)
+ * may hide an accepted job, so retry resolves it from the journal. Best-effort by
  * contract: recording must never mask the original error (callers always
  * return it), and errCode yields null for absent/non-string codes.
  */
@@ -105,7 +105,7 @@ export function recordTurnEnqueueFailure(
   turnId: string | undefined,
   err: unknown,
 ): TurnEnqueueProblem {
-  const problem = problemFromError(err, false);
+  const problem = problemFromError(err, Object(err).retryable === true);
   if (!turnId || !setTurnEnqueueError) return problem;
   try {
     setTurnEnqueueError(turnId, problem);
@@ -418,8 +418,8 @@ export function handleThreadTurnCreate(
       await (ctx.preflightThreadRunRequirements ?? ctx.preflightRunRequirements)?.(params);
       // The turn stores resolved immutable resources; enqueue carries no duplicate refs.
       const { attachments: _att, ...enqueueParams } = params;
-      // ENQUEUE phase: a throw here means NO job was recorded — persist the
-      // refusal as retryable:false (nothing to replay).
+      // ENQUEUE phase: a typed refusal recorded no job (retryable:false); a lost
+      // answer (retryable 503) may hide an accepted job, so /retry reads the journal.
       let job: { id: string };
       try {
         job = await ctx.daemon.enqueue(
@@ -432,7 +432,7 @@ export function handleThreadTurnCreate(
           },
         );
       } catch (err) {
-        const problem = problemFromError(err, false);
+        const problem = problemFromError(err, Object(err).retryable === true);
         try {
           ctx.setTurnEnqueueError?.(turn.id, problem);
         } catch {
@@ -507,7 +507,7 @@ export function handleThreadTurnRetry(
           { status: 409 },
         );
       }
-      const jobs = (await ctx.daemon.list())
+      const jobs = (await ctx.daemon.list({ turnId }))
         .filter((record) => {
           const params = record.params as { turnId?: unknown } | null | undefined;
           return Boolean(params && typeof params === "object" && params.turnId === turnId);

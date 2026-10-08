@@ -54,7 +54,7 @@ function servicesWithJobs(
     undefined as never,
     undefined as never,
     (() => quota) as never,
-    async () => [],
+    () => [],
   );
 }
 
@@ -352,7 +352,7 @@ describe("deleteCredentialProfile (INV-135 delete service)", () => {
       undefined as never,
       undefined as never,
       (() => quota) as never,
-      async () => [],
+      () => [],
     );
 
     await svc.deleteCredentialProfile({ harnessId: "claude", profileId: "work" });

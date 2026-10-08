@@ -30,7 +30,7 @@ function servicesWith(
     undefined as never,
     undefined as never,
     undefined as never,
-    async () => jobs,
+    () => jobs,
   );
 }
 
@@ -88,5 +88,19 @@ describe("removeProject active-run fence: typed scope, no fail-open (Ф2 finding
     await expect(services.removeProject("prj-1")).rejects.toThrow(/scope of active run r9/);
     // The fence never reached removeProject with an under-counted set.
     expect(captured.roots).toBeUndefined();
+  });
+
+  it("consumes the activity snapshot and mutates before another enqueue can interleave", async () => {
+    const captured: { roots?: ReadonlySet<string> } = {};
+    const services = servicesWith([], captured);
+    let nextTurn = false;
+    queueMicrotask(() => {
+      nextTurn = true;
+    });
+    const result = services.removeProject("idle-project");
+    expect(captured.roots).toEqual(new Set());
+    expect(nextTurn).toBe(false);
+    await result;
+    expect(nextTurn).toBe(true);
   });
 });

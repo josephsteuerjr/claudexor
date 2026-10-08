@@ -530,3 +530,5 @@ export function engineBuildIdentity(): EngineBuildIdentity {
   cachedBuildIdentity = { version: CLAUDEXOR_VERSION, sha, entry };
   return cachedBuildIdentity;
 }
+export * from "./node-heap-args.js";
+export * from "./daemon-heap.js";

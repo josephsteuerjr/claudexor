@@ -5,6 +5,8 @@ import {
 } from "@claudexor/schema";
 import type { DaemonServingMode } from "./serving-admission.js";
 
+import { memoryFacts } from "./memory-facts.js";
+
 export function daemonHealth(
   startedAt: number,
   queue: number,
@@ -17,6 +19,7 @@ export function daemonHealth(
 ) {
   return {
     ok: true,
+    memory: memoryFacts(),
     uptime_ms: Date.now() - startedAt,
     queue,
     running: active > 0,

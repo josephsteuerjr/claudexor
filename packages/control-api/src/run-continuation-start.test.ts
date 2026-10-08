@@ -34,7 +34,7 @@ function fakeDaemon(records: DaemonRunRecord[]) {
       return records.find((record) => record.id === id)!;
     },
     async list(query?: CommandListQuery) {
-      const id = query?.id;
+      const id = query && "id" in query ? query.id : undefined;
       return id ? records.filter((r) => r.id === id || r.runId === id) : [...records];
     },
     async cancel() {

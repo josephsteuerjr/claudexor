@@ -90,8 +90,11 @@ enum DaemonLauncher {
     }
 
     /// Spawn the resolved daemon (detached so it outlives the app). Returns false if the
-    /// bundled assets aren't present (dev) or the spawn failed. Node is always app-bundled;
-    /// only the daemon-script path is resolved through the installed runtime.
+    /// bundled assets aren't present (dev). Node is always app-bundled; only the
+    /// daemon-script path is resolved through the installed runtime. The engine's probe
+    /// names the heap ceiling first and runs off the caller's thread (outage recovery
+    /// calls this on the main actor), so the spawn follows a moment later and a failed
+    /// spawn surfaces through the callers' existing handshake polls.
     @discardableResult
     static func startIfNeeded(scriptURL: URL? = nil) -> Bool {
         guard let node = bundledNode, let daemon = scriptURL ?? resolvedDaemon() else { return false }
@@ -99,18 +102,40 @@ enum DaemonLauncher {
         guard fm.isExecutableFile(atPath: node.path), fm.fileExists(atPath: daemon.path) else {
             return false
         }
-        let process = Process()
-        process.executableURL = node
-        process.arguments = [daemon.path]
-        process.environment = daemonEnvironment()
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            return true
-        } catch {
-            return false
+        let environment = daemonEnvironment()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let probe = AppRuntimeDaemonControl.runNodeJSON(
+                [daemon.path, "--probe"], node: node, timeout: 20)
+            let process = Process()
+            process.executableURL = node
+            process.arguments = heapNodeArguments(probe: probe, environment: environment) + [daemon.path]
+            process.environment = environment
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
         }
+        return true
+    }
+
+    /// The engine names its own V8 heap ceiling in its side-effect-free probe
+    /// (`launch.nodeArgs`); the launcher only passes it before the script, where
+    /// the daemon's strict argv never sees it. An operator `NODE_OPTIONS` heap
+    /// flag wins, an engine without `launch` starts exactly as before, and any
+    /// argument other than `--max-old-space-size=<MiB>` drops the whole list.
+    static func heapNodeArguments(probe: [String: Any]?, environment: [String: String]) -> [String] {
+        if environment["NODE_OPTIONS", default: ""].contains("--max-old-space-size") { return [] }
+        guard let launch = probe?["launch"] as? [String: Any],
+            let args = launch["nodeArgs"] as? [String],
+            args.allSatisfy(isHeapCeilingArgument)
+        else { return [] }
+        return args
+    }
+
+    static func isHeapCeilingArgument(_ argument: String) -> Bool {
+        let prefix = "--max-old-space-size="
+        guard argument.hasPrefix(prefix) else { return false }
+        let mebibytes = argument.dropFirst(prefix.count)
+        return (3...6).contains(mebibytes.count) && mebibytes.allSatisfy { $0.isASCII && $0.isNumber }
     }
 
     private static func daemonEnvironment() -> [String: String] {

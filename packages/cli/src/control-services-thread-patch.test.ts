@@ -36,7 +36,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
       undefined as never,
       undefined as never,
       undefined as never,
-      async () => [],
+      () => [],
     );
     await services.updateThread("th-1", {
       title: "t",
@@ -89,7 +89,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
       undefined as never,
       undefined as never,
       undefined as never,
-      async () => [],
+      () => [],
     );
     // Elevation: a concrete sticky scope must reach the store, else the schema
     // field is silently voided at HTTP 200 (the QA-037 partial-write class).
@@ -129,7 +129,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
       undefined as never,
       undefined as never,
       undefined as never,
-      async () => [],
+      () => [],
     );
     await expect(
       services.updateThread("th-1", {
@@ -180,7 +180,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
       undefined as never,
       undefined as never,
       undefined as never,
-      async () => [],
+      () => [],
     );
     await services.updateThread("th-1", { title: "Renamed" });
     expect(updated).toBe(true);
@@ -213,7 +213,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
       undefined as never,
       undefined as never,
       undefined as never,
-      async () => [],
+      () => [],
     );
 
     await services.purgeThread("th-1");
