@@ -2589,6 +2589,104 @@ describe("DaemonControlApiServer", () => {
     );
   });
 
+  it("threads: a lost enqueue answer stays retryable, and retry finds the accepted job instead of a duplicate", async () => {
+    const repo = reapMk(join(tmpdir(), "claudexor-thread-lost-ack-"));
+    const now = new Date().toISOString();
+    const threadObj: Record<string, unknown> = {
+      schema_version: 2,
+      id: "th-l",
+      created_at: now,
+      updated_at: now,
+      repo: { root: repo, base_ref: "HEAD" },
+      title: "lost answer thread",
+      mode: "agent",
+      workspace: { mode: "in_place", worktree_path: null, base_sha: null },
+      auth_preference: "auto",
+      primary_harness: null,
+      routingGoal: "auto",
+      run_ids: [],
+      head_run_id: null,
+      state: "active",
+    };
+    const turns: Record<string, unknown>[] = [];
+    const jobs: DaemonRunRecord[] = [];
+    const enqueued: unknown[] = [];
+    // The daemon accepted and journaled the job; only its answer was lost on
+    // the socket (the client's typed retryable 503 transport failure).
+    const lostAnswer: DaemonFacadeClient = {
+      async enqueue(params: unknown) {
+        enqueued.push(params);
+        jobs.push({ id: `job-l${enqueued.length}`, state: "queued", params, createdAt: now });
+        throw Object.assign(new Error("daemon RPC unavailable (claudexor.enqueue)"), {
+          code: "daemon_unavailable",
+          status: 503,
+          retryable: true,
+        });
+      },
+      async status(id: string) {
+        const rec = jobs.find((job) => job.id === id);
+        if (!rec) throw new Error(`missing job ${id}`);
+        return rec;
+      },
+      async list() {
+        return [...jobs];
+      },
+      async cancel() {
+        return { ok: true };
+      },
+    };
+    const services: DaemonControlApiOptions["services"] = {
+      threadDetail: async () => ({ thread: threadObj, sessions: [], turns }),
+      createThreadTurn: async (id, prompt, opts) => {
+        const turn = {
+          id: "tn-lost",
+          thread_id: id,
+          run_id: null,
+          parent_run_id: opts.parentRunId ?? null,
+          plan_run_id: opts.planRunId ?? null,
+          kind: "initial",
+          prompt,
+          created_at: now,
+        };
+        turns.push(turn);
+        return turn;
+      },
+      setTurnEnqueueError: (turnId, problem) => {
+        const turn = turns.find((t) => t["id"] === turnId);
+        if (turn && !turn["run_id"]) turn["enqueue_error"] = { ...problem, failed_at: now };
+      },
+    };
+    await withDaemonServer(
+      lostAnswer,
+      async (base) => {
+        const res = await apiFetch(`${base}/threads/th-l/turns`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}` },
+          body: JSON.stringify({ prompt: "do work" }),
+        });
+        expect(res.status).toBe(503);
+        const body = (await res.json()) as { code?: string; retryable?: boolean };
+        expect(body.code).toBe("daemon_unavailable");
+        expect(body.retryable).toBe(true);
+        expect((turns[0]?.["enqueue_error"] as { retryable?: boolean }).retryable).toBe(true);
+        // Retry reads the journal by turn: the accepted job is still queued, so it
+        // answers the truth instead of enqueueing the same message twice.
+        const retry = await apiFetch(`${base}/threads/th-l/turns/tn-lost/retry`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(retry.status).toBe(409);
+        const retryBody = (await retry.json()) as { message?: string; error?: string };
+        expect(String(retryBody.message ?? retryBody.error)).toMatch(
+          /already has an active job \(queued\)/,
+        );
+        expect(enqueued).toHaveLength(1);
+      },
+      undefined,
+      services,
+    );
+  });
+
   it("threads: a turn whose job goes TERMINAL before a run binds is a 500 pre-start failure, never an accepted queued turn", async () => {
     const repo = reapMk(join(tmpdir(), "claudexor-thread-terminal-"));
     const now = new Date().toISOString();
