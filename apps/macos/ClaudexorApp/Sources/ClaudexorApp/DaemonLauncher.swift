@@ -90,8 +90,11 @@ enum DaemonLauncher {
     }
 
     /// Spawn the resolved daemon (detached so it outlives the app). Returns false if the
-    /// bundled assets aren't present (dev) or the spawn failed. Node is always app-bundled;
-    /// only the daemon-script path is resolved through the installed runtime.
+    /// bundled assets aren't present (dev). Node is always app-bundled; only the
+    /// daemon-script path is resolved through the installed runtime. The engine's probe
+    /// names the heap ceiling first and runs off the caller's thread (outage recovery
+    /// calls this on the main actor), so the spawn follows a moment later and a failed
+    /// spawn surfaces through the callers' existing handshake polls.
     @discardableResult
     static func startIfNeeded(scriptURL: URL? = nil) -> Bool {
         guard let node = bundledNode, let daemon = scriptURL ?? resolvedDaemon() else { return false }
@@ -100,19 +103,18 @@ enum DaemonLauncher {
             return false
         }
         let environment = daemonEnvironment()
-        let probe = AppRuntimeDaemonControl.runNodeJSON([daemon.path, "--probe"], node: node, timeout: 20)
-        let process = Process()
-        process.executableURL = node
-        process.arguments = heapNodeArguments(probe: probe, environment: environment) + [daemon.path]
-        process.environment = environment
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            return true
-        } catch {
-            return false
+        DispatchQueue.global(qos: .userInitiated).async {
+            let probe = AppRuntimeDaemonControl.runNodeJSON(
+                [daemon.path, "--probe"], node: node, timeout: 20)
+            let process = Process()
+            process.executableURL = node
+            process.arguments = heapNodeArguments(probe: probe, environment: environment) + [daemon.path]
+            process.environment = environment
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
         }
+        return true
     }
 
     /// The engine names its own V8 heap ceiling in its side-effect-free probe
