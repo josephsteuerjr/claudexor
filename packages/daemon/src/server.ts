@@ -26,7 +26,8 @@ import {
   findAcceptedCommand,
   publicAcceptedCommand,
 } from "./command-rpc.js";
-import { prunableCommandIds, selectProductCommands } from "./command-retention.js";
+import { prunableCommandIds } from "./command-retention.js";
+import { publicCommandList } from "./command-list-projection.js";
 import { clearStaleUnixSocketPath, listenOnDaemonEndpoint } from "./daemon-listen.js";
 import {
   admitDelegatedRequest,
@@ -349,7 +350,7 @@ export class DaemonServer {
         return publicAcceptedCommand(this.opts.commands, params);
       }
       case "claudexor.list":
-        return selectProductCommands(this.allRecords(), params?.query).map(publicJobRecord);
+        return publicCommandList(this.allRecords(), params?.query);
       case "claudexor.cancel": {
         return this.cancelJob(String(params?.id), normalizeCancelReasonCode(params?.reason_code));
       }

@@ -2404,20 +2404,21 @@ Request validation remains a typed 400; transport does not retry automatically.
   retention-owned `tombstone.yaml` transition (all other artifacts are frozen once
   the run is terminal). The bare parameterless call stays valid — it now yields the
   newest 200 with a cursor to page the rest.
-- An ADDRESSED read never pays for unrelated runs. The daemon's retained-command
-  list RPC takes an optional query that names exactly one subject — `id` (the job
-  id or the bound run id) XOR `delegatedFromRunId` (that parent's bounded direct
-  Delegate children) — and `selectProductCommands` applies it BEFORE
-  `publicJobRecord`, whose recursive redaction is what makes a whole-list answer
-  expensive. `GET /v2/runs/:id` uses both: the record lookup addresses the run,
-  and parent detail addresses that parent's children. A query naming neither
-  subject is the unchanged whole-list answer; one naming both is a typed refusal,
-  not a silent full scan. The honest contract is a reference/metadata scan over
-  the retained records plus a sort over the matching children only — not constant
-  time and not constant memory, and separate from journal cold-replay memory. The
-  transitive cancellation cascade is deliberately UNCAPPED and keeps reading the
-  whole list. Callers re-apply their own exact match and bounded child rule on the
-  result, because an engine older than the query ignores it and answers in full.
+- Retained-command RPC reads require one strict addressed selector: a job/run
+  `id`, a set of `ids`, `turnId`, `threadId` (optionally active only), `threadIds`,
+  active commands, direct Delegate children, transitive Delegate descendants,
+  a predecessor's forward continuation chain, or a keyset page. Empty, omitted,
+  mixed and unknown selectors are typed 400 refusals. Selection precedes public
+  projection inside the daemon. Single-id and latest-turn reads retain full
+  params for detail and Exact Retry; collections carry only the typed summary
+  whitelist and the existing redacted 240-character prompt preview, with no raw
+  prompt, instructions, arbitrary params or full results. A page crosses RPC
+  with at most `limit+1` records; HTTP keeps its existing summary and cursor
+  contract. Reference/metadata scans remain O(N), separate from journal replay
+  memory. The transitive cancellation cascade stays uncapped; traversal runs
+  inside the daemon before serialization. Continuation preflight reads only the
+  predecessor and forward chain, while the authoritative synchronous enqueue
+  check still uses all records immediately before durable acceptance.
 - `claudexor settings show|set` is a thin client of `GET|POST /v2/settings`.
   Validation, persistence, cache invalidation, and the returned effective
   `ControlSettingsSnapshot` come from the daemon; the CLI has no second config
