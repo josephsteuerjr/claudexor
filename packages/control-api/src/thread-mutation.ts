@@ -1,4 +1,4 @@
-import type { DaemonRunRecord } from "./daemon-server.js";
+import type { DaemonFacadeClient, DaemonRunRecord } from "./daemon-server.js";
 
 type ThreadRunRecord = Pick<DaemonRunRecord, "state" | "params">;
 
@@ -83,14 +83,14 @@ export function chainThreadMutation<T>(
 /** Existing apply/decision mutations require an idle thread but create no turn. */
 export function chainIdleRunMutation<T>(
   chains: Map<string, Promise<void>>,
-  daemon: { list(): Promise<DaemonRunRecord[]> },
+  daemon: Pick<DaemonFacadeClient, "list">,
   record: DaemonRunRecord,
   work: () => Promise<T>,
 ): Promise<T> {
   const threadId = threadIdOfRun(record);
   if (!threadId) return work();
   return chainThreadMutation(chains, threadId, async () => {
-    await assertThreadIdle(record, () => daemon.list());
+    await assertThreadIdle(record, () => daemon.list({ threadId, activeOnly: true }));
     return work();
   });
 }

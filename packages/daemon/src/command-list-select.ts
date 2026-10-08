@@ -77,6 +77,25 @@ function delegatedDescendants(records: readonly JobRecord[], from: string): JobR
   return out;
 }
 
+/** Turn cards also disclose direct Delegate children, whose commands need not
+ * carry their parent's threadId. Select those references without widening the
+ * read to unrelated history. Active-only fences need only the thread members. */
+function threadRecords(
+  records: readonly JobRecord[],
+  ids: ReadonlySet<string>,
+  activeOnly = false,
+): JobRecord[] {
+  const members = records.filter(
+    (r) =>
+      ids.has(String(param(r, "threadId"))) &&
+      (!activeOnly || r.state === "queued" || r.state === "running"),
+  );
+  if (activeOnly) return members;
+  const memberSet = new Set(members);
+  const parents = new Set(members.map((r) => r.runId ?? r.id));
+  return records.filter((r) => memberSet.has(r) || parents.has(delegatedParentOf(r.params) ?? ""));
+}
+
 /** Select BEFORE redaction/copy/serialization. O(N) shallow reference scans
  * are intentional; no unrelated prompt or result body is visited. */
 export function selectCommandRecords(
@@ -107,12 +126,12 @@ export function selectCommandRecords(
     return selectRunListPage(records, { ...query.page, limit: query.page.limit + 1 }).page;
   if ("threadIds" in query) {
     const ids = new Set<string>(query.threadIds);
-    return records.filter((r) => ids.has(String(param(r, "threadId"))));
+    return threadRecords(records, ids);
   }
   const active = query.activeOnly
     ? records.filter((r) => r.state === "queued" || r.state === "running")
     : records;
   return "threadId" in query
-    ? active.filter((r) => param(r, "threadId") === query.threadId)
+    ? threadRecords(records, new Set([query.threadId]), query.activeOnly)
     : [...active];
 }

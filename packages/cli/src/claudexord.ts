@@ -2,6 +2,7 @@
 import { join } from "node:path";
 import {
   DaemonClient,
+  commandActivityRecords,
   commandProjection,
   commandScopeRoots,
   interactionProjection,
@@ -279,8 +280,7 @@ export async function main(): Promise<void> {
       },
       log: (message) => logLine(logPath(), message),
     });
-    // The daemon owns its services whether or not the HTTP surface is up —
-    // the startup retention pass below consumes them directly.
+    // Services and retention read all partition activity directly, without self-RPC.
     const services = controlServices(
       interactions,
       liveInputs,
@@ -291,7 +291,7 @@ export async function main(): Promise<void> {
       authReadiness,
       resources,
       () => quotaStoreSlot.current(),
-      () => selfClient.list(),
+      async () => commandActivityRecords(threads.all().flatMap((store) => store.records())),
       startupConcurrencyCaps,
     );
     const runRetention = services.runRetention;

@@ -9295,8 +9295,8 @@ describe("DaemonControlApiServer", () => {
     let newerTurnRunning = false;
     const wrapped: DaemonFacadeClient = {
       ...daemon,
-      async list() {
-        const records = await daemon.list();
+      async list(query) {
+        const records = await daemon.list(query);
         return newerTurnRunning
           ? [
               ...records,

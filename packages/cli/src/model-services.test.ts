@@ -606,7 +606,7 @@ describe("production model service composition", () => {
     expect(done.state).toBe("succeeded");
     expect(done.dispatch.route?.credentialProfileId).toBe("b");
     expect(f.agentRunner).not.toHaveBeenCalled();
-    expect(await f.client.list()).toEqual([]);
+    expect(await f.client.list({ page: { limit: 200, state: null, cursor: null } })).toEqual([]);
     expect(f.invoke).toHaveBeenCalledTimes(1);
     const read = await f.services.routes.readModelResult(done.id);
     expect(JSON.parse(read.bytes.toString()).message.content).toBe("own model reply");

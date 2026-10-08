@@ -2,6 +2,7 @@ import type { CancelReasonCode, CommandListQuery } from "@claudexor/schema";
 import { delegatedParentOf } from "@claudexor/schema";
 
 export interface DaemonRunRecord {
+  promptPreview?: string;
   id: string;
   state: string;
   runId?: string;
@@ -39,9 +40,8 @@ export interface DaemonFacadeClient {
     },
   ): Promise<DaemonRunRecord | null>;
   status(id: string): Promise<DaemonRunRecord>;
-  /** Addressed read (`{id}` XOR `{delegatedFromRunId}`) so the daemon selects
-   * before it projects; omitted, it returns the whole retained product list. */
-  list(query?: CommandListQuery): Promise<DaemonRunRecord[]>;
+  /** Required addressed selection before projection. */
+  list(query: CommandListQuery): Promise<DaemonRunRecord[]>;
   cancel(id: string, reasonCode?: CancelReasonCode): Promise<unknown>;
   fenceDelegationParent?(runId: string): Promise<unknown>;
 }

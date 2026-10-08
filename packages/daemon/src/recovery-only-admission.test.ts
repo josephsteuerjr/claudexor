@@ -77,7 +77,9 @@ describe("DaemonServer recovery-only admission (issue #165 D5)", () => {
         status: 503,
         retryable: true,
       });
-      await expect(client.list()).rejects.toMatchObject({ code: "daemon_recovery_only" });
+      await expect(
+        client.list({ page: { limit: 200, state: null, cursor: null } }),
+      ).rejects.toMatchObject({ code: "daemon_recovery_only" });
       expect(projectionTouchesWhileClosed).toBe(0);
 
       mode = "normal";

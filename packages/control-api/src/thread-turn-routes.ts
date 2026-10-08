@@ -507,7 +507,7 @@ export function handleThreadTurnRetry(
           { status: 409 },
         );
       }
-      const jobs = (await ctx.daemon.list())
+      const jobs = (await ctx.daemon.list({ turnId }))
         .filter((record) => {
           const params = record.params as { turnId?: unknown } | null | undefined;
           return Boolean(params && typeof params === "object" && params.turnId === turnId);

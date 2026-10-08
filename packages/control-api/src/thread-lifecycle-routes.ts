@@ -1,3 +1,5 @@
+import { readCommandIds } from "./command-reads.js";
+import type { CommandListQuery } from "@claudexor/schema";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   ControlThread,
@@ -18,7 +20,7 @@ import {
 export interface ThreadLifecycleRouteCtx {
   turnCtx: ThreadTurnRouteCtx;
   services: DaemonControlApiOptions["services"];
-  listRuns(): Promise<DaemonRunRecord[]>;
+  listRuns(query: CommandListQuery): Promise<DaemonRunRecord[]>;
   readBody(req: IncomingMessage): Promise<unknown>;
   json(res: ServerResponse, status: number, body: unknown): void;
   requestError(res: ServerResponse, error: unknown): void;
@@ -55,7 +57,9 @@ async function lifecycle(
   }
   await chainThreadMutation(ctx.turnCtx.threadTurnChains, threadId, async () => {
     try {
-      const active = requiresIdle ? findActiveThreadRun(await ctx.listRuns(), threadId) : undefined;
+      const active = requiresIdle
+        ? findActiveThreadRun(await ctx.listRuns({ threadId, activeOnly: true }), threadId)
+        : undefined;
       if (active) {
         throw Object.assign(
           new Error(
@@ -139,8 +143,8 @@ export async function handleThreadLifecycleRoutes(
         run_ids?: string[];
         workspace?: { delivered_through_run_id?: string | null };
       };
-      const records = await ctx.listRuns();
-      const active = findActiveMutatingThreadRun(records, threadId);
+      const activeRecords = await ctx.listRuns({ activeOnly: true });
+      const active = findActiveMutatingThreadRun(activeRecords, threadId);
       if (active) {
         throw Object.assign(
           new Error(`thread ${threadId} has an active mutating turn (${active.state})`),
@@ -159,6 +163,10 @@ export async function handleThreadLifecycleRoutes(
           },
         );
       }
+      const records = await readCommandIds(
+        { list: ctx.listRuns },
+        runIds.slice(deliveredIndex + 1),
+      );
       const byRun = new Map(records.map((record) => [record.runId ?? record.id, record]));
       const gates: NonNullable<Parameters<typeof verifyAndDeliver>[3]> = [];
       for (const runId of runIds.slice(deliveredIndex + 1)) {

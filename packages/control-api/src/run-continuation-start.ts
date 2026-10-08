@@ -62,7 +62,8 @@ export async function assertContinuationAdmissible(
   daemon: Pick<DaemonFacadeClient, "list">,
   request: unknown,
 ): Promise<void> {
-  if (continuedRunOf(request) === null) return;
-  const refusal = continuationRefusal(request, await daemon.list());
+  const from = continuedRunOf(request);
+  if (from === null) return;
+  const refusal = continuationRefusal(request, await daemon.list({ continuationChainOf: from }));
   if (refusal) throw continuationRefusalError(refusal);
 }

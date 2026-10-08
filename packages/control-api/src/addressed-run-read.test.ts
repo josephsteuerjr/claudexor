@@ -67,11 +67,11 @@ function facade(
     async list(query) {
       options.onList?.(query);
       if (!options.honorQuery) return records;
-      if (query?.id !== undefined) {
+      if (query && "id" in query) {
         const hit = records.find((record) => record.id === query.id || record.runId === query.id);
         return hit ? [hit] : [];
       }
-      if (query?.delegatedFromRunId !== undefined) {
+      if (query && "delegatedFromRunId" in query) {
         return records.filter(
           (record) =>
             (record.params as { delegatedFromRunId?: string })?.delegatedFromRunId ===
@@ -135,10 +135,10 @@ describe("addressed run detail", () => {
       ...facade([parent, child, ...noise], { honorQuery: true }),
       async list(query) {
         queries.push(query);
-        if (query?.id === undefined && query?.delegatedFromRunId === undefined) {
+        if (!query || (!("id" in query) && !("delegatedFromRunId" in query))) {
           throw new Error("unqualified daemon list on an addressed route");
         }
-        if (query.id !== undefined) {
+        if ("id" in query) {
           const hit = [parent, child, ...noise].find(
             (record) => record.id === query.id || record.runId === query.id,
           );

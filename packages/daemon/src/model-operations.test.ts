@@ -853,7 +853,7 @@ describe("model operations over the existing daemon command substrate", () => {
     const first = await f.operations.create(f.upload(), "first");
     const secondRef = f.upload(request("second"));
     const second = await f.operations.create(secondRef, "second");
-    expect(await f.client.list()).toEqual([]);
+    expect(await f.client.list({ page: { limit: 200, state: null, cursor: null } })).toEqual([]);
     expect(f.operations.inspect(first.id).state).toBe("running");
     expect(f.operations.inspect(second.id).state).toBe("queued");
     const cancelled = await f.operations.cancel(second.id, "user_cancelled");

@@ -57,7 +57,7 @@ async function withApi(
       enqueue,
       status: async () => record,
       cancel: async () => {},
-      list: async (query) => (query?.delegatedFromRunId ? [] : [record]),
+      list: async (query) => (query && "delegatedFromRunId" in query ? [] : [record]),
     },
   });
   const address = await server.start();

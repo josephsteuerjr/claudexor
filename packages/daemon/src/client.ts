@@ -137,13 +137,11 @@ export class DaemonClient {
       idempotencyRequest: options.idempotencyRequest,
     });
   }
-  /** Addressed read: `query` names one run id or one Delegate parent so the
-   * daemon selects before it projects. Omit it for the whole retained product
-   * list. An engine older than the query ignores it and answers with the full
-   * list, so a caller must still apply its own selection to the result. */
-  list(query?: CommandListQuery) {
+  /** Required addressed read; collection answers contain summary facts only. */
+  list(query: CommandListQuery) {
     return this.call<
       {
+        promptPreview?: string;
         id: string;
         state: string;
         params?: unknown;
@@ -160,7 +158,7 @@ export class DaemonClient {
         startedAt?: string;
         finishedAt?: string;
       }[]
-    >("claudexor.list", query ? { query } : undefined);
+    >("claudexor.list", { query });
   }
   cancel(id: string, reasonCode?: CancelReasonCode) {
     return this.call("claudexor.cancel", reasonCode ? { id, reason_code: reasonCode } : { id });

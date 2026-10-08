@@ -149,7 +149,7 @@ export async function resolveThreadRecoveryTurn(
     assertExistingTurnIsRunless(turn, existing.id);
     assertLatestThreadTurn(detail.turns, existing.id);
   }
-  await assertThreadIdle(source, () => daemon.list());
+  await assertThreadIdle(source, () => daemon.list({ threadId, activeOnly: true }));
   if (existing) return existing;
   return (await services.createThreadTurn(threadId, prompt, { ...options, idempotency })) as {
     id: string;
