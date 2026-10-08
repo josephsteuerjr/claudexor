@@ -2036,6 +2036,13 @@ percent-encoding in the path with a typed `400 malformed_request_path` (never a
 validator dump, and validates the per-run SSE cursor as a nonnegative integer
 `seq` before opening the stream.
 
+The authenticated read-only `GET /v2/daemon/status` exposes daemon health and
+current memory facts (heap used/limit, RSS, external bytes, effective heap args),
+plus the first normal-admission snapshot. It is also available in recovery-only
+mode, where admission memory is null until normal admission has opened. Sampling
+does not force GC or traverse retained commands; job counts use store sizes.
+The protocol handshake remains unchanged. No memory thresholds affect admission.
+
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
 - `GET /healthz`
 - `GET /v2/account-pools`
@@ -2045,6 +2052,7 @@ validator dump, and validates the per-run SSE cursor as a nonnegative integer
 - `POST /v2/credential-profiles`
 - `DELETE /v2/credential-profiles/:harness/:profileId`
 - `PATCH /v2/credential-profiles/:harness/:profileId`
+- `GET /v2/daemon/status`
 - `GET /v2/filesystem/directories`
 - `GET /v2/global/events`
 - `POST /v2/handshake`

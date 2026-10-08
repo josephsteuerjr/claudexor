@@ -282,7 +282,9 @@ export class DaemonServer {
         this.startedAt,
         this.queue.length,
         this.active,
-        servingMode === "normal" ? this.allRecords().length : 0,
+        servingMode === "normal"
+          ? commandStores(this.opts.commands).reduce((n, s) => n + s.count, 0)
+          : 0,
         this.stopping,
         servingMode,
         this.maxConcurrent,

@@ -90,6 +90,7 @@ import { writeBinaryResponse } from "./binary-response.js";
 export { inlineContentDisposition } from "./binary-response.js";
 import { handleRecoveryRoute } from "./recovery-routes.js";
 import { handleJournalEventRoute } from "./journal-event-routes.js";
+import { handleDaemonStatusRoute } from "./daemon-status-routes.js";
 import { handleMaintenanceRoute, type MaintenanceRouteServices } from "./maintenance-routes.js";
 import { handleResourceRoute, type ResourceRouteServices } from "./resource-routes.js";
 import { handleModelRoute, type ModelRouteServices } from "./model-routes.js";
@@ -737,6 +738,7 @@ export class DaemonControlApiServer {
     }
     const path = protocol.path;
     const dataRoutes = {
+      daemon: this.opts.daemon,
       services: this.opts.services,
       readBody: (request: IncomingMessage) => this.readBody(request),
       json: (response: ServerResponse, status: number, body: unknown) =>
@@ -744,7 +746,12 @@ export class DaemonControlApiServer {
       requestError: (response: ServerResponse, error: unknown, fallback?: 400 | 500) =>
         this.requestError(response, error, fallback),
     };
-    for (const route of [handleResourceRoute, handleModelRoute, handleMaintenanceRoute]) {
+    for (const route of [
+      handleResourceRoute,
+      handleModelRoute,
+      handleMaintenanceRoute,
+      handleDaemonStatusRoute,
+    ]) {
       if (await route(dataRoutes, method, path, req, res)) return;
     }
     if (

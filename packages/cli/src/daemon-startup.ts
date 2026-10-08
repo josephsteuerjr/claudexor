@@ -19,6 +19,7 @@ import {
   type ProjectPartitionsPreparation,
   type RootAuthorityGrant,
   processMemoryFields,
+  recordAdmissionMemory,
 } from "@claudexor/daemon";
 import { JournalRecoveryRequiredError } from "@claudexor/journal";
 import { CONTROL_PROTOCOL_MAJOR } from "@claudexor/schema";
@@ -214,6 +215,7 @@ export async function completeStartupAdmission(input: {
     throw error;
   }
   input.admission.openNormal();
+  recordAdmissionMemory();
   input.log(`startup admission: normal product admission open (${processMemoryFields()})`);
   return "normal";
 }

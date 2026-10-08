@@ -1,0 +1,150 @@
+{
+  "$ref": "#/definitions/ControlDaemonStatus",
+  "definitions": {
+    "ControlDaemonStatus": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "uptime_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "queue": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "active": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "jobs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stopping": {
+          "type": "boolean"
+        },
+        "servingMode": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "recovery_only"
+          ]
+        },
+        "capacity": {
+          "type": "object",
+          "properties": {
+            "maxConcurrent": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
+              "exclusiveMinimum": 0
+            },
+            "maxParallelCandidates": {
+              "$ref": "#/definitions/ControlDaemonStatus/properties/capacity/properties/maxConcurrent"
+            },
+            "maxDeepScanWidth": {
+              "$ref": "#/definitions/ControlDaemonStatus/properties/capacity/properties/maxConcurrent"
+            },
+            "maxCouncilMembers": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 9007199254740991,
+              "exclusiveMinimum": 0
+            }
+          },
+          "required": [
+            "maxConcurrent"
+          ],
+          "additionalProperties": false
+        },
+        "memory": {
+          "type": "object",
+          "properties": {
+            "heapUsedBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "heapLimitBytes": {
+              "$ref": "#/definitions/ControlDaemonStatus/properties/memory/properties/heapUsedBytes"
+            },
+            "rssBytes": {
+              "$ref": "#/definitions/ControlDaemonStatus/properties/memory/properties/heapUsedBytes"
+            },
+            "externalBytes": {
+              "$ref": "#/definitions/ControlDaemonStatus/properties/memory/properties/heapUsedBytes"
+            },
+            "nodeHeapArgs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "atAdmission": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "heapUsedBytes": {
+                      "$ref": "#/definitions/ControlDaemonStatus/properties/memory/properties/heapUsedBytes"
+                    },
+                    "rssBytes": {
+                      "$ref": "#/definitions/ControlDaemonStatus/properties/memory/properties/heapUsedBytes"
+                    },
+                    "at": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "ISO-8601 timestamp string."
+                    }
+                  },
+                  "required": [
+                    "heapUsedBytes",
+                    "rssBytes",
+                    "at"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sampledAt": {
+              "$ref": "#/definitions/ControlDaemonStatus/properties/memory/properties/atAdmission/anyOf/0/properties/at"
+            }
+          },
+          "required": [
+            "heapUsedBytes",
+            "heapLimitBytes",
+            "rssBytes",
+            "externalBytes",
+            "nodeHeapArgs",
+            "atAdmission",
+            "sampledAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "ok",
+        "uptime_ms",
+        "queue",
+        "running",
+        "active",
+        "jobs",
+        "stopping",
+        "servingMode",
+        "capacity",
+        "memory"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

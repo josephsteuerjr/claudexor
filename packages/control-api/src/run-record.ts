@@ -21,6 +21,7 @@ export interface DaemonRunRecord {
 }
 
 export interface DaemonFacadeClient {
+  health?(): Promise<unknown>;
   enqueue(
     params: unknown,
     options?: {

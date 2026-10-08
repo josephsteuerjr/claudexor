@@ -83,3 +83,4 @@ export * from "./continuation-admission.js";
 
 export * from "./run-list-page.js";
 export * from "./command-summary.js";
+export * from "./daemon-status.js";

@@ -33,3 +33,4 @@ export * from "./pre-progress-refusal-ledger.js";
 export * from "./project-partitions.js";
 export * from "./model-operations.js";
 export * from "./command-activity.js";
+export * from "./memory-facts.js";

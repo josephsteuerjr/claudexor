@@ -108,7 +108,11 @@ export async function resolveControlProtocol(input: {
   // Issue #165 D5: while the daemon serves recovery only, the journal
   // recovery surface stays reachable and every other product route gets one
   // typed retryable refusal instead of touching unactivated projections.
-  if (servingMode === "recovery_only" && !path.startsWith("/recovery/")) {
+  if (
+    servingMode === "recovery_only" &&
+    !path.startsWith("/recovery/") &&
+    !(input.method === "GET" && path === "/daemon/status")
+  ) {
     return {
       kind: "response",
       status: 503,
