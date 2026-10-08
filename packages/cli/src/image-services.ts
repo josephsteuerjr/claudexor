@@ -5,6 +5,8 @@ import {
   type CredentialUnusableLedger,
   type DaemonClient,
   type ImageOperationDependencies,
+  type JobRecord,
+  type RunnerFn,
 } from "@claudexor/daemon";
 import { invokeCodexImage, createCodexAdapter } from "@claudexor/harness-codex";
 import {
@@ -15,6 +17,8 @@ import {
 import {
   GlobalConfig,
   ImageCallResult,
+  isImageOperation,
+  isModelOperation,
   type CredentialProfile,
   type ImageCallRequest,
 } from "@claudexor/schema";
@@ -22,6 +26,7 @@ import { noProjectRepoRoot } from "@claudexor/util";
 import { accountsMigrationGate } from "./accounts-unified-migration.js";
 import { credentialUnusableLedger } from "./run-orchestrator.js";
 import type { RetentionRunner } from "./retention-service.js";
+import type { createModelServices } from "./model-services.js";
 
 interface Dependencies extends Pick<ImageOperationDependencies, "commands" | "resources" | "warn"> {
   client: Pick<DaemonClient, "enqueue" | "cancel">;
@@ -148,6 +153,35 @@ export function createImageServices(deps: Dependencies) {
       },
     close: () => {
       operations.close();
+    },
+  };
+}
+
+/** One daemon composition seam keeps Agent/model/image commands on one queue,
+ * one terminal callback, and the same control and retention owners. */
+export function bindImageServices(
+  models: ReturnType<typeof createModelServices>,
+  images: ReturnType<typeof createImageServices>,
+  agentRunner: RunnerFn,
+) {
+  return {
+    onCommandTerminal(record: JobRecord) {
+      models.operations.onCommandTerminal(record);
+      images.operations.onCommandTerminal(record);
+    },
+    runner: ((params, ctx) =>
+      isModelOperation(params)
+        ? models.operations.execute(params, ctx)
+        : isImageOperation(params)
+          ? images.operations.execute(params, ctx)
+          : agentRunner(params, ctx)) satisfies RunnerFn,
+    close() {
+      models.close();
+      images.close();
+    },
+    bindRoutes(services: { runRetention: RetentionRunner }) {
+      services.runRetention = images.withRetention(models.withRetention(services.runRetention));
+      Object.assign(services, models.routes, images.routes);
     },
   };
 }

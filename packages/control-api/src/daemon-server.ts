@@ -242,8 +242,7 @@ export interface DaemonControlApiOptions {
   servingMode?: () => ControlServingMode;
   bus?: { subscribe(listener: (event: { run_id: string }) => void): () => void };
   services?: DeliveryCommandServices &
-    Partial<ModelRouteServices> &
-    Partial<ImageRouteServices> &
+    Partial<ModelRouteServices & ImageRouteServices> &
     Partial<ResourceRouteServices> &
     Partial<MaintenanceRouteServices> &
     Partial<ProjectRouteServices> & {
@@ -670,9 +669,7 @@ export class DaemonControlApiServer {
     );
   }
 
-  private readBody(req: IncomingMessage, maxBytes?: number): Promise<unknown> {
-    return readControlRequestBody(req, maxBytes);
-  }
+  private readBody = readControlRequestBody;
 
   private onRequest(req: IncomingMessage, res: ServerResponse): void {
     const tracked: Promise<void> = this.handle(req, res)
