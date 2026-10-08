@@ -685,7 +685,9 @@ async function allDaemonJobs() {
   const jobs = [];
   let cursor = null;
   for (;;) {
-    const page = await runtimeState.daemonClient.list({ page: { limit: 1000, cursor } });
+    const page = await runtimeState.daemonClient.list({
+      page: { limit: 1000, state: null, cursor },
+    });
     jobs.push(...page.slice(0, 1000));
     if (page.length <= 1000) return jobs;
     const last = page[999];
