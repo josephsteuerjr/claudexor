@@ -2,8 +2,12 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
-import { validatePublishedProvenance } from "../../../scripts/publish-npm-release.mjs";
+import { describe, expect, it, vi } from "vitest";
+import {
+  moveNextChannel,
+  npmFailureText,
+  validatePublishedProvenance,
+} from "../../../scripts/publish-npm-release.mjs";
 
 const publisher = resolve(import.meta.dirname, "../../../scripts/publish-npm-release.mjs");
 
@@ -250,5 +254,82 @@ describe("npm release provenance", () => {
       replaceStatement(input, next);
       expect(validatePublishedProvenance(input).ok).toBe(false);
     });
+  });
+});
+
+describe("npm release publishing", () => {
+  it("needs no stored npm token: a run without NODE_AUTH_TOKEN reaches the release checks", () => {
+    const runnerTemp = mkdtempSync(join(tmpdir(), "claudexor-npm-oidc-"));
+    try {
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        RUNNER_TEMP: runnerTemp,
+        GITHUB_SHA: candidateSha,
+        GITHUB_REPOSITORY: repository,
+        GITHUB_REF: "refs/heads/main",
+        PATH: "",
+      };
+      delete env.NODE_AUTH_TOKEN;
+      const result = spawnSync(process.execPath, [publisher, "--provenance"], {
+        encoding: "utf8",
+        env,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).not.toContain("NODE_AUTH_TOKEN");
+      expect(result.stderr).toContain("GITHUB_REF must be the exact release tag");
+    } finally {
+      rmSync(runnerTemp, { recursive: true, force: true });
+    }
+  });
+
+  it("reports npm's error lines instead of the debug-log pointer", () => {
+    const stderr = [
+      "npm notice Publishing to https://registry.npmjs.org/ with tag latest",
+      "npm error code E401",
+      "npm error 401 Unauthorized - PUT https://registry.npmjs.org/@claudexor%2fcore",
+      "npm error A complete log of this run can be found in: /tmp/_logs/debug-0.log",
+    ].join("\n");
+    expect(npmFailureText(stderr)).toBe(
+      "npm error code E401\nnpm error 401 Unauthorized - PUT https://registry.npmjs.org/@claudexor%2fcore",
+    );
+    expect(npmFailureText("not an npm failure\nits last line")).toBe("its last line");
+    expect(npmFailureText("")).toBe("unknown error");
+  });
+
+  it("moves next when the registry allows it and never stops the release when it refuses", () => {
+    const packed = [
+      { pkg: { name: "@claudexor/core", version } },
+      { pkg: { name: "claudexor", version } },
+    ];
+    const calls: string[][] = [];
+    const refuseCore = (command: string, args: string[]) => {
+      calls.push([command, ...args]);
+      return args[2] === `@claudexor/core@${version}`
+        ? {
+            status: 1,
+            stderr: "npm error code E401\nnpm error A complete log of this run can be found in: x",
+          }
+        : { status: 0, stderr: "" };
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(moveNextChannel(packed, refuseCore)).toEqual([
+        `@claudexor/core@${version}: npm error code E401`,
+      ]);
+      expect(calls).toEqual([
+        ["npm", "dist-tag", "add", `@claudexor/core@${version}`, "next"],
+        ["npm", "dist-tag", "add", `claudexor@${version}`, "next"],
+      ]);
+      expect(log).toHaveBeenCalledWith(`npm next channel now resolves to claudexor@${version}`);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      warn.mockClear();
+      expect(moveNextChannel(packed, () => ({ status: 0, stderr: "" }))).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
   });
 });

@@ -26,7 +26,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 
 async function main() {
   if (!process.argv.includes("--provenance")) fail("--provenance is mandatory");
-  if (!process.env.NODE_AUTH_TOKEN) fail("NODE_AUTH_TOKEN is required");
+  // npm publishes through trusted publishing (GitHub OIDC); no stored token is read.
   const candidateSha = process.env.GITHUB_SHA ?? "";
   const repository = process.env.GITHUB_REPOSITORY ?? "";
   const ref = process.env.GITHUB_REF ?? "";
@@ -112,23 +112,36 @@ async function main() {
 
 /**
  * `latest` moves by itself — `npm publish` with no `--tag` moves it, and the
- * provenance check above REQUIRES it to have moved. `next` does not, and until
- * 3.3.7 nothing in this repository had ever moved it: it was set out of band and
- * then stranded, so `claudexor@next` still resolved to 3.3.7-rc.0 while stable
- * releases came and went. The downstream Ouroboros CI gate installs
- * `claudexor@next`, so leaving the tag behind ships every fix to a consumer that
- * never resolves it.
- *
- * Runs LAST, after every package is published, provenance-verified and
+ * provenance check above REQUIRES it to have moved. `next` does not, so it is
+ * moved here, after every package is published, provenance-verified and
  * signature-audited, so a half-finished release never advertises itself on the
- * channel. `npm dist-tag add` is idempotent, which keeps the retry path (an
- * already-published version is skipped above) landing here just the same.
+ * channel; `npm dist-tag add` is idempotent, so a retry lands here the same way.
+ *
+ * The move is attempted, never required. Trusted publishing authorizes `npm
+ * publish`, but `npm dist-tag` uses GitHub OIDC only from npm 12.2 and only for
+ * trusted-publisher configurations with the opt-in dist-tag permission. When the
+ * registry refuses, `next` stays behind with a warning instead of stopping the
+ * release before its GitHub Release, which carries the runtime archive that
+ * Ouroboros pins (it no longer installs `claudexor@next`).
  */
-function moveNextChannel(packed) {
+export function moveNextChannel(packed, spawn = spawnSync) {
+  const behind = [];
   for (const { pkg } of packed) {
-    run("npm", ["dist-tag", "add", `${pkg.name}@${pkg.version}`, "next"], root);
-    console.log(`npm next channel now resolves to ${pkg.name}@${pkg.version}`);
+    const spec = `${pkg.name}@${pkg.version}`;
+    const result = spawn("npm", ["dist-tag", "add", spec, "next"], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (result.status === 0) console.log(`npm next channel now resolves to ${spec}`);
+    else behind.push(`${spec}: ${npmFailureText(result.stderr)}`);
   }
+  if (behind.length > 0) {
+    console.warn(
+      `::warning::npm next channel was not moved for ${behind.length} package(s); latest is published.\n${behind.join("\n")}`,
+    );
+  }
+  return behind;
 }
 
 /** Install the complete exact tarball set and prove the public daemon wrapper
@@ -227,7 +240,7 @@ function view(spec) {
   const result = spawnSync("npm", ["view", spec, "--json"], { cwd: root, encoding: "utf8" });
   if (result.status === 0) return JSON.parse(result.stdout);
   if (/E404|is not in this registry/i.test(result.stderr)) return null;
-  fail(`npm view failed for ${spec}: ${lastLine(result.stderr)}`);
+  fail(`npm view failed for ${spec}: ${npmFailureText(result.stderr)}`);
 }
 
 async function verifyPublished(metadata, expected, spec, { allowSameSourceRebuild = false } = {}) {
@@ -381,17 +394,20 @@ function run(command, args, cwd, env = process.env) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  if (result.status !== 0) fail(`${command} ${args[0]} failed: ${lastLine(result.stderr)}`);
+  if (result.status !== 0) fail(`${command} ${args[0]} failed: ${npmFailureText(result.stderr)}`);
   if (result.stdout.trim()) console.log(`${command}: ${basename(result.stdout.trim())}`);
 }
 
-function lastLine(value) {
-  return (
-    String(value ?? "")
-      .trim()
-      .split("\n")
-      .at(-1) ?? "unknown error"
+/** npm ends a failed command with a pointer to its debug log, which vanishes with
+ * a hosted runner; the cause is in the `npm error` lines above that pointer. */
+export function npmFailureText(value) {
+  const lines = String(value ?? "")
+    .trim()
+    .split("\n");
+  const errors = lines.filter(
+    (line) => /^npm (error|ERR!)/.test(line) && !/A complete log of this run/.test(line),
   );
+  return (errors.length > 0 ? errors.join("\n") : lines.at(-1)) || "unknown error";
 }
 
 function fail(message) {
