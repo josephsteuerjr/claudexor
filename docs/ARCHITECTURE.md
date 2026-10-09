@@ -655,14 +655,18 @@ A word no verified catalog model lists is placed by the shared preference order
 exactly as on session routes, and the receipt says so.
 Both public catalog views project the internal order out, preserving their object
 shapes. Native session Ultra remains unchanged and is implemented by the CLI.
+For an explicit unlisted raw model, ordinary effort is submitted unchanged with
+adapter-sourced exact-submission evidence and unconfirmed capability; no sibling
+ladder is borrowed. Raw Ultra without a known generation ladder is an unsupported
+option, since a raw call cannot perform the native agent's automatic delegation.
 
 Managed catalogs also carry optional `reasoningEffortsVerified` on `ModelCatalogEntry`:
 true records a fully parsed vendor array (including known empty), while false or
 historical absence prevents an incomplete catalog from claiming known absence or
 authorizing a substitution. Native Codex likewise retains explicit empty arrays
 separately from missing metadata on a listed model. The unnegotiated model-catalog
-HTTP view omits this new field; the account view retains it. An unlisted advisory model
-still follows its existing sibling-ladder fallback.
+HTTP view omits this new field; the account view retains it. Session adapters keep
+their existing unlisted-model effort resolution; raw calls use the rule above.
 
 Manifest `auth_modes` and `capability_profile.auth.preferred_source` describe
 possible source availability only. They are not readiness. UI, routing, and
@@ -1852,9 +1856,13 @@ borrowing a subscription catalog. A failed supported live inventory remains
 unverifiable; it never falls back to a convenient manifest to admit a model.
 Where the harness declared absences advisory, an unverifiable answer — and a
 manifest miss — instead sends the explicit model to the vendor unchanged
-(above). The authenticated
-account catalog read below is a different source and stays strict: a model it
-does not carry is a typed `model_unavailable` refusal.
+(above). Authenticated raw sources separately declare `inventoryAbsence` on `ModelAdapter`:
+omitted means authoritative, while Codex declares advisory. A successfully read
+catalog that lacks an explicit model therefore permits the exact Codex request;
+failed catalog acquisition remains a typed failure. Auth and model-scoped quota
+still participate in account selection. An authoritative miss retains its own
+cause; a pool containing model/general unavailability never inherits a quota-only
+reset promise from other accounts.
 
 Claude's producer is the prompt-free `initialize` handshake of the installed
 `claude` binary (`harness-claude/src/model-probe.ts`): one stdin frame, the
@@ -1895,15 +1903,18 @@ review loop, model fallback or internal compaction is created for this capabilit
 
 The Codex transport lives in `harness-codex`. It uses a selected managed ChatGPT
 profile, the official CLI for an expired-token refresh, and the raw account's
-model catalog. The backend filters that catalog by the client version the
-caller declares (a model is listed only for clients at or above its own
-minimum), so the transport declares ITS OWN verified level,
+model catalog. Server discovery varies with the client version the caller
+declares; a missing row does not prove a minimum-version or entitlement refusal.
+The transport declares ITS OWN verified level,
 `CODEX_HTTP_CLIENT_VERSION` (`http-client-version.ts`), raised to the installed
 Codex CLI's version when that is newer and never below the constant — not the
 managed-installer pin, which is a different fact (a release that only moves
 the installer must never decide which models an account can see). The account
-view carries the declared `clientVersion` and its source per catalog (the
-legacy query keeps its shape), every membership refusal names it, and the constant moves together with a recorded catalog
+view carries the declared `clientVersion` and its source per catalog. Selected-account
+discovery can negotiate `includeAdmission=true` with `requestedModel` to obtain
+those version facts and `admission: {requestedModel, inventoryAbsence}`. This permits
+an attempt, without adding a synthetic model row or claiming successful generation.
+Without the opt-in the legacy query keeps its exact shape. The constant moves together with a recorded catalog
 fixture pair (`fixtures/models-http-*.json`) whose shared rows must stay
 identical. In-process refresh work is serialized by canonical managed home;
 cancelled callers cannot release another caller past a still-live refresh. Each
@@ -2148,6 +2159,10 @@ The protocol handshake remains unchanged. No memory thresholds affect admission.
 - `POST /v2/harnesses/:id/auth-readiness`
 - `GET /v2/harnesses/:id/models`
 - `POST /v2/maintenance/gc`
+- `GET /v2/maintenance/harnesses`
+- `POST /v2/maintenance/operations`
+- `GET /v2/maintenance/operations/:id`
+- `POST /v2/maintenance/operations/:id/cancel`
 - `POST /v2/model-operations`
 - `GET /v2/model-operations/:id`
 - `POST /v2/model-operations/:id/ack`
@@ -4685,15 +4700,16 @@ back through the settled lease.
 
 Vendor harness CLIs land on a host only through the disclosed installer
 (`claudexor harness install`, reachable from Settings → Harnesses for a
-connected host). The npm-distributed harnesses (claude, codex, opencode)
-install one EXACT pinned version — each pin aliases that harness package's
+connected host). The npm-distributed harnesses (claude, codex, copilot, opencode)
+ensure the release pin while preserving an already runnable newer managed copy;
+explicit maintenance installs the selected exact version. Each pin aliases that harness package's
 vendor-version constant, and npm checks the registry integrity checksum for
 that exact version; `@latest` is never used. For codex that constant is the
 same value the model-hints and effort freshness gates read; for claude it is
 the effort-snapshot stamp, while the Claude known-model hint list keeps the
 literal version it was last actually re-verified against (a pin bump never
-restamps unrechecked ids). So the installed CLI is the version this release's
-effort ladders were verified against (a recording that needs a paid live run
+restamps unrechecked ids). The pin records this release's verified baseline,
+not a verification claim about a newer selected CLI (a recording that needs a paid live run
 keeps the version it was captured from, as its fixture manifest states); the
 opencode pin is a deterministic install target, not a verification claim —
 no recorded fixture covers it yet, as its `vendor-cli-version.ts` discloses.
@@ -4762,6 +4778,30 @@ contract are unchanged. After any successful local install, the embedding host
 must request the existing fresh doctor/status projection before retrying login;
 it must not trust a pre-install readiness cache, and this needs no new setup-job
 or daemon API.
+
+Local CLI maintenance uses `harness inspect` and `harness update --vendor-version`
+(`cli/src/harness-maintenance.ts`), the same recipe/proof/lease as Ensure. Codex,
+Claude, Copilot and OpenCode support exact npm targets; latest is resolved once
+before installation. Cursor and Antigravity on supported POSIX installations run
+their native foreground updater at the selected canonical launcher under the
+installation HOME. They expose latest only: the vendor resolves the target, and
+unchanged version evidence never means "updated" or proves newest. External
+overrides are identified, not silently replaced by a managed copy. Existing
+Windows recipe limits remain.
+
+`harness-maintenance-service.ts` exposes `/v2/maintenance/harnesses` and the
+maintenance operation routes through existing CommandStore admission, queue,
+idempotency, cancellation and retention. Blocking work runs in a custodied CLI
+child. Before-version and target evidence precede mutation; failures, interruption
+and unconfirmed termination retain their real effects without automatic replay or
+rollback. Previous-version return uses retained proved before-evidence and
+reinstalls it, so it depends on package availability. Inspection separates selected
+version, managed copy, release baseline, available observation and supported
+targets; `canCheckLatest` prevents a native update-only recipe advertising an
+unimplemented check. Effects invalidate affected observations for on-demand reads.
+Active maintenance is visible in readiness; it neither restarts the daemon nor
+starts account probes, login or model generation. Operations use ordinary queue
+slots and may wait behind active work.
 
 `claudexor remote bootstrap --json` starts or discovers the remote daemon and
 returns its loopback endpoint. The daemon remains bound to `127.0.0.1`; the app

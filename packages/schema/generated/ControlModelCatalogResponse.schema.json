@@ -41,7 +41,7 @@
               "type": "null"
             }
           ],
-          "description": "Client version the transport declared when it read this catalog; the backend lists only models whose minimum client version is at or below it. Null for catalogs from an older engine.",
+          "description": "Client version the transport declared when it read this catalog; server discovery may vary with it. Null for catalogs from an older engine.",
           "default": null
         },
         "clientVersionSource": {
@@ -59,6 +59,27 @@
           ],
           "default": null,
           "description": "Where the declared client version came from: verified_transport (the version this Claudexor release verified its HTTP transport against) or installed_cli (a newer installed Codex CLI raised it). Null for catalogs from an older engine."
+        },
+        "admission": {
+          "type": "object",
+          "properties": {
+            "requestedModel": {
+              "$ref": "#/definitions/ControlModelCatalogResponse/properties/clientVersion/anyOf/0"
+            },
+            "inventoryAbsence": {
+              "type": "string",
+              "enum": [
+                "authoritative",
+                "advisory"
+              ]
+            }
+          },
+          "required": [
+            "requestedModel",
+            "inventoryAbsence"
+          ],
+          "additionalProperties": false,
+          "description": "Negotiated selected-account admission for this exact model, after auth and model-scoped quota checks. A valid catalog miss may be advisory; no generation or entitlement is proved."
         },
         "models": {
           "type": "array",

@@ -1,5 +1,21 @@
 # @claudexor/control-api
 
+## 3.24.0
+
+### Minor Changes
+
+- Add shared vendor CLI inspection and maintenance with durable update, cancellation and previous-version evidence. Preserve newer managed installations and support native Cursor and Antigravity updates. Permit explicit Codex models absent from a successful catalog without misreporting account availability as exhausted quota.
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@3.24.0
+  - @claudexor/delivery@3.24.0
+  - @claudexor/workspace@3.24.0
+  - @claudexor/event-log@3.24.0
+  - @claudexor/secrets@3.24.0
+  - @claudexor/util@3.24.0
+
 ## 3.23.2
 
 ### Patch Changes

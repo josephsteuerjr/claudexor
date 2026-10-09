@@ -3,10 +3,10 @@ import { harnessBinaryIdentityOnPath } from "@claudexor/core";
  * The client version Claudexor's OWN Codex HTTP transport declares when it reads
  * an account's model catalog (`GET /backend-api/codex/models?client_version=…`).
  *
- * The Codex backend filters that catalog by the declared client version: a
- * model is listed only for clients at or above its `minimal_client_version`
- * (live-verified 2026-09-23: `gpt-6-sol`/`gpt-6-luna` appear from 0.155.0 on,
- * while `/responses` served them regardless). Until 3.13.0 the URL carried the
+ * The Codex backend varies that catalog by the declared client version;
+ * `minimal_client_version` alone does not explain which rows it returns.
+ * Discovery and generation are distinct: a valid catalog miss is advisory,
+ * while acquisition failures retain their own typed outcome. The URL once carried the
  * managed-installer pin (`CODEX_VENDOR_CLI_VERSION`), so a release that only
  * moved the installer decided which models an account could see through this
  * transport (issue #339). The two meanings are separate now:

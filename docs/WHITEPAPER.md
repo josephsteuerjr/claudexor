@@ -47,6 +47,14 @@ turn. Claudexor binds this state to the actual account and model, preserves it
 through body failures, and leaves turn lifetime with the caller. It does not
 create a second conversation store or retry an uncertain generation.
 
+Discovery and admission are separate facts. A vendor catalog can lag a model
+that an explicit request already names; the source declares whether that absence
+is authoritative or advisory. Permitting the attempt never invents capabilities
+or successful execution, and authentication, quota and failed discovery retain
+their actual causes. Vendor program maintenance likewise belongs to the engine:
+surfaces share the selected installation's update capability and observed result,
+while the caller decides when to update and whether to continue its work.
+
 Model content and authorization are distinct responsibilities. The caller's model
 payload keeps its supplied content, including examples that resemble credentials;
 the adapter's own authorization never enters that payload. Temporary exchange

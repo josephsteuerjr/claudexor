@@ -11,6 +11,7 @@ import { CLAUDE_VENDOR_CLI_VERSION } from "@claudexor/harness-claude";
 import { CODEX_VENDOR_CLI_VERSION } from "@claudexor/harness-codex";
 import { OPENCODE_VENDOR_CLI_VERSION } from "@claudexor/harness-opencode";
 import { copilot } from "@claudexor/harness-acp";
+import { resolveCursorBin } from "@claudexor/harness-cursor";
 import { managedNodeRoot } from "@claudexor/core";
 import type { PinnedVendorCliVersion } from "@claudexor/util";
 import { INSTALLABLE_HARNESSES } from "./harness-command-specs.js";
@@ -158,6 +159,85 @@ export function scriptInstaller(harness: InstallableHarness): ScriptInstaller | 
     : null;
 }
 
+/** The explicit binary override each adapter honours verbatim. A set override
+ * means the harness runs THAT program, so maintaining the managed copy would
+ * change nothing the harness executes. */
+export const HARNESS_BINARY_OVERRIDE_ENV: Record<InstallableHarness, string> = {
+  agy: "CLAUDEXOR_AGY_BIN",
+  claude: "CLAUDEXOR_CLAUDE_BIN",
+  codex: "CLAUDEXOR_CODEX_BIN",
+  copilot: copilot.binaryEnv,
+  cursor: "CLAUDEXOR_CURSOR_BIN",
+  opencode: "CLAUDEXOR_OPENCODE_BIN",
+};
+
+/** The command name (or override) the harness adapter itself spawns: Cursor
+ * owns its alias choice (`cursor-agent`, else an `agent` inside a Cursor
+ * install), every other harness its recipe launcher, an override verbatim. */
+const ADAPTER_COMMAND: Partial<
+  Record<
+    InstallableHarness,
+    (env: NodeJS.ProcessEnv, resolve: (bin: string) => string | null) => string
+  >
+> = { cursor: resolveCursorBin };
+
+export function selectedHarnessCommand(
+  harness: InstallableHarness,
+  env: NodeJS.ProcessEnv,
+  resolve: (bin: string) => string | null,
+): string {
+  const override = env[HARNESS_BINARY_OVERRIDE_ENV[harness]]?.trim();
+  if (override) return override;
+  const adapterOwned = ADAPTER_COMMAND[harness];
+  if (adapterOwned) return adapterOwned(env, resolve);
+  return NPM_PINS[harness]?.binaryNames[0] ?? scriptInstaller(harness)?.binaryName ?? harness;
+}
+
+/** How an installed vendor CLI can be maintained. `managed_npm` installs one
+ * exact registry version in place; `vendor_updater` runs the vendor's own
+ * `update` on the launcher that updater rewrites (it resolves latest itself,
+ * so no exact/previous/baseline target exists); `vendor_script` has none. */
+export type HarnessMaintenanceMechanism = "managed_npm" | "vendor_updater" | "vendor_script";
+export type HarnessMaintenanceTargetKind = "latest" | "version" | "previous" | "baseline";
+
+export interface HarnessMaintenanceRecipe {
+  mechanism: HarnessMaintenanceMechanism;
+  /** Targets the mechanism can install. Empty = inspection only. */
+  targets: readonly HarnessMaintenanceTargetKind[];
+  /** vendor_updater: the launchers the vendor's updater rewrites under the
+   * installation HOME. A copied or version-pinned launcher is NOT among them. */
+  launchers: (home: string) => string[];
+}
+
+/** Verified 2026-10-09 (vendor help/source): `agy update` and Cursor's
+ * `update` rewrite these POSIX launchers; Windows is not a verified route. */
+const VENDOR_UPDATER_LAUNCHERS: Partial<Record<InstallableHarness, readonly string[]>> = {
+  agy: ["agy"],
+  cursor: ["cursor-agent", "agent"],
+};
+
+export function harnessMaintenanceRecipe(
+  harness: InstallableHarness,
+  platform: NodeJS.Platform = process.platform,
+): HarnessMaintenanceRecipe {
+  if (NPM_PINS[harness]) {
+    return {
+      mechanism: "managed_npm",
+      targets: ["latest", "version", "previous", "baseline"],
+      launchers: () => [],
+    };
+  }
+  const names = VENDOR_UPDATER_LAUNCHERS[harness];
+  if (!names || platform === "win32") {
+    return { mechanism: "vendor_script", targets: [], launchers: () => [] };
+  }
+  return {
+    mechanism: "vendor_updater",
+    targets: ["latest"],
+    launchers: (home) => names.map((name) => join(home, ".local", "bin", name)),
+  };
+}
+
 export interface HarnessInstallerDisclosure {
   harness: InstallableHarness;
   /** Which prefix this disclosure describes; echoed into every receipt. */
@@ -179,6 +259,9 @@ export function harnessInstallerDisclosure(
   target: HarnessInstallTarget = "remote",
   platform: NodeJS.Platform = process.platform,
   _arch: string = process.arch,
+  /** Explicit exact maintenance target; omitted installs the release pin. The
+   * pin stays reported as `pinnedVersion` either way. */
+  version?: string,
 ): HarnessInstallerDisclosure {
   const layout = TARGET_LAYOUTS[target];
   const pin = NPM_PINS[harness];
@@ -191,7 +274,7 @@ export function harnessInstallerDisclosure(
     return {
       harness,
       target,
-      command: `npm install --global --prefix ${layout.displayRoot} ${pin.npmPackage}@${pin.version}`,
+      command: `npm install --global --prefix ${layout.displayRoot} ${pin.npmPackage}@${version ?? pin.version}`,
       installLocation,
       pinnedVersion: pin.version,
       verification: pin.verification,

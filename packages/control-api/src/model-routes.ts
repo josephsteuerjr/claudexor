@@ -28,6 +28,7 @@ export interface ModelRouteServices {
     source: string,
     credentialProfileId?: string,
     requestedModel?: string,
+    includeAdmission?: boolean,
   ): Promise<unknown>;
   modelAccountCatalog(source: string, credentialProfileId?: string): Promise<unknown>;
   createModelOperation(
@@ -79,10 +80,18 @@ export async function handleModelRoute(
   if (method === "GET" && catalogMatch) {
     const input = await routeValue(ctx, res, 400, () => {
       const query = new URL(req.url ?? "/", "http://localhost");
-      assertOnlyQueryParams(query, ["credentialProfileId", "requestedModel", "view"]);
+      assertOnlyQueryParams(query, [
+        "credentialProfileId",
+        "requestedModel",
+        "view",
+        "includeAdmission",
+      ]);
       const profile = singleQuery(query, "credentialProfileId");
       const model = singleQuery(query, "requestedModel");
       const view = catalogView(query);
+      const admission = optionalBooleanQuery(query, "includeAdmission") === true;
+      if (admission && (model === undefined || view === "accounts"))
+        throw new Error("includeAdmission requires requestedModel and selected-account discovery");
       if (view === "accounts" && model !== undefined)
         throw new Error("requestedModel is only valid for selected-account discovery");
       return {
@@ -90,6 +99,7 @@ export async function handleModelRoute(
         profile: profile === undefined ? undefined : Id.parse(profile),
         model: model === undefined ? undefined : ModelCallRequest.shape.model.parse(model),
         view,
+        admission,
       };
     });
     if (!input.ok) return true;
@@ -98,7 +108,14 @@ export async function handleModelRoute(
     const value = await routeValue(ctx, res, 500, () =>
       input.value.view === "accounts"
         ? services!.modelAccountCatalog!(input.value.source, input.value.profile)
-        : services!.modelCatalog!(input.value.source, input.value.profile, input.value.model),
+        : input.value.admission
+          ? services!.modelCatalog!(
+              input.value.source,
+              input.value.profile,
+              input.value.model,
+              true,
+            )
+          : services!.modelCatalog!(input.value.source, input.value.profile, input.value.model),
     );
     if (!value.ok) return true;
     return serviceResponse(ctx, res, "modelCatalog", () =>
@@ -107,7 +124,7 @@ export async function handleModelRoute(
         200,
         input.value.view === "accounts"
           ? publicModelAccountCatalog(value.value)
-          : legacyModelCatalog(value.value),
+          : legacyModelCatalog(value.value, input.value.admission ? input.value.model : undefined),
       ),
     );
   }
@@ -216,14 +233,14 @@ function catalogView(query: URL): "accounts" | undefined {
  * keeps its strict schema, so everything the account view carries beyond it —
  * `processing` and effort verification per row, declared client version per catalog — are stripped
  * here and only here. */
-function legacyModelCatalog(value: unknown) {
-  const {
-    clientVersion: _clientVersion,
-    clientVersionSource: _clientVersionSource,
-    ...catalog
-  } = ControlModelCatalogResponse.parse(value);
+function legacyModelCatalog(value: unknown, requestedModel?: string) {
+  const { clientVersion, clientVersionSource, admission, ...catalog } =
+    ControlModelCatalogResponse.parse(value);
+  if (requestedModel !== undefined && admission?.requestedModel !== requestedModel)
+    throw new Error("Model admission does not identify the requested model");
   return {
     ...catalog,
+    ...(requestedModel === undefined ? {} : { admission, clientVersion, clientVersionSource }),
     models: catalog.models.map(
       ({
         processing: _processing,
@@ -292,10 +309,16 @@ export const MODEL_OPERATION_DRAFTS: OperationDraft[] = [
         description: "Pin a managed profile; omitted selects the engine's Auto account.",
       }),
       queryParam({
+        name: "includeAdmission",
+        enum: ["true", "false"],
+        description:
+          "With requestedModel, include exact-model account admission and the source inventory-absence policy, plus declared client version. Omitted or false preserves the legacy shape; cannot combine with account view. Admission is not generation proof.",
+      }),
+      queryParam({
         name: "requestedModel",
         schemaRef: "ModelCallRequest#/properties/model",
         description:
-          "Select one account able to serve this model using the inference pool criteria; omitted discovers one account without a model constraint.",
+          "Select one account through this model's authentication, quota and source inventory policy; omitted discovers without a model constraint.",
       }),
     ],
   },

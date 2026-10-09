@@ -25,7 +25,8 @@ interface Entry {
  * Refresh discard it. Run admission does not read this display cache. */
 class AccountObservations {
   private entries = new Map<string, Entry>();
-  generation = 0;
+  private generation = 0;
+  private harnessGenerations = new Map<string, number>();
 
   constructor() {
     registerStatusProjection(this);
@@ -34,6 +35,18 @@ class AccountObservations {
   invalidate(): void {
     this.entries.clear();
     this.generation += 1;
+    this.harnessGenerations.clear();
+  }
+
+  generationFor(harnessId: string): string {
+    return `${this.generation}:${this.harnessGenerations.get(harnessId) ?? 0}`;
+  }
+
+  /** One harness's observations only (e.g. after its CLI was replaced). */
+  invalidateHarness(harnessId: string): void {
+    this.harnessGenerations.set(harnessId, (this.harnessGenerations.get(harnessId) ?? 0) + 1);
+    for (const key of this.entries.keys())
+      if (key.split("\0")[2] === harnessId) this.entries.delete(key);
   }
 
   invalidateCatalogs(): void {
@@ -44,9 +57,9 @@ class AccountObservations {
   observeProfile(
     profile: CredentialProfile,
     receipt: CredentialAccountProbeReceipt,
-    generation: number,
+    generation: string,
   ): void {
-    if (generation !== this.generation) return;
+    if (generation !== this.generationFor(profile.harness_id)) return;
     const key = [globalConfigPath(), "profile", profile.harness_id, profile.profile_id].join("\0");
     // The display acquisition already receives this same adapter response.
     if (this.entries.get(key)?.pending) return;
@@ -148,7 +161,7 @@ export async function displayAccountObservation(
 }
 
 /** Existing necessary probes feed the same display owner; observing a run
- * never starts an extra probe. A credential mutation rejects late receipts. */
+ * never starts an extra probe. Credential or harness changes reject late receipts. */
 export function retainAccountProbeObservations(adapter: HarnessAdapter): HarnessAdapter {
   const profileProbe = adapter.probeCredentialProfile?.bind(adapter);
   const accountProbe = adapter.probeCredentialAccount?.bind(adapter);
@@ -159,7 +172,7 @@ export function retainAccountProbeObservations(adapter: HarnessAdapter): Harness
           probeCredentialProfile: async (
             ...args: Parameters<NonNullable<HarnessAdapter["probeCredentialProfile"]>>
           ) => {
-            const generation = accountObservations.generation;
+            const generation = accountObservations.generationFor(args[0].harness_id);
             const status = await profileProbe(...args);
             accountObservations.observeProfile(
               args[0],
@@ -175,7 +188,7 @@ export function retainAccountProbeObservations(adapter: HarnessAdapter): Harness
           probeCredentialAccount: async (
             ...args: Parameters<NonNullable<HarnessAdapter["probeCredentialAccount"]>>
           ) => {
-            const generation = accountObservations.generation;
+            const generation = accountObservations.generationFor(args[0].harness_id);
             const receipt = await accountProbe(...args);
             accountObservations.observeProfile(args[0], receipt, generation);
             return receipt;
