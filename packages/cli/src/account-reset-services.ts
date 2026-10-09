@@ -66,9 +66,12 @@ async function nativeIdentity(target: AccountTarget) {
   return { locator, fingerprint: sha256(JSON.stringify([account, principal])), organization: null };
 }
 
-export function accountResetServices(commands: () => CommandStore, quota: () => QuotaRegistry) {
+export function accountResetServices(
+  commands: { current(): CommandStore },
+  quota: { current(): QuotaRegistry },
+) {
   const operations = new AccountResets({
-    commands,
+    commands: () => commands.current(),
     resolve: async (request) => {
       const identity = await nativeIdentity(request.target);
       const programs: Record<string, { harness: string; program: string }> = {
@@ -82,7 +85,8 @@ export function accountResetServices(commands: () => CommandStore, quota: () => 
           status: 400,
           code: "account_reset_offer_invalid",
         });
-      const offer = quota()
+      const offer = quota
+        .current()
         .readResources()
         .find(
           (row) =>
@@ -120,11 +124,11 @@ export function accountResetServices(commands: () => CommandStore, quota: () => 
         });
     },
     consume: consumeNativeReset,
-    read: () => accountResourcesResponse(quota()),
-    invalidate: (target) => quota().invalidateAccountResources(target),
+    read: () => accountResourcesResponse(quota.current()),
+    invalidate: (target) => quota.current().invalidateAccountResources(target),
     refresh: async (target, mayHaveChanged) => {
-      const result = await quota().refreshResources(target, true, mayHaveChanged);
-      return accountResourcesResponse(quota(), result, result.resources);
+      const result = await quota.current().refreshResources(target, true, mayHaveChanged);
+      return accountResourcesResponse(quota.current(), result, result.resources);
     },
   });
   return {

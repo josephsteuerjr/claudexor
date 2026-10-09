@@ -287,12 +287,8 @@ export async function main(): Promise<void> {
       () => commandActivityRecords(threads.all().flatMap((store) => store.records())),
       startupConcurrencyCaps,
     );
-    const runRetention = services.runRetention;
-    services.runRetention = models.withRetention(runRetention);
-    const accountControls = accountResetServices(
-      () => commandStoreSlot.current(),
-      () => quotaStoreSlot.current(),
-    );
+    services.runRetention = models.withRetention(services.runRetention);
+    const accountControls = accountResetServices(commandStoreSlot, quotaStoreSlot);
     Object.assign(services, models.routes, accountControls);
     maintenance.bind(services);
     control = !controlApiEnabledForStartup({
