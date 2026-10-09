@@ -103,7 +103,7 @@ struct AccountResourceTests {
         defer { ResourceKitProtocol.handler = nil }
         let recorder = ResourceKitRecorder()
         ResourceKitProtocol.handler = { request in
-            await recorder.record(request)
+            recorder.record(request)
             let path = request.url!.path
             if path == "/v2/operations" { return (200, Data(Self.catalog.utf8)) }
             if path == "/v2/credential-profiles" {
@@ -121,7 +121,7 @@ struct AccountResourceTests {
         _ = try await client.resetAccount(Self.request, idempotencyKey: "original-key")
         _ = try await client.resetAccount(Self.request, idempotencyKey: "original-key")
         _ = try await client.accountReset(id: "id/with?delimiters")
-        let requests = await recorder.requests
+        let requests = recorder.requests
         #expect(requests.filter { $0.url?.path == "/v2/operations" }.count == 1)
         let refresh = try #require(requests.first { $0.url?.path == "/v2/quota" })
         #expect(refresh.httpMethod == "POST")
@@ -155,24 +155,27 @@ struct AccountResourceTests {
     }
 }
 
-private actor ResourceKitRecorder {
-    var requests: [URLRequest] = []
-    func record(_ request: URLRequest) { requests.append(request) }
+private final class ResourceKitRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [URLRequest] = []
+
+    func record(_ request: URLRequest) { lock.withLock { recorded.append(request) } }
+    var requests: [URLRequest] { lock.withLock { recorded } }
 }
 
-private final class ResourceKitProtocol: URLProtocol, @unchecked Sendable {
-    nonisolated(unsafe) static var handler: (@Sendable (URLRequest) async throws -> (Int, Data))?
+private final class ResourceKitProtocol: URLProtocol {
+    nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        Task {
-            do {
-                let (status, data) = try await Self.handler!(request)
-                client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-                client?.urlProtocol(self, didLoad: data)
-                client?.urlProtocolDidFinishLoading(self)
-            } catch { client?.urlProtocol(self, didFailWithError: error) }
-        }
+        // Match the other Kit URLProtocol fixtures: URLSession remains async,
+        // while its protocol instance never crosses a Swift task boundary.
+        do {
+            let (status, data) = try Self.handler!(request)
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
     override func stopLoading() {}
     static func body(_ request: URLRequest) -> Data {
