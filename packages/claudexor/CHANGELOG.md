@@ -1,5 +1,15 @@
 # claudexor
 
+## 3.23.0
+
+### Minor Changes
+
+- Add persistent delegated checking threads bound to caller-owned workspaces, durable scoped lane homes, execution-root file consumers and explicit recovery/application boundaries. Native vendor continuity, live SSH and rendered app qualification remain NOT_RUN.
+
+### Patch Changes
+
+- @claudexor/cli@3.23.0
+
 ## 3.22.1
 
 ### Patch Changes

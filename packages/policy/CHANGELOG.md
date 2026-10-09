@@ -1,5 +1,13 @@
 # @claudexor/policy
 
+## 3.23.0
+
+### Patch Changes
+
+- @claudexor/context@3.23.0
+- @claudexor/schema@3.23.0
+- @claudexor/util@3.23.0
+
 ## 3.22.1
 
 ### Patch Changes
