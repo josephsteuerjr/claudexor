@@ -2173,6 +2173,7 @@ The protocol handshake remains unchanged. No memory thresholds affect admission.
 - `GET /v2/harnesses`
 - `POST /v2/harnesses/:id/auth-readiness`
 - `GET /v2/harnesses/:id/models`
+- `POST /v2/image-operations`
 - `POST /v2/maintenance/gc`
 - `POST /v2/model-operations`
 - `GET /v2/model-operations/:id`
