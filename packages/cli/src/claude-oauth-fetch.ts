@@ -36,13 +36,15 @@ export function parseRetryAfterHeaderMs(
 export async function fetchClaudeOauthUsage(
   accessToken: string,
   status?: (code: number) => void,
+  resourceHeaders?: Record<string, string>,
 ): Promise<unknown> {
-  const res = await fetch(USAGE_URL, {
+  const res = await fetch(resourceHeaders ? `${USAGE_URL}?cedar_ember=1` : USAGE_URL, {
     method: "GET",
     headers: {
       authorization: `Bearer ${accessToken}`,
       "anthropic-beta": OAUTH_BETA_HEADER,
       accept: "application/json",
+      ...resourceHeaders,
     },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });

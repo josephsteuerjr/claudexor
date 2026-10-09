@@ -1,5 +1,13 @@
 # @claudexor/core
 
+## 3.24.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@3.24.0
+  - @claudexor/util@3.24.0
+
 ## 3.23.2
 
 ### Patch Changes

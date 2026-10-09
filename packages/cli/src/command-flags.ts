@@ -238,6 +238,11 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
     "<profile-id>",
     "Credential profile for this run (INV-135); unknown/disabled ids refuse, never default",
   ),
+  booleanFlag("resources", "Include typed account resource facts"),
+  valueFlag("offer", "id", "Reset offer id"),
+  valueFlag("grant", "id", "Native reset grant id"),
+  valueFlag("operation", "id", "Read an account reset receipt"),
+  valueFlag("idempotency-key", "key", "Stable explicit operation key; retain for recovery"),
   booleanFlag("refresh", "Refresh vendor-owned quota sources before reading"),
   booleanFlag(
     "in-place",

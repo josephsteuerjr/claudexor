@@ -1,5 +1,15 @@
 # @claudexor/schema
 
+## 3.24.0
+
+### Minor Changes
+
+- Expose typed per-account resources and explicit rate-limit resets across the control API, CLI, MCP and native Accounts UI. Preserve request identity through uncertain replies and keep reset effects separate from refreshed usage.
+
+### Patch Changes
+
+- @claudexor/util@3.24.0
+
 ## 3.23.2
 
 ### Patch Changes

@@ -1,12 +1,25 @@
+import {
+  validatedRefreshBatches,
+  refreshCoverage,
+  refreshSubjects,
+  refreshCycleCovers,
+} from "./quota-refresh-batches.js";
+import {
+  replayQuotaJournal,
+  RESOURCES_INVALIDATED,
+  REMOVED,
+  PROJECTION_UPDATED,
+  WINDOW_SUPERSEDED,
+} from "./quota-registry-replay.js";
 import type { DurableJournal } from "@claudexor/journal";
-import { hashJson, sha256 } from "@claudexor/util";
 import {
   ControlQuotaResponse,
+  AccountResourceSnapshot,
+  type AccountTarget,
+  observedResourceFacet,
   HarnessEvent,
   QUOTA_GAP_ABSENCE_REASONS,
-  QuotaAbsence as QuotaAbsenceSchema,
   QuotaSnapshot as QuotaSnapshotSchema,
-  QuotaWindowObservation,
   QuotaWindowSupersession,
   REACTIVE_COOLDOWN_SOURCE,
   quotaSourceTraits,
@@ -16,13 +29,11 @@ import {
   type QuotaSubject,
 } from "@claudexor/schema";
 import {
-  legacyV320Snapshot,
   quotaSnapshotRecords,
   reconcileQuotaSnapshot,
   reactiveCooldownSnapshot,
   sameQuotaEvidence,
   snapshotKey,
-  activeQuotaSnapshots,
 } from "./quota-registry-support.js";
 import {
   buildRefresherLanes,
@@ -43,21 +54,15 @@ import type { QuotaPacerStateStore } from "./quota-poll-pacer.js";
 import { QuotaRefreshCoordinator } from "./quota-refresh-coordinator.js";
 import { quotaSubjectIdentity } from "./quota-refresh-demand.js";
 
-const UPSERTED = "quota.snapshot.upserted";
-const WINDOW_OBSERVED = "quota.window.observed";
-const WINDOW_SUPERSEDED = "quota.window.superseded";
-const SCOPED_PREPARED = "quota.snapshot.scoped_prepared";
-const REMOVED = "quota.subject.removed";
-const PROJECTION_UPDATED = "quota.projection.updated";
-const REPLAY_TYPES = [
-  SCOPED_PREPARED,
-  UPSERTED,
-  WINDOW_OBSERVED,
-  WINDOW_SUPERSEDED,
-  REMOVED,
-  PROJECTION_UPDATED,
-];
-
+import {
+  resourceKey,
+  applyResourceObservation,
+  recordAccountResourceObservation,
+  resourceSnapshots,
+  resourceQuotaSnapshots,
+  quotaProjectionSignature,
+  retireAccountResourceEvidence,
+} from "./quota-resources.js";
 /** The registered subject UNIVERSE: every subject the daemon expects to hear
  * about, so a subject with neither snapshot nor a source claim still surfaces
  * a "no_source" absence instead of vanishing. */
@@ -65,6 +70,9 @@ export type QuotaSubjectUniverse = () => QuotaSubject[];
 
 /** Global-journal authority for vendor-owned quota snapshots. */
 export class QuotaRegistry {
+  private readonly resourceCutoffs = new Map<string, string>();
+  private readonly resources = new Map<string, AccountResourceSnapshot>();
+  private refreshSerial = 0;
   private readonly snapshots = new Map<string, QuotaSnapshot>();
   private readonly supersededWindows = new Map<string, QuotaWindowSupersession>();
   /** Ephemeral typed-absence state, recomputed each refresh/poll cycle — NOT
@@ -89,86 +97,27 @@ export class QuotaRegistry {
     private readonly subjects?: QuotaSubjectUniverse,
     pacerStore?: QuotaPacerStateStore,
   ) {
-    let rawMutationAfterMarker = false;
-    let pendingScoped: { seq: number; baseHash: string; snapshot: QuotaSnapshot } | null = null;
-    for (const record of journal.records(0, REPLAY_TYPES)) {
-      // Filtering must not make a formerly interrupted pair adjacent.
-      if (pendingScoped && record.seq !== pendingScoped.seq + 1) pendingScoped = null;
-      if (record.type === SCOPED_PREPARED) {
-        const payload =
-          typeof record.payload === "object" &&
-          record.payload !== null &&
-          !Array.isArray(record.payload)
-            ? (record.payload as {
-                version?: unknown;
-                base_hash?: unknown;
-                snapshot?: unknown;
-              })
-            : {};
-        const snapshot = QuotaSnapshotSchema.safeParse(payload.snapshot);
-        pendingScoped =
-          payload.version === 1 && typeof payload.base_hash === "string" && snapshot.success
-            ? {
-                seq: record.seq,
-                baseHash: payload.base_hash,
-                snapshot: snapshot.data,
-              }
-            : null;
-        continue;
-      }
-      if (record.type === UPSERTED) {
-        const base = QuotaSnapshotSchema.parse(record.payload);
-        const baseHash = hashJson(base);
-        const committedScoped =
-          pendingScoped !== null &&
-          pendingScoped.baseHash === baseHash &&
-          hashJson(legacyV320Snapshot(pendingScoped.snapshot)) === baseHash
-            ? pendingScoped.snapshot
-            : null;
-        this.apply(committedScoped ?? base);
-        pendingScoped = null;
-        rawMutationAfterMarker = true;
-        continue;
-      }
-      // A scoped prepare commits only through the immediately following
-      // matching legacy upsert. If the writer stopped or another record
-      // intervened, ignore the incomplete prepare on replay.
-      pendingScoped = null;
-      if (record.type === WINDOW_OBSERVED) {
-        this.apply(QuotaWindowObservation.parse(record.payload).snapshot);
-        rawMutationAfterMarker = true;
-        continue;
-      }
-      if (record.type === WINDOW_SUPERSEDED) {
-        this.applyWindowSupersession(QuotaWindowSupersession.parse(record.payload));
-        rawMutationAfterMarker = true;
-        continue;
-      }
-      if (record.type === REMOVED) {
-        const payload = record.payload as { harness?: unknown; subject_id?: unknown };
-        // subject_id is null for a harness's default/native subject, which is
-        // exactly the one a revocation retirement can name.
-        if (
-          typeof payload.harness === "string" &&
-          (typeof payload.subject_id === "string" || payload.subject_id === null)
-        ) {
-          this.remove(payload.harness, payload.subject_id);
-        }
-        rawMutationAfterMarker = true;
-      }
-      if (record.type === PROJECTION_UPDATED) {
-        const payload = record.payload as { projection_signature?: unknown };
-        this.lastPublishedProjectionSignature =
-          typeof payload.projection_signature === "string" ? payload.projection_signature : null;
-        rawMutationAfterMarker = false;
-      }
-    }
+    const replay = replayQuotaJournal(journal, {
+      apply: (snapshot) => this.apply(snapshot),
+      applyWindowSupersession: (value) => this.applyWindowSupersession(value),
+      applyResources: (observation) => applyResourceObservation(this.resources, observation),
+      invalidateResources: (target, at) =>
+        retireAccountResourceEvidence(
+          target,
+          at,
+          this.resourceCutoffs,
+          this.snapshots,
+          this.resources,
+        ),
+      remove: (harness, id, resources) => this.remove(harness, id, resources),
+    });
+    this.lastPublishedProjectionSignature = replay.projectionSignature;
     this.validateProjection();
     // A process can stop after a durable raw mutation but before its separate
     // projection marker. Replaying that state without a new marker would leave
     // already-subscribed clients permanently behind. Close the recovered
     // commit boundary synchronously before the projection becomes available.
-    this.recoveryMarkerPending = rawMutationAfterMarker;
+    this.recoveryMarkerPending = replay.rawMutationAfterMarker;
     this.refresherLanes = buildRefresherLanes(refreshers, pacerStore);
   }
 
@@ -188,20 +137,53 @@ export class QuotaRegistry {
     });
   }
 
-  private activeSnapshots(now: number): QuotaSnapshot[] {
-    return activeQuotaSnapshots([...this.snapshots.values()], now);
+  readResources(now = this.now().getTime()) {
+    return resourceSnapshots(this.resources.values(), this.resourceCutoffs, now);
   }
 
-  async refresh() {
-    return (await this.refreshCycle()).response;
+  /** A reset makes prior usage/inventory historical, not a fabricated new count. */
+  invalidateAccountResources(target: AccountTarget): void {
+    const observed_at = this.now().toISOString();
+    this.journal.append(RESOURCES_INVALIDATED, { version: 1, target, observed_at });
+    retireAccountResourceEvidence(
+      target,
+      observed_at,
+      this.resourceCutoffs,
+      this.snapshots,
+      this.resources,
+    );
+    this.appendProjectionMarker("direct_mutation", observed_at);
+  }
+
+  private activeSnapshots(now: number): QuotaSnapshot[] {
+    return resourceQuotaSnapshots(this.snapshots.values(), this.resourceCutoffs, now);
+  }
+
+  async refresh(target?: AccountTarget, afterCurrent = false) {
+    return (await this.refreshCycle(true, undefined, target, afterCurrent)).response;
   }
 
   /** Fresh quota plus the exact global-journal fence for snapshot-then-SSE.
    * The cursor is captured inside refreshCycle, synchronously with `response`,
    * so a later append can never be skipped by a client resuming from it. */
   async refreshWithCursor() {
-    const { response, quotaEventCursor } = await this.refreshCycle();
-    return { response, quotaEventCursor };
+    const { response, quotaEventCursor, resources } = await this.refreshCycle();
+    return { response, quotaEventCursor, resources };
+  }
+
+  async refreshResources(
+    target?: AccountTarget,
+    afterCurrent = false,
+    invalidateBeforeRead = false,
+  ) {
+    const cycle = await this.refreshCycle(
+      true,
+      undefined,
+      target,
+      afterCurrent,
+      invalidateBeforeRead,
+    );
+    return { ...cycle.response, resources: cycle.resources };
   }
 
   /** One coalesced atomic refresh cycle; a poll passes its lane so only that
@@ -209,23 +191,40 @@ export class QuotaRegistry {
    * joining a foreground FULL cycle keeps its (superset) result, but a FULL
    * caller that joined a lane-SCOPED poll cycle re-runs a full cycle once it
    * completes — an explicit refresh must not silently return with sibling
-   * vendors unre-fetched and undisclosed. Bounded retry; on exhaustion the
-   * last (complete-projection) result serves. */
+   * vendors unre-fetched and undisclosed. Continue until the caller joins
+   * a cycle covering its target and, after reset, its observation boundary. */
   private async refreshCycle(
     followCredentialChanges = true,
     scope?: PacingLane,
+    target?: AccountTarget,
+    afterCurrent = false,
+    invalidateBeforeRead = false,
   ): Promise<Awaited<ReturnType<QuotaRegistry["performRefreshCycle"]>>> {
-    for (let attempt = 0; ; attempt += 1) {
-      const cycle = await this.refreshCoordinator.run(
-        (credentialGeneration) => this.performRefreshCycle(credentialGeneration, scope ?? null),
-        followCredentialChanges,
-      );
-      if (scope !== undefined || !cycle.scoped || attempt > this.refresherLanes.lanes.length)
-        return cycle;
+    const afterSerial = afterCurrent ? this.refreshSerial : -1;
+    for (;;) {
+      const cycle = await this.refreshCoordinator
+        .run((credentialGeneration) => {
+          // Drain the previous cycle before moving the reset cutoff. Even an old
+          // source stamped at delivery cannot renew history after this boundary.
+          if (target && invalidateBeforeRead) this.invalidateAccountResources(target);
+          return this.performRefreshCycle(credentialGeneration, scope ?? null, target);
+        }, followCredentialChanges)
+        .catch((error) => {
+          if (afterCurrent && this.refreshSerial <= afterSerial) return null;
+          throw error;
+        });
+      if (cycle === null) continue;
+      const covered = refreshCycleCovers(cycle, target, scope);
+      if (covered && cycle.serial > afterSerial) return cycle;
     }
   }
 
-  private async performRefreshCycle(credentialGeneration: number, scope: PacingLane | null) {
+  private async performRefreshCycle(
+    credentialGeneration: number,
+    scope: PacingLane | null,
+    target?: AccountTarget,
+  ) {
+    const serial = ++this.refreshSerial;
     if (this.refresherLanes.entries.length === 0) {
       throw Object.assign(new Error("no live vendor-owned quota refresh source is available"), {
         code: "quota_refresh_unavailable",
@@ -239,44 +238,12 @@ export class QuotaRegistry {
       scope,
       this.now().getTime(),
       () => this.refreshCoordinator.isCurrent(credentialGeneration),
-      this.subjects?.(),
+      refreshSubjects(this.subjects?.(), target),
       this.activeSnapshots(this.now().getTime()),
+      target,
     );
     const settled = await Promise.allSettled(running.map(async ({ refresh }) => refresh()));
-    const batches: Array<{ snapshots: QuotaSnapshot[]; absences: QuotaAbsence[] } | null> = [];
-    const failures: string[] = [];
-    // Validate EVERY fulfilled source batch before the first durable write.
-    // Declaration order below, not completion order, remains the deterministic
-    // authority for both snapshot writes and first-claim absence precedence.
-    for (const result of settled) {
-      if (result.status === "rejected") {
-        failures.push(
-          result.reason instanceof Error ? result.reason.message : String(result.reason),
-        );
-        batches.push(null);
-        continue;
-      }
-      try {
-        batches.push({
-          snapshots: result.value.snapshots.map((snapshot) => QuotaSnapshotSchema.parse(snapshot)),
-          absences: (result.value.absences ?? []).map((absence) =>
-            QuotaAbsenceSchema.parse(absence),
-          ),
-        });
-      } catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
-        batches.push(null);
-      }
-    }
-    // An all-cooled full cycle (running empty, skips disclosed) is a served
-    // last-known response, not a failure; only attempted-and-failed sources
-    // make the cycle unavailable.
-    if (running.length > 0 && batches.every((batch) => batch === null)) {
-      throw Object.assign(new Error(`quota refresh failed: ${failures.join("; ")}`), {
-        code: "quota_refresh_unavailable",
-        status: 503,
-      });
-    }
+    const batches = validatedRefreshBatches(settled, target);
     // Everything below mutates the journal or live projection without an
     // await. Fence the whole commit boundary before its first write: a cycle
     // that captured retired credentials contributes no snapshot, absence,
@@ -291,10 +258,12 @@ export class QuotaRegistry {
       // event, but publish ONE projection-level marker after the full response
       // is assembled so clients never see a marker-per-item burst.
       for (const snapshot of batch.snapshots) this.recordUpsert(snapshot);
+      for (const observation of batch.resources)
+        recordAccountResourceObservation(this.journal, this.resources, observation);
       claims.push(...batch.absences);
     }
     const now = this.now().getTime();
-    if (running.length > 0) this.recomputeAbsences(claims, now, recomputeScopeFor(running));
+    if (running.length > 0) this.recomputeAbsences(claims, now, recomputeScopeFor(running), target);
     noteRefreshPacing(
       this.refresherLanes.lanes,
       batches.flatMap((batch) => batch?.snapshots ?? []),
@@ -312,9 +281,23 @@ export class QuotaRegistry {
     // No await may appear between response construction and this marker/cursor.
     // The marker makes absence-only and identical refreshes observable; its own
     // cursor is the exact last event represented by this response.
-    const quotaEventCursor = this.appendProjectionMarker("refresh", refreshedAt, response);
+    const resources = this.readResources(now);
+    const quotaEventCursor = this.appendProjectionMarker(
+      "refresh",
+      refreshedAt,
+      response,
+      resources,
+    );
     // scoped: an unscoped joiner re-runs a full cycle on it (join semantics).
-    return { response, quotaEventCursor, scoped: scope !== null };
+    return {
+      response,
+      quotaEventCursor,
+      resources,
+      scopeVendor: scope?.vendor ?? null,
+      target,
+      serial,
+      coveredTargets: refreshCoverage(batches, skipped),
+    };
   }
 
   /** Fold claims against (harness, subject_id): fresh snapshots silence
@@ -333,12 +316,15 @@ export class QuotaRegistry {
     claims: readonly QuotaAbsence[],
     now: number,
     scope: ReadonlySet<string> | null = null,
+    target?: AccountTarget,
   ): void {
     const laneVendors = new Set(
       this.refresherLanes.lanes.map((lane) => lane.vendor).filter((vendor) => vendor !== null),
     );
-    const rebuilt = (harness: string): boolean =>
-      scope === null || scope.has(harness) || !laneVendors.has(harness);
+    const rebuilt = (harness: string, subjectId: string | null): boolean =>
+      target
+        ? target.harness === harness && target.profile_id === subjectId
+        : scope === null || scope.has(harness) || !laneVendors.has(harness);
     // Every other reason answers "why is there no snapshot", so a snapshot
     // silences it. `auth_revoked` says the vendor rejected the credential;
     // `credential_profile_ambiguous` says current platform policy forbids
@@ -355,8 +341,8 @@ export class QuotaRegistry {
       // Durable authority BEFORE the live projection (upsert/removeSubject
       // parity): a failed append after an in-memory delete would let replay
       // resurrect the revoked window on restart (f-dace28127b7a).
-      this.journal.append(REMOVED, { harness, subject_id });
-      this.remove(harness, subject_id);
+      this.journal.append(REMOVED, { harness, subject_id, preserve_resources: true });
+      this.remove(harness, subject_id, false);
     }
     const { covered, freshCovered } = subjectCoverSets(this.activeSnapshots(now));
     this.absences = foldAbsenceClaims({
@@ -430,6 +416,22 @@ export class QuotaRegistry {
     if (!event.success) return;
     const quota = event.data.quota;
     const credentialRoute = event.data.credential_route;
+    if (
+      event.data.account_usage &&
+      event.data.credential_profile_id &&
+      credentialRoute === "vendor_native"
+    ) {
+      const diagnostics = event.data.account_usage;
+      recordAccountResourceObservation(this.journal, this.resources, {
+        target: { harness: harnessId, profile_id: event.data.credential_profile_id },
+        diagnostics: observedResourceFacet(
+          diagnostics,
+          "claude_rate_limit_event",
+          new Date(event.data.ts),
+        ),
+      });
+      this.appendProjectionMarker("direct_mutation", this.now().toISOString());
+    }
     if (quota && credentialRoute) {
       this.upsert({
         subject: {
@@ -512,8 +514,9 @@ export class QuotaRegistry {
     reason: "refresh" | "direct_mutation" | "recovery" | "clock_transition",
     observedAt: string,
     response = this.read(),
+    resources = this.readResources(),
   ): string {
-    const projectionSignature = this.projectionSignature(response);
+    const projectionSignature = quotaProjectionSignature(response, resources);
     const marker = this.journal.append(PROJECTION_UPDATED, {
       reason,
       observed_at: observedAt,
@@ -525,21 +528,14 @@ export class QuotaRegistry {
 
   private publishClockTransitionIfNeeded(): void {
     const response = this.read();
-    const signature = this.projectionSignature(response);
+    const resources = this.readResources();
+    const signature = quotaProjectionSignature(response, resources);
     if (signature === this.lastPublishedProjectionSignature) return;
-    this.appendProjectionMarker("clock_transition", this.now().toISOString(), response);
-  }
-
-  private projectionSignature(response: ReturnType<QuotaRegistry["read"]>): string {
-    // refreshed_at is request metadata, not projection identity. Snapshot
-    // freshness and absence coverage are logical facts and remain included.
-    // The marker carries the digest, never the projection: consumers only
-    // compare signatures for equality (a legacy JSON-string marker simply
-    // differs once, publishing one extra clock-transition marker).
-    return sha256(JSON.stringify({ snapshots: response.snapshots, absences: response.absences }));
+    this.appendProjectionMarker("clock_transition", this.now().toISOString(), response, resources);
   }
 
   validateProjection(): void {
+    for (const row of this.resources.values()) AccountResourceSnapshot.parse(row);
     for (const snapshot of this.snapshots.values()) QuotaSnapshotSchema.parse(snapshot);
   }
 
@@ -580,7 +576,11 @@ export class QuotaRegistry {
       this.snapshots.delete(value.snapshot_id);
   }
 
-  private remove(harness: string, subjectId: string | null): number {
+  private remove(harness: string, subjectId: string | null, removeResources = true): number {
+    if (subjectId !== null && removeResources) {
+      this.resources.delete(resourceKey({ harness, profile_id: subjectId }));
+      this.resourceCutoffs.delete(resourceKey({ harness, profile_id: subjectId }));
+    }
     for (const [key, value] of this.supersededWindows) {
       if (value.subject.harness === harness && value.subject.subject_id === subjectId)
         this.supersededWindows.delete(key);

@@ -218,9 +218,11 @@ public struct ControlQuotaResponse: Codable, Sendable, Equatable {
     /// above are last-known data, not the product of this refresh. Optional
     /// so an absent wire field round-trips absent, never as a minted [].
     public let refreshSkipped: [QuotaRefreshSkipped]?
+    /// Present only on the operation-catalog-negotiated resources projection.
+    public let resources: [AccountResourceSnapshot]?
 
     private enum CodingKeys: String, CodingKey {
-        case snapshots, absences
+        case snapshots, absences, resources
         case refreshedAt = "refreshed_at"
         case refreshSkipped = "refresh_skipped"
     }
@@ -229,12 +231,14 @@ public struct ControlQuotaResponse: Codable, Sendable, Equatable {
         snapshots: [QuotaSnapshot],
         absences: [QuotaAbsence] = [],
         refreshedAt: String?,
-        refreshSkipped: [QuotaRefreshSkipped]? = nil
+        refreshSkipped: [QuotaRefreshSkipped]? = nil,
+        resources: [AccountResourceSnapshot]? = nil
     ) {
         self.snapshots = snapshots
         self.absences = absences
         self.refreshedAt = refreshedAt
         self.refreshSkipped = refreshSkipped
+        self.resources = resources
     }
 
     public init(from decoder: Decoder) throws {
@@ -244,6 +248,7 @@ public struct ControlQuotaResponse: Codable, Sendable, Equatable {
         refreshedAt = try c.decodeIfPresent(String.self, forKey: .refreshedAt)
         refreshSkipped =
             try c.decodeIfPresent([QuotaRefreshSkipped].self, forKey: .refreshSkipped)
+        resources = try c.decodeIfPresent([AccountResourceSnapshot].self, forKey: .resources)
     }
 }
 

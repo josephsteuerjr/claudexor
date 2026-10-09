@@ -1,3 +1,4 @@
+import { ACCOUNT_RESOURCE_OPERATION_DRAFTS } from "./account-resource-routes.js";
 import {
   CONTROL_PROTOCOL_MAJOR,
   ControlOperationCatalog,
@@ -109,20 +110,11 @@ const operations: ControlOperationDescriptor[] = [
       ),
     ],
   }),
-  j("GET", "/v2/quota", "read_only", null, "ControlQuotaResponse"),
+  ...ACCOUNT_RESOURCE_OPERATION_DRAFTS.map(descriptor),
   // Unified account model (INV-135 rewrite): the pool-authority read. Its
   // catalog presence is also the feature marker clients detect (absent from
   // 3.5.0 engines), per INV-138 a generated capability, never hand-declared.
   j("GET", "/v2/account-pools", "read_only", null, "ControlAccountPoolsResponse"),
-  j("GET", "/v2/credential-profiles", "read_only", null, "ControlCredentialProfilesQueryResponse", {
-    parameters: [
-      queryParam({
-        name: "snapshot",
-        enum: ["true", "false"],
-        description: "Return one fresh server-authored Accounts snapshot epoch.",
-      }),
-    ],
-  }),
   j(
     "POST",
     "/v2/credential-profiles",
@@ -158,9 +150,6 @@ const operations: ControlOperationDescriptor[] = [
     "ControlAccountsMigrationRollbackResponse",
     { idempotency: "natural" },
   ),
-  j("POST", "/v2/quota", "mutating", "ControlQuotaRefreshRequest", "ControlQuotaResponse", {
-    idempotency: "natural",
-  }),
   j("GET", "/v2/harnesses", "read_only", null, "ControlHarnessListResponse", {
     parameters: [
       queryParam({

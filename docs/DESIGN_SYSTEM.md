@@ -633,6 +633,48 @@ frequency and volume are. The contracts:
     quota visible, and shows the same inline reason plus Retry across Accounts,
     Quota detail, and Harness Doctor. Only a genuine initial load with no prior
     data may use an empty/loading/error presentation.
+
+    Every registered row also has a compact **Resources** disclosure in its
+    leading identity cell. `AccountResourcePresentation` owns its vocabulary;
+    `AccountResourceDetails` shows included windows, balance, spending, reset
+    offers and provider/routing diagnostics. The panel spans the existing Grid
+    columns, inside the host's one scroller; Enabled, Manage and Remove keep
+    their shared column alignment. The 400-point popover retains its 16-point
+    content gutter and fixed header, with no automatic scroll-to-first-row.
+    Disabled accounts retain these management actions.
+
+    Resource facets retain independent observation times, source and read
+    failures. Normal content uses short human freshness labels such as
+    **Last check failed**; one optional native **Source details** disclosure
+    contains full timestamps, technical sources and error codes without
+    truncation. An unknown balance/count has no zero value or progress bar.
+    Decimal amounts keep the provider's unit and explicit scale; missing
+    monetary scale is disclosed. Spending is separate from prepaid balance.
+    Reset count comes from the reported inventory, never the number of visible
+    grants. Usability is independent: a usable refill without a count says
+    **Available now**. Offer/grant descriptions supply readable effects; native scope ids
+    are not product copy. Resource display never computes routing eligibility.
+
+    **Refresh** inside Resources refreshes that exact account. **Use reset…**
+    and **Refill session…** open one native confirmation naming the account,
+    selected offer/grant and reported effects. Session refill says that weekly
+    quota still applies when the engine reports that condition. Pending,
+    applied, unconfirmed and unavailable reset outcomes stay separate from
+    resource readback. An applied reset whose readback failed says **Reset
+    applied**, labels retained windows/inventory as last known, and offers
+    **Retry refresh**, which does not repeat consumption. No count is
+    decremented locally. **Check result** recovers the original request even
+    if its HTTP response was lost. Client preferences retain unresolved request
+    identities and confirmed outcomes awaiting readback, without resource
+    snapshots; relaunch does not turn a known success into uncertainty. The
+    engine remains the receipt authority.
+    A separate deliberate reset remains available after an unknown outcome,
+    with that prior uncertainty in its one confirmation. Resources and reset
+    support come from the selected execution location's operation catalog;
+    older engines retain the existing quota view with an explanation.
+    A late command response cannot replace newer observations for its account:
+    facet observation/attempt times and the existing display generation own
+    ordering. Accepting resource data is independent of the command outcome.
   - **Conversation (a message feed; code solid):** each turn is a right-aligned
     accent USER BUBBLE over the assistant's frosted card (Chat-V2, F2.5). The
     user bubble and the assistant's answer bubble MUST differ by HUE, not just

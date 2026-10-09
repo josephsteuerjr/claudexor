@@ -1,0 +1,42 @@
+{
+  "$ref": "#/definitions/ControlAccountResetRequest",
+  "definitions": {
+    "ControlAccountResetRequest": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "object",
+          "properties": {
+            "harness": {
+              "type": "string",
+              "minLength": 1
+            },
+            "profile_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "harness",
+            "profile_id"
+          ],
+          "additionalProperties": false
+        },
+        "offer_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "grant_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "target",
+        "offer_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

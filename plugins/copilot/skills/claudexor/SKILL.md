@@ -86,6 +86,17 @@ The CLI equivalent is `--reviewer-panel-json '<array>'`; the legacy compact
 escaping-sensitive profile syntax. After review, verify the observed profile
 and route proof in the result artifacts.
 
+Use `claudexor_account_resources` for independently dated balances, spending
+facts, reset offers and quota. Its optional `refresh` and exact
+`target: {harness, profile_id}` use the existing foreground observation path.
+Use `claudexor_account_reset` for an intentional reset under the caller's existing
+authority. Preserve the original `idempotency_key` and complete request body:
+retrying that pair recovers the same operation, even if the first reply lost its
+receipt id; `operation_id` reads a known receipt. A different key is a separate
+reset. Provider outcome and refreshed usage are distinct: Codex
+`already_redeemed` confirms the original request; Claude `already_used` does not.
+The primitive does not choose an automatic reset or spending strategy.
+
 Use `claudexor_journal_recovery` for read-only journal inspection, validation,
 or export. `claudexor_quarantine_journal` is destructive: invoke it only after
 the user explicitly requests quarantine and provides the exact fingerprint and

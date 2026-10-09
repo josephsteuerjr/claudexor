@@ -167,6 +167,10 @@ const BOOLEAN_FLAG_MAP = {
   },
   all: { mcp: null, reason: "subcommand scope flag, not a run control" },
   refresh: { mcp: null, reason: "quota subcommand operation, not a run control" },
+  resources: {
+    mcp: null,
+    reason: "selects the claudexor_account_resources tool, not a run control",
+  },
   "dry-run": { mcp: null, reason: "subcommand plumbing" },
   yes: {
     mcp: null,
@@ -294,6 +298,26 @@ for (const declared of Object.keys(MCP_TO_CLI)) {
   }
 }
 
+// Account controls are separate direct tools, not inference run arguments.
+const ACCOUNT_TOOL_FLAGS = {
+  offer_id: "offer",
+  grant_id: "grant",
+  operation_id: "operation",
+  idempotency_key: "idempotency-key",
+};
+const accountResetTool = tools.find((tool) => tool.name === "claudexor_account_reset");
+for (const [field, flag] of Object.entries(ACCOUNT_TOOL_FLAGS)) {
+  if (accountResetTool?.inputSchema.properties?.[field]?.type !== "string")
+    failures.push(`Account reset tool is missing string field '${field}'`);
+  if (!cliValueFlags.includes(flag))
+    failures.push(`Account reset field '${field}' maps to missing CLI flag '--${flag}'`);
+}
+for (const name of ["claudexor_account_resources", "claudexor_account_reset"]) {
+  const tool = tools.find((tool) => tool.name === name);
+  if (!tool?.outputSchema)
+    failures.push(`Account tool '${name}' must expose its typed wire result`);
+}
+
 const mappedCliFlags = new Set(
   Object.values(MCP_TO_CLI)
     .flatMap((mapping) => [
@@ -303,7 +327,7 @@ const mappedCliFlags = new Set(
     .filter(Boolean),
 );
 for (const flag of cliValueFlags) {
-  if (mappedCliFlags.has(flag)) continue;
+  if (mappedCliFlags.has(flag) || Object.values(ACCOUNT_TOOL_FLAGS).includes(flag)) continue;
   if (flag in CLI_ONLY_EXEMPT) continue;
   failures.push(
     `CLI value flag '--${flag}' has no MCP argument and no exemption — grow the MCP schema or add a justified exemption`,
@@ -359,6 +383,7 @@ const MUTATING_TOOLS = new Set([
   "claudexor_run_cancel",
   "claudexor_answer_interaction",
   "claudexor_quarantine_journal",
+  "claudexor_account_reset",
 ]);
 for (const tool of tools) {
   if (!tool.annotations || typeof tool.annotations.readOnlyHint !== "boolean") {

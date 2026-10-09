@@ -247,6 +247,7 @@ struct AccountsSurface: View {
     @State private var deleting = false
     @State private var actionNotice = AccountsActionNotice()
     @State private var quotaSubscription: AccountsQuotaSubscription?
+    @State private var accountContentWidth: CGFloat = 400 - 2 * Theme.Spacing.lg
     /// The add form registers agy/claude/codex/cursor config_dir_login
     /// profiles using the same harness set the daemon supports.
     private var addHarness: String? {
@@ -296,6 +297,9 @@ struct AccountsSurface: View {
                 Divider()
                 addSection
             }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            if width > 0 { accountContentWidth = width }
         }
         .task { await model.ensureCredentialProfilesLoaded() }
         .onAppear {
@@ -450,8 +454,9 @@ struct AccountsSurface: View {
                 }
             } else if !rows.isEmpty {
                 ForEach(rows) { row in
-                    AccountRowView(
+                    AccountResourcesRow(
                         row: row,
+                        contentWidth: accountContentWidth,
                         login: { login(row) },
                         loginDisabled: loginDisabled(row),
                         // The Enabled toggle is the ONLY routing control — the

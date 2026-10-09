@@ -135,6 +135,13 @@ never imply that every subscription is spent; unrelated account polling continue
 Observing Accounts reuses the first acquisition until an explicit or credential-driven
 refresh, without a client view continuously spawning vendor checks.
 
+Account resources extend that same observation owner with independently aged
+balances, spending facts and reset offers. An explicit reset is a durable direct
+command outside inference capacity: its original account binding and request key
+survive response loss, while provider effect and subsequent readback remain
+separate. GUI, CLI and MCP consume the same contract; the existence of a balance
+or reset never creates an automatic spending strategy.
+
 A saved login and a vendor accepting that credential are different facts.
 Observations from ordinary work should improve the same account view and selection
 that admitted the work, even when the account was pinned. Their authority is bound

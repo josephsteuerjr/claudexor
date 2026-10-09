@@ -1,3 +1,4 @@
+import { accountResourceTools } from "./account-resource-tools.js";
 import { runExecutionSchema } from "./run-execution-schema.js";
 import { isAbsolute } from "node:path";
 import agentCapabilityCatalogSchemaRaw from "@claudexor/schema/generated/AgentCapabilityCatalog.schema.json" with { type: "json" };
@@ -486,6 +487,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
       },
     },
     accountsTool(runner, accountsQuerySchema),
+    ...accountResourceTools(runner),
     // Read-only daemon projections let hosts recover lost run handles.
     {
       name: "claudexor_runs",

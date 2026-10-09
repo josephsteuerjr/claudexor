@@ -1,3 +1,5 @@
+import { handleAccountResourceRoute } from "./account-resource-routes.js";
+import { ControlAccountResetRequest } from "@claudexor/schema";
 import { readThreadCommands } from "./command-reads.js";
 import { recoverInterruptedOutput } from "./retained-output.js";
 import { recordedExecutionRoot } from "./run-delivery-state.js";
@@ -171,7 +173,6 @@ import {
   ControlSettingsSnapshot,
   ControlSettingsUpdateRequest,
   ControlQuotaRefreshRequest,
-  ControlQuotaResponse,
   ControlAccountPoolsResponse,
   ControlAccountsMigrationRollbackRequest,
   ControlAccountsMigrationRollbackResponse,
@@ -283,11 +284,19 @@ export interface DaemonControlApiOptions {
       journalEvents?: (partition: string, afterCursor?: string) => Promise<unknown>;
       settings?: () => Promise<unknown>;
       updateSettings?: (patch: unknown) => Promise<unknown>;
-      quota?: () => Promise<unknown>;
-      refreshQuota?: (input?: ControlQuotaRefreshRequest) => Promise<unknown>;
+      quota?: (input?: { view?: "resources" }) => Promise<unknown>;
+      createAccountReset?: (input: {
+        request: ControlAccountResetRequest;
+        idempotencyKey: string;
+        clientId: string;
+      }) => Promise<unknown>;
+      accountReset?: (id: string) => Promise<unknown>;
+      refreshQuota?: (
+        input?: ControlQuotaRefreshRequest & { view?: "resources" },
+      ) => Promise<unknown>;
       accountPools?: () => Promise<unknown>;
       rollbackAccountsMigration?: (input: unknown) => Promise<unknown>;
-      credentialProfiles?: (input?: { snapshot?: boolean }) => Promise<unknown>;
+      credentialProfiles?: (input?: { snapshot?: boolean; view?: "resources" }) => Promise<unknown>;
       runApplicability?: (input: { repoRoot: string }) => Promise<unknown>;
       createCredentialProfile?: (input: unknown) => Promise<unknown>;
       updateCredentialProfile?: (input: unknown) => Promise<unknown>;
@@ -1539,22 +1548,26 @@ export class DaemonControlApiServer {
       }
       return this.service(res, "updateSettings", body, ControlSettingsSnapshot);
     }
-    if (method === "GET" && path === "/quota")
-      return this.service(res, "quota", undefined, ControlQuotaResponse);
+    if (
+      await handleAccountResourceRoute(
+        {
+          services: this.opts.services,
+          readBody: (request) => this.readBody(request),
+          json: (response, status, body) => this.json(response, status, body),
+          requestError: (response, error) => this.requestError(response, error),
+        },
+        method,
+        path,
+        url,
+        req,
+        res,
+      )
+    )
+      return;
     // Unified account model: the pool-authority read (also the feature marker
     // clients detect through the operation catalog).
     if (method === "GET" && path === "/account-pools")
       return this.service(res, "accountPools", undefined, ControlAccountPoolsResponse);
-    if (method === "POST" && path === "/quota") {
-      let body: ControlQuotaRefreshRequest;
-      try {
-        // An absent/empty body keeps the model-agnostic projection.
-        body = ControlQuotaRefreshRequest.parse(await this.readBody(req));
-      } catch (err) {
-        return this.requestError(res, err);
-      }
-      return this.service(res, "refreshQuota", body, ControlQuotaResponse);
-    }
     if (method === "GET" && path === "/credential-profiles") {
       try {
         const query = parseCredentialProfilesSnapshotQuery(url);

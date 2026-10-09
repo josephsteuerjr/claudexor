@@ -371,15 +371,13 @@ describe("codex rateLimitResetCredits (W5.3 mini-gap, live-verified shape)", () 
     },
   };
 
-  it("surfaces a positive credit balance as a visible fact row", () => {
+  it("keeps reset inventory out of canonical quota constraints (legacy display is serialized separately)", () => {
     const [snapshot] = parseCodexRateLimitsResponse(
       { ...base, rateLimitResetCredits: { availableCount: 3, credits: [] } },
       new Date("2026-07-17T12:00:00Z"),
     );
-    expect(snapshot?.constraints.some((c) => c.id === "reset_credits")).toBe(true);
-    expect(snapshot?.constraints.find((c) => c.id === "reset_credits")?.label).toBe(
-      "3 reset credits available",
-    );
+    expect(snapshot?.constraints.some((c) => c.id === "reset_credits")).toBe(false);
+    expect(snapshot?.constraints).toHaveLength(1);
   });
 
   it("stays silent on the live zero-balance shape", () => {

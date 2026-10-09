@@ -4,6 +4,24 @@
     "ControlQuotaRefreshRequest": {
       "type": "object",
       "properties": {
+        "target": {
+          "type": "object",
+          "properties": {
+            "harness": {
+              "type": "string",
+              "minLength": 1
+            },
+            "profile_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "harness",
+            "profile_id"
+          ],
+          "additionalProperties": false
+        },
         "model": {
           "type": "string",
           "minLength": 1,

@@ -1,3 +1,4 @@
+import { accountResourceQuery } from "./account-resource-query.js";
 import {
   ControlProblem,
   isTerminalLifecycle,
@@ -68,6 +69,10 @@ export interface McpSurfaceRunnerOptions {
  */
 export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
   return async (p: any, hooks?: SurfaceRunnerHooks) => {
+    if (p?.mode === "__account_resources")
+      return accountResourceQuery("resources", p, options.requireExistingDaemon === true);
+    if (p?.mode === "__account_reset")
+      return accountResourceQuery("reset", p, options.requireExistingDaemon === true);
     if (p?.mode === "__status" || p?.mode === "__capabilities" || p?.mode === "__accounts") {
       return catalogQuery(p.mode, options.requireExistingDaemon === true, {
         fresh: p?.fresh === true,

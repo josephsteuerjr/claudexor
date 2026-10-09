@@ -19,7 +19,7 @@ import {
   RawGitPatchEnvelope,
   RawPatchRefusalCode,
 } from "./raw.js";
-import { QuotaConstraint, QuotaSource } from "./quota.js";
+import { HarnessAccountUsageFields } from "./harness-quota.js";
 import { RateLimitSignal } from "./rate-limit.js";
 import { EffortHint, ModelEffortCapability } from "./effort.js";
 import {
@@ -811,19 +811,7 @@ export const HarnessEvent = z
     credential_profile_id: Id.optional().describe(
       "Credential profile the attempt runs under; absent = engine-default credentials (INV-135 attribution).",
     ),
-    /** Vendor-owned quota windows. All reported windows remain independent. */
-    quota: z
-      .object({
-        source: QuotaSource,
-        plan_label: z.string().nullable().default(null),
-        subject_id: z.string().nullable().default(null),
-        constraints: z.array(QuotaConstraint),
-      })
-      .strict()
-      .optional()
-      .describe(
-        "All quota windows from a vendor-owned machine-readable source; never scraped from prose or collapsed into a fake aggregate.",
-      ),
+    ...HarnessAccountUsageFields,
     /**
      * Typed live plan/todo progress: adapters map their native plan tools
      * (codex `todo_list` items, claude `TodoWrite` todos) into this shape in

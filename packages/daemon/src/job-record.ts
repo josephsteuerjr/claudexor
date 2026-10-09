@@ -64,7 +64,13 @@ export function publicJobRecord(record: JobRecord): JobRecord {
       ? { errorRequiredActions: safeProblemRequiredActions(record.errorRequiredActions) }
       : {}),
     ...(record.errorContext ? { errorContext: safeProblemContext(record.errorContext) } : {}),
-    params: redactParams(record.params),
+    params: redactParams(
+      record.params &&
+        typeof record.params === "object" &&
+        (record.params as { kind?: string }).kind === "account_reset"
+        ? { kind: "account_reset", request: (record.params as { request: unknown }).request }
+        : record.params,
+    ),
   };
 }
 

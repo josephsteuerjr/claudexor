@@ -1007,6 +1007,53 @@ grandchildren or windows the child opens later. Interactive sign-in
 (`profiles login`, the Terminal/ConPTY setup runner) and `setup attach` do not
 use those helpers and keep their own visible-terminal policy.
 
+### Account resources and explicit resets
+
+`QuotaRegistry` also owns independently observed balances, spending, reset inventory
+and diagnostics. Versioned resource observations share the existing global journal;
+quota windows keep their strict schema and their existing admission/supersession owner.
+Resource facets carry a successful observation time, a separate last attempt, source,
+and freshness. A missing or failed facet preserves its last known value as stale;
+unknown amount/count is null, not zero. Amount strings retain provider units,
+nullable currency and provider-reported `decimal_places`. Reset offer/grant
+`description` is display copy; `clears` retains native scope identifiers. Diagnostic
+codes retain provenance while their detail explains the state, including false/unknown.
+These resources do not enable paid usage or change routing policy.
+
+The operation catalog advertises `view=resources` on quota and atomic Accounts
+reads. Without it, quota responses keep the strict legacy representation, including
+the historical Codex reset-credit label at the serializer boundary. A refresh body
+may select one exact `target` (harness and profile id), including a named default
+or a disabled portable profile. It uses the existing refresh coordinator and pacing
+floor, retains other accounts, and cannot join a cycle that did not cover its target.
+Claude's ordinary usage read includes spending and granted-reset inventory. Separate
+prepaid and session-refill reads run only during existing foreground cycles, with the
+same subject's pacing owner. A prepaid eligibility refusal affects the balance facet,
+not account authentication. Background polling adds no supplementary request fan-out.
+The internal observation's `resets_resolved_ids` names programs authoritatively read
+in that cycle, including explicit null from that program's reader. An omitted or
+malformed body is unresolved. Merge drops resolved-absent offers and retains unread
+ones without inventing an error; retaining any unread offer keeps the single facet
+clock stale. Coverage is not a public snapshot field. The journal stores the merged
+complete row and replay installs it, while legacy partial rows still merge as deltas.
+
+`POST /v2/account-resets` is a direct control operation backed by `CommandStore`,
+independent of inference queue capacity. Its required Idempotency-Key binds the exact
+request, canonical native account fingerprint, selected grant/program and native request
+id before dispatch. Keep the original body and key through an HTTP timeout, even if no
+receipt id arrived. `GET /v2/account-resets/:id` reads the durable receipt. Outcome and
+resource readback are independent: confirmed reset survives failed readback. Codex
+same-key `already_redeemed` confirms its operation; Claude `already_used` does not.
+An unknown Claude outcome never automatically submits another native POST. Distinct
+explicit keys are independent requests; there is no new account-wide lock or scheduler.
+Receipts retain the key binding outside ordinary inference command pruning.
+
+Only an effect or possible effect makes old observations historical. Confirmed no-effect
+outcomes preserve fresh quota when readback fails. Post-reset readback drains the old
+cycle, moves the durable account cutoff before the new read, and retains history if that
+read fails. Journal order distinguishes fresh reads sharing the cutoff's millisecond.
+The engine never infers a new balance or remaining reset count from a consume response.
+
 ### Credential profiles (INV-135, unified account model)
 
 Every routable credential binding of a harness is a named registry row; the
@@ -2134,6 +2181,8 @@ The protocol handshake remains unchanged. No memory thresholds affect admission.
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
 - `GET /healthz`
 - `GET /v2/account-pools`
+- `POST /v2/account-resets`
+- `GET /v2/account-resets/:id`
 - `POST /v2/accounts-migration/rollback`
 - `GET /v2/agent-capabilities`
 - `GET /v2/credential-profiles`

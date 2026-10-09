@@ -7,6 +7,7 @@ public final class GatewayClient: Sendable {
     private let baseURL: URL
     private let token: String
     let session: URLSession
+    let accountResourceCapabilityCache = AccountResourceCapabilityCache()
 
     public init(baseURL: URL, token: String, session: URLSession = .shared) {
         self.baseURL = baseURL
@@ -34,23 +35,6 @@ public final class GatewayClient: Sendable {
     }
 
     static let encoder = JSONEncoder(), decoder = JSONDecoder()
-
-    static func yieldChecked<Element: Sendable>(
-        _ element: Element,
-        to continuation: AsyncThrowingStream<Element, Error>.Continuation,
-        context: String
-    ) throws -> Bool {
-        switch continuation.yield(element) {
-        case .enqueued:
-            return true
-        case .dropped:
-            throw GatewayError.transport("\(context) buffer overflow; resnapshot is required")
-        case .terminated:
-            return false
-        @unknown default:
-            throw GatewayError.transport("\(context) returned an unknown buffering result")
-        }
-    }
 
     public func health() async throws -> Bool {
         try await gatewayHealth(baseURL: baseURL, token: token, session: session)

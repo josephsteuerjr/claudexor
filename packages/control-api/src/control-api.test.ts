@@ -852,6 +852,11 @@ describe("DaemonControlApiServer", () => {
       );
       expect(credentialProfiles?.parameters).toEqual([
         expect.objectContaining({
+          name: "view",
+          location: "query",
+          enum: ["resources"],
+        }),
+        expect.objectContaining({
           name: "snapshot",
           location: "query",
           enum: ["true", "false"],

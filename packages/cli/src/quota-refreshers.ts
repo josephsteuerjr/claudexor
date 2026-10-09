@@ -31,9 +31,14 @@ export const QUOTA_REFRESHER_REGISTRATIONS = [
     source: "codex_app_server",
     vendor: "codex",
     refresh: (cycle?: QuotaRefreshCycle, diagnostic?: QuotaDiagnosticSink) =>
-      refreshCodexQuota({ diagnostic, foreground: cycle?.foreground }),
+      refreshCodexQuota({ diagnostic, foreground: cycle?.foreground, cycle }),
   },
-  { source: "claude_statusline", vendor: "claude", refresh: () => refreshClaudeStatuslineQuota() },
+  {
+    source: "claude_statusline",
+    vendor: "claude",
+    refresh: (cycle?: QuotaRefreshCycle) =>
+      cycle?.target ? Promise.resolve({ snapshots: [] }) : refreshClaudeStatuslineQuota(),
+  },
   {
     source: "claude_oauth_usage",
     vendor: "claude",

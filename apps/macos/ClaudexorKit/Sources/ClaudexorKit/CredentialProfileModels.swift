@@ -247,8 +247,9 @@ public struct DeleteCredentialProfileReceipt: Decodable, Sendable {
 }
 
 public extension GatewayClient {
-    func credentialProfiles(snapshot: Bool = false) async throws -> CredentialProfilesResponse {
-        let query = snapshot ? [URLQueryItem(name: "snapshot", value: "true")] : []
+    func credentialProfiles(snapshot: Bool = false, resources: Bool = false) async throws -> CredentialProfilesResponse {
+        var query = snapshot ? [URLQueryItem(name: "snapshot", value: "true")] : []
+        if snapshot && resources { query.append(URLQueryItem(name: "view", value: "resources")) }
         let req = request("credential-profiles", method: "GET", queryItems: query)
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -260,9 +261,9 @@ public extension GatewayClient {
 
     /// Prefer the opt-in atomic snapshot; retry the legacy shape only when an
     /// older strict daemon rejects the new query parameter.
-    func credentialProfilesSnapshot() async throws -> CredentialProfilesResponse {
+    func credentialProfilesSnapshot(resources: Bool = false) async throws -> CredentialProfilesResponse {
         do {
-            return try await credentialProfiles(snapshot: true)
+            return try await credentialProfiles(snapshot: true, resources: resources)
         } catch let GatewayError.http(status, _) where status == 400 {
             return try await credentialProfiles()
         }

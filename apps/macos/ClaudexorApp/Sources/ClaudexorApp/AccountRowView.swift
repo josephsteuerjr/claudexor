@@ -19,6 +19,10 @@ struct AccountRowView: View {
     /// The confirmed Remove action — EVERY row carries one under the unified
     /// account model (nil only while another delete is settling).
     var delete: (() -> Void)? = nil
+    var resourceSummary: String? = nil
+    var resourceStatus: String? = nil
+    var expanded = false
+    var toggleResources: (() -> Void)? = nil
 
     /// Per-cell width FLOORS for the trailing control columns (owner F8). The
     /// shared Grid in `AlignedList` pins the true collinear edge; these only stop
@@ -32,7 +36,26 @@ struct AccountRowView: View {
     }
 
     var body: some View {
-        AlignedListRow(identity: identity) {
+        AlignedListRow(leading: {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                identity
+                if let toggleResources {
+                    Button(action: toggleResources) {
+                        HStack(spacing: Theme.Spacing.xs) {
+                            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                .accessibilityHidden(true)
+                            Text("Resources · \(resourceSummary ?? "Details")")
+                                .lineLimit(1).truncationMode(.tail)
+                        }
+                        .font(.caption2)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Theme.accent)
+                    .accessibilityLabel("Resources for \(row.displayName)")
+                    .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                    .help("\(expanded ? "Hide" : "Show") resources for this account. \(resourceSummary ?? "")")
+                }
+            }
+        }) {
             // Column 0 (enabled): the collinear anchor across every row.
             enabledToggle.alignedControlColumn(minWidth: Col.enabled)
             // Column 1 (manage / log in).
@@ -80,23 +103,24 @@ struct AccountRowView: View {
     /// ONE compact quota detail: the worst window's used-% and its reset, as a
     /// single-line string (the component enforces single-line + tail truncation).
     private var quotaDetail: AlignedRowDetail {
+        if let resourceStatus { return AlignedRowDetail(0, resourceStatus, emphasis: .secondary) }
         if row.quotaAvailabilityState == "exhausted" {
             var text = "Quota exhausted"
-            if let reset = formattedDate(row.quotaAvailabilityResetAt) {
-                text += " · resets \(reset)"
+            if let reset = AccountResourcePresentation.compactResetDate(row.quotaAvailabilityResetAt) {
+                text += " · \(reset)"
             }
             return AlignedRowDetail(0, text, emphasis: .warning)
         }
         if row.quotaAvailabilityState == "cooldown" {
             var text = "Quota cooling down"
-            if let reset = formattedDate(row.quotaAvailabilityResetAt) {
-                text += " · until \(reset)"
+            if let reset = AccountResourcePresentation.compactResetDate(row.quotaAvailabilityResetAt) {
+                text += " · \(reset)"
             }
             return AlignedRowDetail(0, text, emphasis: .warning)
         }
         if let window = row.worstWindow, let pct = row.worstPercent {
             var text = "\(pct)% used"
-            if let reset = formattedDate(window.resetsAt) { text += " · resets \(reset)" }
+            if let reset = AccountResourcePresentation.compactResetDate(window.resetsAt) { text += " · \(reset)" }
             if let scoped = row.scopedQuotaLabel { text += " · \(scoped)" }
             return AlignedRowDetail(
                 0, text,

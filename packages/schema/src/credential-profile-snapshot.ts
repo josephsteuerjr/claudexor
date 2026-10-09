@@ -1,3 +1,4 @@
+import { ControlAccountResourcesResponse } from "./account-resources.js";
 import { z } from "zod/v3";
 import { ControlCredentialProfilesResponse } from "./credential-profile.js";
 import { GitCapability } from "./git-capability.js";
@@ -30,11 +31,20 @@ export type ControlCredentialProfilesSnapshotResponse = z.infer<
   typeof ControlCredentialProfilesSnapshotResponse
 >;
 
+export const ControlCredentialProfilesResourcesResponse =
+  ControlCredentialProfilesSnapshotResponse.extend({
+    quota: ControlAccountResourcesResponse,
+  }).strict();
+
 /** Operation-catalog response contract for the query-shaped endpoint. The
  * actual route selects exactly one member from the validated `snapshot` query;
  * this union keeps discovery/docs honest without changing the legacy shape. */
 export const ControlCredentialProfilesQueryResponse = z
-  .union([ControlCredentialProfilesResponse, ControlCredentialProfilesSnapshotResponse])
+  .union([
+    ControlCredentialProfilesResponse,
+    ControlCredentialProfilesSnapshotResponse,
+    ControlCredentialProfilesResourcesResponse,
+  ])
   .describe("Legacy credential-profile listing or the opt-in atomic Accounts snapshot.");
 export type ControlCredentialProfilesQueryResponse = z.infer<
   typeof ControlCredentialProfilesQueryResponse

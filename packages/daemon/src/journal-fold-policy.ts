@@ -48,6 +48,8 @@
 import type { FoldRecord, FoldVerdict, JournalFold } from "@claudexor/journal";
 import {
   CredentialRoute,
+  AccountResourcesObserved,
+  AccountResourcesInvalidated,
   QuotaSnapshot as QuotaSnapshotSchema,
   QuotaSource,
   QuotaWindowObservation,
@@ -87,6 +89,20 @@ function journalFoldVerdict(record: FoldRecord): FoldVerdict {
         return slotOrKeep(scopedPreparedKey(record.payload), (key) => `q:${key}:p`);
       case "quota.snapshot.upserted":
         return slotOrKeep(upsertedKey(record.payload), (key) => `q:${key}:u`);
+      case "quota.resources.invalidated": {
+        const parsed = AccountResourcesInvalidated.safeParse(record.payload);
+        if (!parsed.success) return KEEP;
+        const target = parsed.data.target;
+        return {
+          slot: `q:resources:cutoff:${JSON.stringify([target.harness, target.profile_id])}`,
+        };
+      }
+      case "quota.resources.observed": {
+        const parsed = AccountResourcesObserved.safeParse(record.payload);
+        if (!parsed.success) return KEEP;
+        const target = parsed.data.observation.target;
+        return { slot: `q:resources:${JSON.stringify([target.harness, target.profile_id])}` };
+      }
       case "quota.window.observed": {
         const observation = QuotaWindowObservation.safeParse(record.payload);
         if (!observation.success) return KEEP;
@@ -237,7 +253,15 @@ function removedSubjectVerdict(payload: unknown): FoldVerdict {
   const subjectId = value?.subject_id;
   if (harness === null || (typeof subjectId !== "string" && subjectId !== null)) return KEEP;
   const subject = subjectId ?? "";
-  const retire: string[] = [quotaWindowGroup(harness, subjectId)];
+  const retire: string[] = [
+    quotaWindowGroup(harness, subjectId),
+    ...(subjectId === null || value?.preserve_resources === true
+      ? []
+      : [
+          `q:resources:${JSON.stringify([harness, subjectId])}`,
+          `q:resources:cutoff:${JSON.stringify([harness, subjectId])}`,
+        ]),
+  ];
   for (const route of CredentialRoute.options) {
     for (const source of QuotaSource.options) {
       const key = [harness, route, subject, source].join("\0");
