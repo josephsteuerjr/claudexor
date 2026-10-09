@@ -90,19 +90,35 @@ actor ResourceResponseGate {
     func finish() { release?.resume(); release = nil }
 }
 
-final class ResourceAppProtocol: URLProtocol, @unchecked Sendable {
+/// Narrow Foundation callback bridge, not a Sendable URLProtocol. The immutable
+/// callback belongs to one request task, which invokes it once after its async
+/// handler (including a response gate) completes. It retains the protocol until
+/// that terminal delivery, exposes no protocol state to the handler, and keeps
+/// this fixture's existing stopLoading behavior.
+private struct ResourceProtocolCallback: @unchecked Sendable {
+    let deliver: (Result<(Int, Data), Error>) -> Void
+}
+
+final class ResourceAppProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (ResourceRecordedRequest) async throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let recorded = ResourceRecordedRequest(request)
-        Task {
-            do {
-                let (status, data) = try await Self.handler!(recorded)
-                client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        let handler = Self.handler!
+        let callback = ResourceProtocolCallback { [self] result in
+            switch result {
+            case .success(let (status, data)):
+                client?.urlProtocol(self, didReceive: HTTPURLResponse(url: recorded.url, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
                 client?.urlProtocol(self, didLoad: data)
                 client?.urlProtocolDidFinishLoading(self)
-            } catch { client?.urlProtocol(self, didFailWithError: error) }
+            case .failure(let error):
+                client?.urlProtocol(self, didFailWithError: error)
+            }
+        }
+        Task { [handler, recorded, callback] in
+            do { callback.deliver(.success(try await handler(recorded))) }
+            catch { callback.deliver(.failure(error)) }
         }
     }
     override func stopLoading() {}
