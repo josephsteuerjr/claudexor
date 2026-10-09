@@ -2827,8 +2827,9 @@ therefore cannot turn an old or newly busy daemon into a replacement casualty.
 Explicit operator shutdown keeps its forceful semantics. The daemon records its
 birth identity in the writer lease at startup; `claudexor daemon stop` then CONFIRMS death
 (released lease, gone pid, or identity-verified SIGKILL escalation — a
-recycled pid is never signalled) before reporting success, so scripts and
-test disposers can trust its exit code. The lease is acquired before the
+recycled pid is never signalled) before reporting success. Scripts can trust
+that exit code for the pinned generation; canary disposal additionally checks
+the current writer lease for a successor. The lease is acquired before the
 daemon publishes its socket or Control descriptor, so a present lease without
 a reachable socket remains a protected startup window unless its owner is
 proven stale. That proof is deliberately narrow: a missing pid, a birth-identity
