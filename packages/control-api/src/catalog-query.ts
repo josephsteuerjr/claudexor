@@ -2,6 +2,7 @@ import { assertOnlyQueryParams, optionalBooleanQuery, singleQuery } from "./quer
 import {
   ControlCredentialProfilesResponse,
   ControlCredentialProfilesSnapshotResponse,
+  ControlCredentialProfilesResourcesResponse,
 } from "@claudexor/schema";
 
 export interface HarnessListQuery {
@@ -27,13 +28,17 @@ export function parseHarnessListQuery(url: URL): HarnessListQuery {
 }
 
 export function parseCredentialProfilesSnapshotQuery(url: URL) {
-  assertOnlyQueryParams(url, ["snapshot"]);
+  assertOnlyQueryParams(url, ["snapshot", "view"]);
   const snapshot = optionalBooleanQuery(url, "snapshot") ?? false;
+  const view = resourceViewQuery(url);
+  if (view && !snapshot) throw new Error("view=resources requires snapshot=true");
   return {
-    input: { snapshot },
-    schema: snapshot
-      ? ControlCredentialProfilesSnapshotResponse
-      : ControlCredentialProfilesResponse,
+    input: { snapshot, ...(view ? { view } : {}) },
+    schema: view
+      ? ControlCredentialProfilesResourcesResponse
+      : snapshot
+        ? ControlCredentialProfilesSnapshotResponse
+        : ControlCredentialProfilesResponse,
   };
 }
 
@@ -44,4 +49,10 @@ export function parseRunApplicabilityQuery(url: URL): { repoRoot: string } {
     throw new Error("repoRoot query parameter is required");
   }
   return { repoRoot };
+}
+
+export function resourceViewQuery(url: URL): "resources" | undefined {
+  const view = singleQuery(url, "view");
+  if (view !== undefined && view !== "resources") throw new Error("view must be resources");
+  return view;
 }

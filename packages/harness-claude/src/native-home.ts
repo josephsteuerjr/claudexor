@@ -1,6 +1,11 @@
+import { CLAUDE_CAPABILITY_PROFILE } from "./capability-profile.js";
 import { existsSync, lstatSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { normalizeThroughExistingAncestor } from "@claudexor/core";
+import {
+  normalizeThroughExistingAncestor,
+  providerScrubEnv,
+  needsScopedHomeKeychainBridge,
+} from "@claudexor/core";
 import type { AccountIdentity } from "@claudexor/schema";
 import {
   claudexorOwnedRoot,
@@ -142,4 +147,21 @@ function isWithinOwnedRoot(dir: string): boolean {
   const owned = normalizeThroughExistingAncestor(claudexorOwnedRoot());
   const target = normalizeThroughExistingAncestor(dir);
   return target === owned || target.startsWith(owned + sep);
+}
+
+export function claudeNativeEnv(
+  base?: Record<string, string | null | undefined>,
+  configDir?: string,
+): Record<string, string | null | undefined> {
+  const raw = {
+    ...(base ?? {}),
+    ...providerScrubEnv(),
+  };
+  const native = needsScopedHomeKeychainBridge(CLAUDE_CAPABILITY_PROFILE)
+    ? claudeNativeHomeEnv(raw)
+    : raw;
+  return {
+    ...native,
+    CLAUDE_CONFIG_DIR: configDir ?? defaultNativeClaudeConfigDir(base),
+  };
 }

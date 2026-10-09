@@ -1,5 +1,17 @@
 # @claudexor/delivery
 
+## 3.25.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@3.25.0
+  - @claudexor/core@3.25.0
+  - @claudexor/policy@3.25.0
+  - @claudexor/review@3.25.0
+  - @claudexor/workspace@3.25.0
+  - @claudexor/util@3.25.0
+
 ## 3.24.0
 
 ### Patch Changes

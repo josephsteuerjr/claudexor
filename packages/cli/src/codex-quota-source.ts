@@ -6,18 +6,25 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { loadConfig } from "@claudexor/config";
 import { harnessBinaryIdentity, harnessRuntimeEnv, providerScrubEnv } from "@claudexor/core";
-import type { QuotaRefreshResult } from "@claudexor/daemon";
+import type { QuotaRefreshCycle, QuotaRefreshResult } from "@claudexor/daemon";
 import {
   CODEX_FILE_AUTH_ARGS,
   canonicalCodexProfileHome,
   defaultNativeCodexHome,
   redactCodexDoctorDetail,
   parseCodexRateLimitsResponse,
+  parseCodexAccountResources,
   CodexRpcError,
   parseCodexRpcError,
   codexRpcErrorDetail,
 } from "@claudexor/harness-codex";
-import type { QuotaAbsence, QuotaSnapshot } from "@claudexor/schema";
+import {
+  emptyResourceFacet,
+  type AccountResourceObservation,
+  type AccountTarget,
+  type QuotaAbsence,
+  type QuotaSnapshot,
+} from "@claudexor/schema";
 import { noProjectRepoRoot } from "@claudexor/util";
 import { readAccountsMigrationFile } from "./accounts-unified-migration.js";
 import {
@@ -42,11 +49,29 @@ export async function refreshCodexQuota(
     spawn?: typeof spawn;
     diagnostic?: QuotaDiagnosticSink;
     foreground?: boolean;
+    cycle?: QuotaRefreshCycle;
   } = {},
 ): Promise<QuotaRefreshResult> {
   const snapshots: QuotaSnapshot[] = [];
   const absences: QuotaAbsence[] = [];
-  for (const candidate of codexQuotaCandidates()) {
+  const resources: AccountResourceObservation[] = [];
+  for (const candidate of codexQuotaCandidates(options.cycle?.target)) {
+    const subject = {
+      harness: "codex",
+      credential_route: "vendor_native" as const,
+      plan_label: null,
+      subject_id: candidate.subjectId,
+    };
+    if (options.cycle?.shouldRefresh?.(subject) === false) continue;
+    if (options.cycle?.pacing?.cooldownUntil(subject, Date.now()) != null) {
+      absences.push({
+        ...subjectOfAbsence(candidate.subjectId),
+        reason: "poll_paced",
+        detail: "quota poll paused",
+        observed_at: new Date().toISOString(),
+      });
+      continue;
+    }
     const operationId = randomUUID();
     const diagnostic: QuotaDiagnosticSink = (record) =>
       emitQuotaDiagnostic(options.diagnostic, record);
@@ -84,36 +109,71 @@ export async function refreshCodexQuota(
       continue;
     }
     try {
-      snapshots.push(
-        ...(await readCodexCandidate(
-          candidate.subjectId,
-          candidate.home,
-          options.baseEnv,
-          options.bin,
-          options.spawn,
-          (record) => diagnostic({ ...record, ...diagnosticBase }),
-        )),
+      const at = new Date();
+      const result = await requestCodexAccount(
+        candidate.home,
+        options.baseEnv,
+        options.bin,
+        options.spawn,
+        (record) => diagnostic({ ...record, ...diagnosticBase }),
       );
+      if (candidate.subjectId !== null) {
+        const observation = parseCodexAccountResources(result, candidate.subjectId, at);
+        for (const key of ["balances", "spending", "resets", "diagnostics"] as const)
+          observation[key] ??= {
+            ...emptyResourceFacet(),
+            source: "codex_app_server",
+            last_attempt_at: at.toISOString(),
+            last_error: "not_reported",
+          };
+        resources.push(observation);
+      }
+      snapshots.push(...parseCodexRateLimitsResponse(result, at, candidate.subjectId));
     } catch (error) {
       absences.push(codexAbsenceClaim(candidate.subjectId, error));
     }
   }
-  return { snapshots, absences };
+  for (const absence of absences) {
+    const id = absence.subject.subject_id;
+    if (id === null || resources.some((row) => row.target.profile_id === id)) continue;
+    resources.push({
+      target: { harness: "codex", profile_id: id },
+      ...Object.fromEntries(
+        ["balances", "spending", "resets", "diagnostics"].map((key) => [
+          key,
+          {
+            ...emptyResourceFacet(),
+            last_attempt_at: new Date().toISOString(),
+            last_error: absence.reason,
+          },
+        ]),
+      ),
+    });
+  }
+  return { snapshots, absences, resources };
 }
 
 /** The default native home plus every enabled codex config_dir_login profile,
  * resolved to its scoped CODEX_HOME (the profile's isolation_locator dir). */
-function codexQuotaCandidates(): Array<{ subjectId: string | null; home: string }> {
+function codexQuotaCandidates(
+  target?: AccountTarget,
+): Array<{ subjectId: string | null; home: string }> {
   // A MIGRATED harness has no null subject (its former default home IS the
   // auto-registered row the profile loop covers): probing it again would
   // resurrect the retired subject every refresh cycle and double-probe one
   // credential (mirrors quotaSubjectUniverseFromConfig's migration-record use).
   const candidates: Array<{ subjectId: string | null; home: string }> =
-    readAccountsMigrationFile()["codex"] === undefined
+    !target && readAccountsMigrationFile()["codex"] === undefined
       ? [{ subjectId: null, home: defaultNativeCodexHome() }]
       : [];
   for (const profile of loadConfig(noProjectRepoRoot()).global.credential_profiles) {
-    if (profile.harness_id !== "codex" || !profile.enabled) continue;
+    if (
+      profile.harness_id !== "codex" ||
+      (target
+        ? target.harness !== "codex" || profile.profile_id !== target.profile_id
+        : !profile.enabled)
+    )
+      continue;
     if (profile.credential_kind !== "config_dir_login" || !profile.isolation_locator) continue;
     try {
       candidates.push({
@@ -150,8 +210,7 @@ function codexAbsenceClaim(subjectId: string | null, error: unknown): QuotaAbsen
 /** One app-server invocation for a single candidate CODEX_HOME. Stamps the
  * resolved subject_id onto every snapshot it returns. Throws a reason-tagged
  * error on failure; the caller converts it to an absence claim. */
-async function readCodexCandidate(
-  subjectId: string | null,
+export async function requestCodexAccount(
   codexHome: string,
   baseEnv: NodeJS.ProcessEnv | undefined,
   bin?: string,
@@ -162,7 +221,9 @@ async function readCodexCandidate(
       "at" | "stage" | "outcome" | "reason" | "binary" | "nativeRpcCode"
     >,
   ) => void,
-): Promise<QuotaSnapshot[]> {
+  method = "account/rateLimits/read",
+  params: unknown = null,
+): Promise<unknown> {
   const invocation = codexQuotaInvocation(baseEnv, codexHome);
   const report = (
     outcome: "started" | "succeeded" | "failed",
@@ -252,11 +313,10 @@ async function readCodexCandidate(
     });
     // Bind the evidence to the request, not its eventual delivery: a poll
     // already in flight must not erase a refusal observed while it awaited I/O.
-    const observedAt = new Date();
-    report("started", "account/rateLimits/read");
+    report("started", method);
     let response: Record<string, unknown>;
     try {
-      response = await request(2, "account/rateLimits/read", null);
+      response = await request(2, method, params);
       report("succeeded", "rpc_response_received");
     } catch (error) {
       report(
@@ -268,7 +328,7 @@ async function readCodexCandidate(
     }
     const result = response["result"];
     if (!result || typeof result !== "object") throw new Error("Codex quota response is missing");
-    return parseCodexRateLimitsResponse(result, observedAt, subjectId);
+    return result;
   } catch (error) {
     const raw =
       error instanceof CodexRpcError
@@ -310,5 +370,16 @@ export function codexQuotaInvocation(
   return {
     args: [...CODEX_FILE_AUTH_ARGS, "app-server", "--stdio"],
     env,
+  };
+}
+
+function subjectOfAbsence(subjectId: string | null) {
+  return {
+    subject: {
+      harness: "codex",
+      credential_route: "vendor_native" as const,
+      plan_label: null,
+      subject_id: subjectId,
+    },
   };
 }

@@ -734,6 +734,29 @@
           "minLength": 1,
           "description": "Credential profile the attempt runs under; absent = engine-default credentials (INV-135 attribution)."
         },
+        "account_usage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "detail"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Native informational overage diagnostics translated by the adapter; never inference admission authority."
+        },
         "quota": {
           "type": "object",
           "properties": {

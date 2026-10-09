@@ -67,6 +67,14 @@ export function claudeQuotaEvents(value: unknown, sessionId: string, ts: string)
     }
     events.push(event);
   }
+  if (["overageStatus", "isUsingOverage", "overageDisabledReason"].some((key) => key in info)) {
+    const event = events[0] ?? { type: "status" as const, session_id: sessionId, ts };
+    event.account_usage = claudeOverageDiagnostics(info).map((d) => ({
+      code: redactSecrets(d.code).slice(0, 160),
+      detail: redactSecrets(d.detail).slice(0, 240),
+    }));
+    if (events.length === 0) events.push(event);
+  }
   return events;
 }
 
@@ -81,3 +89,4 @@ function object(value: unknown): ObjectValue | null {
     ? (value as ObjectValue)
     : null;
 }
+import { claudeOverageDiagnostics } from "./account-resources.js";

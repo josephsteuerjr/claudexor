@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { accountResetServices } from "./account-reset-services.js";
 import { join } from "node:path";
 import {
   DaemonClient,
@@ -286,9 +287,9 @@ export async function main(): Promise<void> {
       () => commandActivityRecords(threads.all().flatMap((store) => store.records())),
       startupConcurrencyCaps,
     );
-    const runRetention = services.runRetention;
-    services.runRetention = models.withRetention(runRetention);
-    Object.assign(services, models.routes);
+    services.runRetention = models.withRetention(services.runRetention);
+    const accountControls = accountResetServices(commandStoreSlot, quotaStoreSlot);
+    Object.assign(services, models.routes, accountControls);
     maintenance.bind(services);
     control = !controlApiEnabledForStartup({
       disabledByEnv: process.env.CLAUDEXOR_NO_CONTROL_API === "1",

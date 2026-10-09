@@ -23,7 +23,6 @@ import {
   HarnessUnavailableError,
   throwIfEffortRejected,
   interactionChannelFromSpec,
-  needsScopedHomeKeychainBridge,
   providerScrubEnv,
   runCapture,
   runCliHarness,
@@ -40,8 +39,12 @@ import {
 export { CLAUDE_MANAGED_LOGIN, claudeQuotaModelAliases } from "./capability-profile.js";
 import { claudeInstallation } from "./doctor-remedy.js";
 import { claudeDoctor } from "./doctor.js";
-import { claudeNativeHomeEnv, defaultNativeClaudeConfigDir } from "./native-home.js";
-export { claudeAccountIdentity, defaultNativeClaudeConfigDir } from "./native-home.js";
+import { claudeNativeEnv, defaultNativeClaudeConfigDir } from "./native-home.js";
+export {
+  claudeAccountIdentity,
+  defaultNativeClaudeConfigDir,
+  claudeNativeEnv,
+} from "./native-home.js";
 import { createClaudeParser } from "./parse.js";
 import { withClaudeApiFailureParser, withClaudeVendorFailure } from "./vendor-failure.js";
 import { probeClaudeCredentialProfile, resolveClaudeProfileRoute } from "./profile.js";
@@ -70,7 +73,7 @@ import {
   probeClaudeEffortLevels,
   probeClaudeHelp,
 } from "./effort-probe.js";
-export { BIN, CLAUDE_EFFORT_SNAPSHOT } from "./effort-probe.js";
+export { BIN, CLAUDE_EFFORT_SNAPSHOT, detectClaudeVersion } from "./effort-probe.js";
 export {
   CLAUDE_AUTH_REFRESH_TERMINATION_UNCONFIRMED,
   claudeOauthAccessTokenIsFresh,
@@ -179,23 +182,6 @@ export interface ClaudeAuthStatusProbeOptions {
   configDir?: string;
   abortSignal?: AbortSignal;
   runCapture?: typeof runCapture;
-}
-
-export function claudeNativeEnv(
-  base?: Record<string, string | null | undefined>,
-  configDir?: string,
-): Record<string, string | null | undefined> {
-  const raw = {
-    ...(base ?? {}),
-    ...providerScrubEnv(),
-  };
-  const native = needsScopedHomeKeychainBridge(CLAUDE_CAPABILITY_PROFILE)
-    ? claudeNativeHomeEnv(raw)
-    : raw;
-  return {
-    ...native,
-    CLAUDE_CONFIG_DIR: configDir ?? defaultNativeClaudeConfigDir(base),
-  };
 }
 
 export async function probeAuthStatus(
@@ -772,3 +758,4 @@ async function* runClaude(
   );
   yield* withClaudeVendorFailure(events);
 }
+export { claudeResourceReason, claudeResetDescription } from "./account-resources.js";

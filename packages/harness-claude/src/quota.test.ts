@@ -7,6 +7,34 @@ const parse = (info: Record<string, unknown>) =>
   claudeRateLimitEvents({ rate_limit_info: info }, "native-profile-session", ts);
 
 describe("Claude native quota observations", () => {
+  it("translates overage diagnostics and explicitly clears absent reasons", () => {
+    const active = parse({
+      overageStatus: "rejected",
+      isUsingOverage: false,
+      overageDisabledReason: "org_level_disabled",
+    })[0]!;
+    expect(active.account_usage).toContainEqual({
+      code: "org_level_disabled",
+      detail: "Extra usage is disabled by the organization",
+    });
+    expect(active.account_usage).toContainEqual({
+      code: "is_using_overage",
+      detail: "Not currently using extra usage",
+    });
+    const cleared = parse({
+      overageStatus: null,
+      isUsingOverage: null,
+      overageDisabledReason: null,
+    })[0]!;
+    expect(cleared.account_usage).toContainEqual({
+      code: "overage_disabled_reason",
+      detail: "No extra-usage unavailability reason reported",
+    });
+    expect(cleared.account_usage).not.toContainEqual(
+      expect.objectContaining({ code: "org_level_disabled" }),
+    );
+    expect(active.quota).toBeUndefined();
+  });
   it("keeps measured sibling windows and prefers unified values over a duplicate dominant row", () => {
     const events = parse({
       status: "allowed",

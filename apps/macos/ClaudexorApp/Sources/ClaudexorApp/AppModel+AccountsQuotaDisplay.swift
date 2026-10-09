@@ -162,7 +162,8 @@ extension AppModel {
             accountsQuotaDisplayStates[locationID] = .loading
         }
         do {
-            let response = try await requestClient.quota(refresh: false)
+            let capabilities = await loadAccountResourceCapabilities(client: requestClient, at: locationID)
+            let response = try await requestClient.quota(resources: capabilities?.read == true)
             guard accountsQuotaDisplayTaskTokens[locationID] == token,
                   accountsQuotaDisplayGenerations[locationID] == generation,
                   isCurrentGateway(requestClient, at: locationID)

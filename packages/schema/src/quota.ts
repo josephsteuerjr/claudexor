@@ -1,4 +1,5 @@
 import { z } from "zod/v3";
+export { ControlQuotaRefreshRequest } from "./account-target.js";
 import { Id } from "./primitives.js";
 
 export const QuotaSource = z
@@ -402,22 +403,6 @@ export const ControlQuotaSnapshot = QuotaSnapshot.extend({
   ),
 }).describe("One vendor-owned quota snapshot plus its derived availability projection.");
 export type ControlQuotaSnapshot = z.infer<typeof ControlQuotaSnapshot>;
-
-export const ControlQuotaRefreshRequest = z
-  .object({
-    model: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "Optional model id/alias the caller intends to spend against. When present, each snapshot's availability.state is computed against this model (case-insensitive alias containment in either direction), so windows scoped to OTHER models never report the subject exhausted.",
-      ),
-  })
-  .strict()
-  .describe(
-    "Optional POST /v2/quota body; an empty or absent body keeps the model-agnostic projection.",
-  );
-export type ControlQuotaRefreshRequest = z.infer<typeof ControlQuotaRefreshRequest>;
 
 export const QuotaRefreshSkipped = z
   .object({

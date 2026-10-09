@@ -2,14 +2,24 @@ import type { CliCommandSpec } from "./command-registry.js";
 
 export const OPS_COMMAND_SPECS_BEFORE_REMOTE = [
   {
+    id: "account-reset",
+    usageArgs:
+      "<harness/profile_id> --offer <id> --idempotency-key <key> [--grant <id>] | --operation <id>",
+    positionalPatterns: [{ min: 0, max: 1 }],
+    summary: "Explicitly consume a native account reset or read its receipt",
+    flags: ["json", "offer", "grant", "idempotency-key", "operation"],
+    mutability: "ops",
+    stability: "stable",
+  },
+  {
     id: "quota",
     positionalPatterns: [
       { min: 0, max: 0 },
       { prefix: ["ingest-claude-statusline", "managed-v2"], min: 2, max: 3 },
     ],
-    usageArgs: "[--json] [--refresh]",
+    usageArgs: "[--json] [--resources] [--refresh [--profile <harness/profile_id>] [--model <id>]]",
     summary: "Show every vendor-owned quota window with provenance and freshness",
-    flags: ["json", "refresh"],
+    flags: ["json", "refresh", "resources", "profile", "model"],
     mutability: "ops",
     stability: "stable",
   },

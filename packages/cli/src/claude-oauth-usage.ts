@@ -1,6 +1,9 @@
+import { parseClaudeOauthUsage } from "./claude-oauth-codec.js";
+export { parseClaudeOauthUsage } from "./claude-oauth-codec.js";
 import { randomUUID } from "node:crypto";
 import {
   readClaudeOauthCredential,
+  readClaudeOauthOrganization,
   taggedRefreshFailure,
   type ClaudeOauthCredential,
 } from "./claude-oauth-credential.js";
@@ -8,15 +11,16 @@ import { loadConfig } from "@claudexor/config";
 import type { QuotaRefreshCycle, QuotaRefreshResult } from "@claudexor/daemon";
 import {
   canonicalProfileConfigDir,
+  detectClaudeVersion,
   CLAUDE_AUTH_REFRESH_TERMINATION_UNCONFIRMED,
   claudeNativeEnv,
   claudeOauthAccessTokenIsFresh,
-  claudeQuotaModelAliases,
   defaultNativeClaudeConfigDir,
   refreshClaudeNativeAuth,
 } from "@claudexor/harness-claude";
 import {
-  QuotaSnapshot as QuotaSnapshotSchema,
+  emptyResourceFacet,
+  type AccountResourceObservation,
   type QuotaAbsence,
   type QuotaSnapshot,
   type QuotaSubject,
@@ -29,6 +33,9 @@ import {
   type QuotaDiagnosticSink,
   type QuotaRefreshDiagnostic,
 } from "./quota-refresh-diagnostics.js";
+
+import { claudeResourceHeaders } from "./claude-resource-transport.js";
+import { observeClaudeAccountResources } from "./claude-resource-source.js";
 
 const SOURCE = "claude_oauth_usage" as const;
 
@@ -127,85 +134,13 @@ async function refreshCredentialDefault(
   return credential;
 }
 
-/** Pure mapping of the oauth/usage response onto QuotaSnapshot (testable). */
-export function parseClaudeOauthUsage(
-  value: unknown,
-  subjectId: string | null,
-  planLabel: string | null,
-  observedAt = new Date(),
-): QuotaSnapshot | null {
-  const root = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-  if (!root) return null;
-  const constraints = [
-    windowConstraint(root["five_hour"], "five_hour", "5 hour", 5 * 60 * 60),
-    windowConstraint(root["seven_day"], "seven_day", "7 day", 7 * 24 * 60 * 60),
-    ...scopedConstraints(root["limits"]),
-  ].filter((item) => item !== null);
-  if (constraints.length === 0) return null;
-  return QuotaSnapshotSchema.parse({
-    subject: {
-      harness: "claude",
-      credential_route: "vendor_native",
-      plan_label: planLabel,
-      subject_id: subjectId,
-    },
-    constraints,
-    source: SOURCE,
-    observed_at: observedAt.toISOString(),
-    freshness: "fresh",
-  });
-}
-
-function windowConstraint(
-  value: unknown,
-  id: string,
-  label: string,
-  windowSeconds: number,
-): Record<string, unknown> | null {
-  const window = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-  if (!window) return null;
-  const utilization = window["utilization"];
-  if (typeof utilization !== "number") return null;
-  return {
-    id,
-    label,
-    used_ratio: Math.min(Math.max(utilization / 100, 0), 1),
-    window_seconds: windowSeconds,
-    resets_at: typeof window["resets_at"] === "string" ? window["resets_at"] : null,
-    cooldown_until: null,
-  };
-}
-
-/** Per-model scoped weekly limits ride as extra constraints (label carries the model). */
-function scopedConstraints(value: unknown): Array<Record<string, unknown> | null> {
-  if (!Array.isArray(value)) return [];
-  return value.map((entry) => {
-    const limit = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
-    if (!limit || limit["kind"] !== "weekly_scoped") return null;
-    const percent = limit["percent"];
-    if (typeof percent !== "number") return null;
-    const scope = limit["scope"] as Record<string, unknown> | undefined;
-    const model = scope?.["model"] as Record<string, unknown> | undefined;
-    const displayName =
-      typeof model?.["display_name"] === "string" ? model["display_name"].trim() : "";
-    const name = displayName || "scoped";
-    const appliesToModels = displayName ? claudeQuotaModelAliases(displayName) : null;
-    return {
-      id: `weekly_scoped:${name}`,
-      label: `7 day (${name})`,
-      ...(appliesToModels ? { applies_to_models: appliesToModels } : {}),
-      used_ratio: Math.min(Math.max(percent / 100, 0), 1),
-      window_seconds: 7 * 24 * 60 * 60,
-      resets_at: typeof limit["resets_at"] === "string" ? limit["resets_at"] : null,
-      cooldown_until: null,
-    };
-  });
-}
-
 export interface ClaudeOauthUsageDeps {
   readCredential: typeof readClaudeOauthCredential;
   refreshCredential: ClaudeOauthCredentialRefresher;
   fetchUsage: (accessToken: string) => Promise<unknown>;
+  fetchRefill: (accessToken: string) => Promise<unknown>;
+  fetchPrepaid: (accessToken: string, organization: string) => Promise<unknown>;
+  readOrganization: typeof readClaudeOauthOrganization;
   now: () => Date;
   platform: NodeJS.Platform;
   diagnostic: QuotaDiagnosticSink;
@@ -248,6 +183,8 @@ export async function refreshClaudeOauthUsageQuota(
   deps: Partial<ClaudeOauthUsageDeps> = {},
   cycle?: QuotaRefreshCycle,
 ): Promise<QuotaRefreshResult> {
+  let nativeVersion: Promise<string | null> | undefined;
+  const readNativeVersion = () => (nativeVersion ??= detectClaudeVersion());
   const readCredential = deps.readCredential ?? readClaudeOauthCredential;
   const refreshCredential = deps.refreshCredential ?? refreshCredentialDefault;
   const now = deps.now ?? (() => new Date());
@@ -283,11 +220,17 @@ export async function refreshClaudeOauthUsageQuota(
   // subject every cycle and double-probe one credential (mirrors
   // quotaSubjectUniverseFromConfig's use of the migration record).
   const candidates: Array<{ subjectId: string | null; configDir: string }> =
-    readAccountsMigrationFile()["claude"] === undefined
+    !cycle?.target && readAccountsMigrationFile()["claude"] === undefined
       ? [{ subjectId: null, configDir: defaultNativeClaudeConfigDir() }]
       : [];
   for (const profile of loadConfig(noProjectRepoRoot()).global.credential_profiles) {
-    if (profile.harness_id !== "claude" || !profile.enabled) continue;
+    if (
+      profile.harness_id !== "claude" ||
+      (cycle?.target
+        ? cycle.target.harness !== "claude" || cycle.target.profile_id !== profile.profile_id
+        : !profile.enabled)
+    )
+      continue;
     if (profile.credential_kind !== "config_dir_login" || !profile.isolation_locator) continue;
     try {
       candidates.push({
@@ -299,6 +242,7 @@ export async function refreshClaudeOauthUsageQuota(
     }
   }
   const snapshots: QuotaSnapshot[] = [];
+  const resources: AccountResourceObservation[] = [];
   const absences: QuotaAbsence[] = [];
   // Read all current identities before the serial HTTP pass so token-identical
   // aliases inherit a saved floor regardless of profile order after restart.
@@ -503,10 +447,14 @@ export async function refreshClaudeOauthUsageQuota(
     let httpStatus: number | undefined;
     const fetchUsage =
       deps.fetchUsage ??
-      ((token: string) =>
-        fetchClaudeOauthUsage(token, (status) => {
-          httpStatus = status;
-        }));
+      (async (token: string) =>
+        fetchClaudeOauthUsage(
+          token,
+          (status) => {
+            httpStatus = status;
+          },
+          await claudeResourceHeaders(token, await readNativeVersion()),
+        ));
     try {
       report(candidate.subjectId, {
         stage: "usage_http",
@@ -517,6 +465,23 @@ export async function refreshClaudeOauthUsageQuota(
       const requestStartedAt = now();
       const usage = await fetchUsage(credential.accessToken);
       rejectedTokens.delete(tokenKey);
+      if (candidate.subjectId !== null) {
+        resources.push(
+          await observeClaudeAccountResources({
+            usage,
+            profileId: candidate.subjectId,
+            configDir: candidate.configDir,
+            accessToken: credential.accessToken,
+            requestStartedAt,
+            deps,
+            cycle,
+            now,
+            onRateLimited: () => throttledTokens.add(tokenKey),
+            readNativeVersion,
+          }),
+        );
+      }
+
       const snapshot = parseClaudeOauthUsage(
         usage,
         candidate.subjectId,
@@ -591,5 +556,20 @@ export async function refreshClaudeOauthUsageQuota(
       }
     }
   }
-  return { snapshots, absences };
+  for (const absence of absences) {
+    const id = absence.subject.subject_id;
+    if (id === null || resources.some((row) => row.target.profile_id === id)) continue;
+    const failed = {
+      ...emptyResourceFacet(),
+      last_attempt_at: now().toISOString(),
+      last_error: absence.reason,
+    };
+    resources.push({
+      target: { harness: "claude", profile_id: id },
+      spending: failed,
+      resets: failed,
+      ...(cycle?.foreground ? { balances: failed } : {}),
+    });
+  }
+  return { snapshots, absences, resources };
 }

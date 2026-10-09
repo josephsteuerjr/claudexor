@@ -1,6 +1,7 @@
 import { ControlProblem, ControlQuotaResponse } from "@claudexor/schema";
 import type { ParsedArgs } from "./args.js";
-import { flagBool } from "./args.js";
+import { accountResourceQuery, parseAccountTarget } from "./account-resource-query.js";
+import { flagBool, flagStr } from "./args.js";
 import { print, printJson, quotaRefreshLabel } from "./cli-io.js";
 import { renderCliFailure } from "./cli-error.js";
 import { ensureDaemon } from "./daemon-run.js";
@@ -19,11 +20,45 @@ export async function quotaCommand(args: ParsedArgs, json: boolean): Promise<num
     return 0;
   }
   try {
+    const profile = flagStr(args, "profile");
+    const model = flagStr(args, "model");
+    if (profile && !flagBool(args, "refresh")) throw new Error("--profile requires --refresh");
+    if (model && !flagBool(args, "refresh")) throw new Error("--model requires --refresh");
+    if (flagBool(args, "resources")) {
+      const value = await accountResourceQuery("resources", {
+        refresh: flagBool(args, "refresh"),
+        ...(profile ? { target: parseAccountTarget(profile) } : {}),
+        ...(model ? { model } : {}),
+      });
+      if (json) printJson(value);
+      else {
+        printQuota(value);
+        for (const row of value.resources) {
+          print(`${row.target.harness}/${row.target.profile_id}: resources`);
+          for (const key of ["balances", "spending", "resets", "diagnostics"] as const)
+            print(
+              `  ${key}: ${row[key].freshness}; ${JSON.stringify(row[key].value)}${row[key].last_error ? ` (${row[key].last_error})` : ""}`,
+            );
+        }
+      }
+      return 0;
+    }
     const { addr } = await ensureDaemon();
     const refresh = flagBool(args, "refresh");
     const response = await controlApiFetch(addr, "/quota", {
       method: refresh ? "POST" : "GET",
-      headers: { Authorization: `Bearer ${addr.token}` },
+      headers: {
+        Authorization: `Bearer ${addr.token}`,
+        ...(refresh ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(refresh
+        ? {
+            body: JSON.stringify({
+              ...(profile ? { target: parseAccountTarget(profile) } : {}),
+              ...(model ? { model } : {}),
+            }),
+          }
+        : {}),
     });
     const payload: unknown = await response.json();
     if (!response.ok) {

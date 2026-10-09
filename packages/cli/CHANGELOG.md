@@ -1,5 +1,39 @@
 # @claudexor/cli
 
+## 3.25.0
+
+### Minor Changes
+
+- Expose independently dated account resources and explicit Codex and Claude resets through the control API, CLI, MCP and native Accounts. Preserve original request identity through uncertain outcomes and keep provider results separate from resource refresh.
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@3.25.0
+  - @claudexor/daemon@3.25.0
+  - @claudexor/control-api@3.25.0
+  - @claudexor/mcp-server@3.25.0
+  - @claudexor/harness-codex@3.25.0
+  - @claudexor/harness-claude@3.25.0
+  - @claudexor/acp-server@3.25.0
+  - @claudexor/config@3.25.0
+  - @claudexor/core@3.25.0
+  - @claudexor/delivery@3.25.0
+  - @claudexor/gateway@3.25.0
+  - @claudexor/harness-acp@3.25.0
+  - @claudexor/harness-agy@3.25.0
+  - @claudexor/harness-cursor@3.25.0
+  - @claudexor/harness-fake@3.25.0
+  - @claudexor/harness-opencode@3.25.0
+  - @claudexor/harness-raw-api@3.25.0
+  - @claudexor/orchestrator@3.25.0
+  - @claudexor/review@3.25.0
+  - @claudexor/workspace@3.25.0
+  - @claudexor/artifact-store@3.25.0
+  - @claudexor/journal@3.25.0
+  - @claudexor/secrets@3.25.0
+  - @claudexor/util@3.25.0
+
 ## 3.24.0
 
 ### Minor Changes

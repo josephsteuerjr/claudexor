@@ -16,6 +16,7 @@ export interface ClaudeOauthCredential {
   subscriptionType: string | null;
   expiresAtMs: number | null;
   hasRefreshToken: boolean;
+  scopes?: string[];
 }
 
 const execFileAsync = promisify(execFile);
@@ -95,7 +96,27 @@ export function parseClaudeOauthCredential(raw: string): ClaudeOauthCredential |
           ? body["expiresAt"]
           : null,
       hasRefreshToken: typeof body["refreshToken"] === "string" && body["refreshToken"].length > 0,
+      scopes: Array.isArray(body["scopes"])
+        ? body["scopes"].filter((s): s is string => typeof s === "string")
+        : undefined,
     };
+  } catch {
+    return null;
+  }
+}
+
+/** Native organization binding, read only from the selected canonical store. */
+export async function readClaudeOauthOrganization(
+  configDir: string,
+): Promise<{ organizationUuid: string; accountUuid: string | null } | null> {
+  try {
+    const value = JSON.parse(await readFile(join(configDir, ".claude.json"), "utf8"))?.oauthAccount;
+    return typeof value?.organizationUuid === "string" && value.organizationUuid.length > 0
+      ? {
+          organizationUuid: value.organizationUuid,
+          accountUuid: typeof value.accountUuid === "string" ? value.accountUuid : null,
+        }
+      : null;
   } catch {
     return null;
   }

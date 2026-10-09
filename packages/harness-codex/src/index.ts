@@ -5,7 +5,7 @@ import {
   applyCodexRunProcessing,
 } from "./processing-session.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-export { parseCodexRateLimitsResponse } from "./quota.js";
+export { parseCodexRateLimitsResponse, parseCodexAccountResources } from "./quota.js";
 export { CodexRpcError, parseCodexRpcError, codexRpcErrorDetail } from "./rpc-error.js";
 export { createCodexModelAdapter } from "./model.js";
 export { describeCodexClientVersion } from "./http-client-version.js";

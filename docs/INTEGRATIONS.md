@@ -10,7 +10,7 @@ changing Claudexor.
 
 | Surface | Current role | Stability |
 |---|---|---|
-| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
+| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
 | Daemon and control API | Local durable queue, Agent runs, caller-owned model operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
@@ -293,6 +293,25 @@ constraints themselves. `POST /v2/quota` accepts an optional `{"model": …}`
 body to compute `state` against the model the caller intends to spend
 (case-insensitive alias containment in either direction). The CLI projection
 is `claudexor quota [--refresh] --json`.
+Typed account resources are opt-in: request `view=resources` on either quota
+operation, or on `GET /v2/credential-profiles` with `snapshot=true`. Detect the query
+parameter in the operation catalog. The rich quota response adds `resources`, with
+independent balances, spending, reset offers and diagnostic facets per exact account.
+POST quota accepts `target: {harness, profile_id}` for selected-account refresh.
+The CLI equivalent is `claudexor quota --resources --refresh --profile claude/work --json`.
+Amounts preserve decimal strings, units and nullable provider scale/currency; failed
+reads retain stale values rather than inventing zero. Render reset descriptions and
+contextual diagnostic details instead of raw native scope/reason identifiers.
+
+`POST /v2/account-resets` accepts `{target, offer_id, grant_id?}` and requires an
+Idempotency-Key. The receipt separates provider outcome from readback freshness;
+`GET /v2/account-resets/:id` reads it again. After a timeout without a receipt id,
+repeat the original POST body and key. Codex `already_redeemed` confirms that native
+request, while Claude `already_used` is not proof of this operation's success.
+The CLI uses `claudexor account-reset claude/work --offer claude_granted --grant <id>
+--idempotency-key <key> --json`; `--operation <id>` reads its receipt. This direct
+operation does not need an inference slot and never changes billing settings.
+
 Control quota snapshots also carry a server-derived `snapshot_id` for stable
 presentation identity. Native incremental sources (`claude_rate_limit_event`,
 `codex_app_server_event`) report single windows with their own timestamps; they
@@ -568,7 +587,10 @@ answer, finished work, or applyability.
 The implemented tools include `claudexor_ask` (with `deepScan`), `claudexor_run`,
 `claudexor_best_of`, `claudexor_plan`, `claudexor_create`,
 `claudexor_thread_create`, `claudexor_thread_turn`, `claudexor_thread_read`,
-`claudexor_status`, `claudexor_capabilities`
+`claudexor_status`, `claudexor_account_resources` (the same rich quota read,
+with optional `refresh`, `target` and `model`), `claudexor_account_reset`
+(explicit reset with original `idempotency_key`, or receipt lookup by `operation_id`),
+`claudexor_capabilities`
 (the derived AgentCapabilityCatalog: per-harness live capabilities, modes,
 the mutability matrix, run-control keys), and the read-only recovery tools
 `claudexor_accounts` (the server-authored credential-profile/readiness/quota

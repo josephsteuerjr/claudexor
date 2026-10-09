@@ -27,6 +27,30 @@
     },
     {
       "method": "POST",
+      "path": "/v2/account-resets",
+      "mutating": true,
+      "applicability": "global",
+      "summary": "Explicitly consume a native account reset and read back its resources.",
+      "auth": "loopback_bearer",
+      "request_schema": "ControlAccountResetRequest",
+      "parameters": [],
+      "response_schema": "ControlAccountResetResponse",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/account-resets/:id",
+      "mutating": false,
+      "applicability": "global",
+      "summary": "Read a durable account reset receipt.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [],
+      "response_schema": "ControlAccountResetResponse",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "POST",
       "path": "/v2/accounts-migration/rollback",
       "mutating": true,
       "applicability": "global",
@@ -58,6 +82,17 @@
       "auth": "loopback_bearer",
       "request_schema": null,
       "parameters": [
+        {
+          "name": "view",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "resources"
+          ],
+          "schema_ref": null,
+          "description": "Include typed resources in quota; requires snapshot=true."
+        },
         {
           "name": "snapshot",
           "in": "query",
@@ -683,8 +718,20 @@
       "summary": "Read cached per-profile harness quota snapshots.",
       "auth": "loopback_bearer",
       "request_schema": null,
-      "parameters": [],
-      "response_schema": "ControlQuotaResponse",
+      "parameters": [
+        {
+          "name": "view",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "resources"
+          ],
+          "schema_ref": null,
+          "description": "Opt in to typed account resources alongside quota."
+        }
+      ],
+      "response_schema": "ControlQuotaQueryResponse",
       "error_schema": "ControlProblem"
     },
     {
@@ -695,8 +742,20 @@
       "summary": "Refresh and read per-profile harness quota snapshots.",
       "auth": "loopback_bearer",
       "request_schema": "ControlQuotaRefreshRequest",
-      "parameters": [],
-      "response_schema": "ControlQuotaResponse",
+      "parameters": [
+        {
+          "name": "view",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "resources"
+          ],
+          "schema_ref": null,
+          "description": "Opt in to typed account resources alongside quota."
+        }
+      ],
+      "response_schema": "ControlQuotaQueryResponse",
       "error_schema": "ControlProblem"
     },
     {

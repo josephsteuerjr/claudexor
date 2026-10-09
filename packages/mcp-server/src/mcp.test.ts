@@ -135,7 +135,11 @@ describe("Claudexor MCP server (SDK v2)", () => {
     const init = w.responses.find((r) => r.id === "init");
     expect(init?.result?.protocolVersion).toBe("2025-06-18");
     expect(init?.result?.serverInfo?.name).toBe("claudexor");
-    expect(w.responses.find((r) => r.id === 2)?.result?.tools).toHaveLength(21);
+    const listedTools = w.responses.find((r) => r.id === 2)?.result?.tools;
+    expect(listedTools).toHaveLength(23);
+    expect(listedTools.map((tool: { name: string }) => tool.name)).toEqual(
+      expect.arrayContaining(["claudexor_account_resources", "claudexor_account_reset"]),
+    );
     const call = w.responses.find((r) => r.id === 3);
     expect(call?.result?.content?.[0]?.text).toContain("slow done");
   });
@@ -1041,8 +1045,11 @@ describe("Claudexor MCP server (SDK v2)", () => {
     );
     expect(accounts?.description).toContain("never poll with it");
     const members = accounts?.outputSchema?.anyOf as Array<Record<string, unknown>>;
-    expect(members).toHaveLength(2);
-    const [listing, atomic] = members.map((member) => member.properties as Record<string, unknown>);
+    expect(members).toHaveLength(3);
+    const [listing, atomic, resources] = members.map(
+      (member) => member.properties as Record<string, unknown>,
+    );
+    expect(resources?.quota).toMatchObject({ properties: { resources: expect.any(Object) } });
     expect(listing).toMatchObject({ profiles: expect.any(Object) });
     expect(listing?.quotaEventCursor).toBeUndefined();
     expect(atomic).toMatchObject({

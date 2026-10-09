@@ -1,3 +1,4 @@
+export { parseCodexAccountResources } from "./account-resources.js";
 import type { HarnessEvent, QuotaConstraint, QuotaSnapshot } from "@claudexor/schema";
 import { nowIso, redactSecrets } from "@claudexor/util";
 
@@ -21,7 +22,7 @@ export function parseCodexRateLimitsResponse(
       ) {
         throw new Error("Codex quota response contains an unrecognized window");
       }
-      if (!window || !isRateLimitWindow(window)) continue;
+      if (windowName === "individualLimit" || !window || !isRateLimitWindow(window)) continue;
       for (const key of ["usedPercent", "windowDurationMins", "resetsAt"]) {
         if (key in window && window[key] !== null && finiteNumber(window[key]) === null)
           throw new Error("Codex quota response contains a malformed window");
@@ -51,7 +52,7 @@ function parseCodexRateLimits(
     const bucketLabel = textOrNull(bucket["limitName"]) ?? bucketId;
     for (const [windowName, candidate] of Object.entries(bucket)) {
       const window = objectOrNull(candidate);
-      if (!window || !isRateLimitWindow(window)) continue;
+      if (windowName === "individualLimit" || !window || !isRateLimitWindow(window)) continue;
       const usedPercent = finiteNumber(window["usedPercent"]);
       const durationMins = finiteNumber(window["windowDurationMins"]);
       const resetSeconds = finiteNumber(window["resetsAt"]);
@@ -67,22 +68,6 @@ function parseCodexRateLimits(
         cooldown_until: null,
       });
     }
-  }
-  // Live-verified shape (codex 0.142.2, 2026-07-17): a TOP-LEVEL
-  // `rateLimitResetCredits: {availableCount, credits[]}` beside the buckets
-  // (PR#28143). Zero credits stay silent; a positive balance is a visible
-  // fact row so the footer never hides granted headroom.
-  const resetCredits = objectOrNull(response["rateLimitResetCredits"]);
-  const availableCredits = resetCredits ? finiteNumber(resetCredits["availableCount"]) : null;
-  if (availableCredits !== null && availableCredits > 0) {
-    constraints.push({
-      id: "reset_credits",
-      label: `${availableCredits} reset credit${availableCredits === 1 ? "" : "s"} available`,
-      used_ratio: null,
-      window_seconds: null,
-      resets_at: null,
-      cooldown_until: null,
-    });
   }
   return [
     {

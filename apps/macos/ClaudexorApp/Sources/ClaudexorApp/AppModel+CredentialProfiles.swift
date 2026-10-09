@@ -99,7 +99,8 @@ extension AppModel {
                 error: $2)
         }
         do {
-            let response = try await requestClient.credentialProfilesSnapshot()
+            let capabilities = await loadAccountResourceCapabilities(client: requestClient, at: locationID)
+            let response = try await requestClient.credentialProfilesSnapshot(resources: capabilities?.accountsSnapshot == true)
             guard accountsRefreshIsCurrent(generation, client: requestClient, at: locationID)
             else {
                 return finish(nil, false, accountsRefreshRetirementMessage(

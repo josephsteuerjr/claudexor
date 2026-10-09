@@ -8,6 +8,7 @@ import { continuedRunOf, isHarnessMaintenanceOperation, isModelOperation } from 
 export function productCommandRecords(records: readonly JobRecord[]): JobRecord[] {
   return records.filter(
     (record) =>
+      !record.id.startsWith("account-reset-") &&
       !isDeliveryCommand(record) &&
       !isModelOperation(record.params) &&
       !isHarnessMaintenanceOperation(record.params),
@@ -83,7 +84,10 @@ export function prunableCommandIds(
   // Delivery commands retain their existing age/cap policy.
   const terminal = records
     .filter(
-      (record) => !isModelOperation(record.params) && !["running", "queued"].includes(record.state),
+      (record) =>
+        !record.id.startsWith("account-reset-") &&
+        !isModelOperation(record.params) &&
+        !["running", "queued"].includes(record.state),
     )
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   const pruned = new Set<string>();

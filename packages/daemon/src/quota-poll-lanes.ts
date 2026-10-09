@@ -1,5 +1,11 @@
 import { QUOTA_GAP_ABSENCE_REASONS, quotaSourceTraits } from "@claudexor/schema";
-import type { QuotaAbsence, QuotaSnapshot, QuotaSubject } from "@claudexor/schema";
+import type {
+  AccountTarget,
+  AccountResourceObservation,
+  QuotaAbsence,
+  QuotaSnapshot,
+  QuotaSubject,
+} from "@claudexor/schema";
 import { QuotaPollPacer, type QuotaPacerStateStore } from "./quota-poll-pacer.js";
 import {
   earliestFreshRenewalAt,
@@ -16,6 +22,7 @@ export const QUOTA_POLL_INTERVAL_MS = 60_000;
  * stated by the source, never inferred from an empty snapshot list. */
 export interface QuotaRefreshResult {
   snapshots: QuotaSnapshot[];
+  resources?: AccountResourceObservation[];
   absences?: QuotaAbsence[];
 }
 
@@ -26,6 +33,7 @@ export interface QuotaRefreshResult {
  * ignores the argument keeps the pre-existing contract. */
 export interface QuotaRefreshCycle {
   readonly foreground: boolean;
+  readonly target?: AccountTarget;
   /** Background cycles fetch only due primary evidence. Explicit refreshes
    * still ask every eligible subject; floor and alias checks remain separate. */
   readonly shouldRefresh?: (subject: QuotaSubject) => boolean;
@@ -222,7 +230,13 @@ export function selectCycleEntries(
   isCurrent: () => boolean = () => true,
   subjects: readonly QuotaSubject[] = [],
   snapshots: readonly QuotaSnapshot[] = [],
+  target?: AccountTarget,
 ): LaneCycleSelection {
+  subjects = target
+    ? subjects.filter(
+        (subject) => subject.harness === target.harness && subject.subject_id === target.profile_id,
+      )
+    : subjects;
   const skipped =
     scope === null
       ? refresherLanes.lanes.flatMap((lane) => {
@@ -253,6 +267,9 @@ export function selectCycleEntries(
     }
   }
   const running = refresherLanes.entries
+    .filter(
+      (entry) => !target || entry.lane.vendor === null || entry.lane.vendor === target.harness,
+    )
     .filter((entry) =>
       scope === null
         ? entry.lane.vendor === null || !skippedVendors.has(entry.lane.vendor)
@@ -264,15 +281,18 @@ export function selectCycleEntries(
       refresh: () =>
         entry.refresh({
           foreground: scope === null,
+          ...(target ? { target } : {}),
           shouldRefresh: (subject) =>
-            scope === null ||
-            remainingQuotaRefreshDemand(
-              snapshots.filter(
-                (snapshot) => snapshot.subject.credential_route === subject.credential_route,
-              ),
-              [subject],
-              nowMs + QUOTA_POLL_INTERVAL_MS,
-            ).size > 0,
+            target
+              ? subject.harness === target.harness && subject.subject_id === target.profile_id
+              : scope === null ||
+                remainingQuotaRefreshDemand(
+                  snapshots.filter(
+                    (snapshot) => snapshot.subject.credential_route === subject.credential_route,
+                  ),
+                  [subject],
+                  nowMs + QUOTA_POLL_INTERVAL_MS,
+                ).size > 0,
           pacing: {
             bindCredentials: (bindings) => {
               if (isCurrent()) entry.lane.pacer.bindCredentials(bindings);
@@ -284,7 +304,12 @@ export function selectCycleEntries(
           },
         }),
     }));
-  return { running, skipped: [...skipped, ...subjectSkips] };
+  return {
+    running,
+    skipped: [...skipped, ...subjectSkips].filter(
+      (row) => !target || row.vendor === target.harness,
+    ),
+  };
 }
 
 /** Commit validated source pacing independently of quota facts. Immediate
@@ -409,13 +434,15 @@ export function subjectCoverSets(active: readonly QuotaSnapshot[]): {
 export function foldAbsenceClaims(input: {
   claims: readonly QuotaAbsence[];
   prior: readonly QuotaAbsence[];
-  rebuilt: (harness: string) => boolean;
+  rebuilt: (harness: string, subjectId: string | null) => boolean;
   covered: ReadonlySet<string>;
   freshCovered: ReadonlySet<string>;
   subjects: readonly QuotaSubject[];
   now: number;
 }): QuotaAbsence[] {
-  const preserved = input.prior.filter((absence) => !input.rebuilt(absence.subject.harness));
+  const preserved = input.prior.filter(
+    (absence) => !input.rebuilt(absence.subject.harness, absence.subject.subject_id),
+  );
   const result: QuotaAbsence[] = [];
   const claimed = new Set<string>(preserved.map((item) => quotaSubjectIdentity(item.subject)));
   for (const claim of input.claims) {
@@ -426,7 +453,7 @@ export function foldAbsenceClaims(input: {
     result.push(claim);
   }
   for (const subject of input.subjects) {
-    if (!input.rebuilt(subject.harness)) continue;
+    if (!input.rebuilt(subject.harness, subject.subject_id)) continue;
     const key = quotaSubjectIdentity(subject);
     if (input.covered.has(key) || claimed.has(key)) continue;
     claimed.add(key);

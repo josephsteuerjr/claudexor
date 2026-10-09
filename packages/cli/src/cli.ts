@@ -104,6 +104,7 @@ import {
   type PluginVerb,
 } from "./plugins.js";
 import { settingsCommand } from "./settings-command.js";
+import { accountResetCommand } from "./account-reset-command.js";
 import { quotaCommand } from "./quota-command.js";
 import { trustCommand } from "./trust-command.js";
 import { projectCommand } from "./project-command.js";
@@ -1016,6 +1017,8 @@ async function dispatch(args: ParsedArgs, outputMode: CliOutputMode): Promise<nu
     case "settings":
       return settingsCommand(args, json);
 
+    case "account-reset":
+      return accountResetCommand(args, json);
     case "quota":
       return quotaCommand(args, json);
 

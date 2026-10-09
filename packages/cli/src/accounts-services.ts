@@ -9,7 +9,6 @@ import type {
   CredentialProfileStatus,
   CredentialUnusableObservation,
 } from "@claudexor/schema";
-import { withQuotaAvailability } from "@claudexor/schema";
 import {
   composeCredentialProfileEvidence,
   type VendorQuotaObservations,
@@ -20,6 +19,8 @@ import { buildGateway, buildRegistry, checkHarnessModel } from "./registry.js";
 import { delegationCapabilityFor } from "./delegation-capability.js";
 import { accountObservations } from "./account-observations.js";
 import { effectiveSetupLoginCapability } from "./setup-login-capability.js";
+
+import { accountResourcesResponse, legacyQuotaResponse } from "./quota-services.js";
 
 const NO_PROJECT_ROOT = noProjectRepoRoot();
 
@@ -116,7 +117,7 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
       }),
     };
   };
-  const credentialProfiles = async (input?: { snapshot?: boolean }) => {
+  const credentialProfiles = async (input?: { snapshot?: boolean; view?: "resources" }) => {
     if (input?.snapshot === true) {
       accountObservations.invalidateCatalogs();
       const [probed, statuses, git, fencedQuota] = await Promise.all([
@@ -141,7 +142,10 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
         }),
         harnesses: await projectHarnessStatuses(statuses),
         git,
-        quota: withQuotaAvailability(rawQuota),
+        quota:
+          input.view === "resources"
+            ? accountResourcesResponse(quotaRegistry(), rawQuota, fencedQuota.resources)
+            : legacyQuotaResponse(quotaRegistry(), rawQuota, fencedQuota.resources),
         quotaEventCursor: fencedQuota.quotaEventCursor,
       };
     }

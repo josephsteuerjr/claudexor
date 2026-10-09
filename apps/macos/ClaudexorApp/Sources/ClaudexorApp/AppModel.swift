@@ -142,10 +142,8 @@ final class AppModel {
     /// bottom-left accounts popover (list + guided add + per-account login).
     var credentialProfiles: [CredentialProfileEntry] = []
     var remoteCredentialProfiles: [ExecutionLocationID: [CredentialProfileEntry]] = [:]
-    /// Per-harness POOL authority (unified account model, INV-135): the
-    /// server-computed `next_up` routing verdict per harness. Account facts
-    /// live on the profile rows; routing facts live HERE — nothing re-derives
-    /// the pool client-side (the `harnessAccounts` pseudo-row is retired).
+    /// Server-computed `next_up` pool authority (INV-135). Account facts live
+    /// on the profile rows; surfaces must never reconstruct this routing pool.
     var accountPools: [HarnessAccountPool] = []
     var remoteAccountPools: [ExecutionLocationID: [HarnessAccountPool]] = [:]
     /// Cached registry hydration is independent of an explicit atomic refresh:
@@ -276,6 +274,7 @@ final class AppModel {
     /// Display freshness is intentionally separate from routing authority.
     /// Stale values may remain visible, but can never make `next_up` current.
     var accountsQuotaDisplayStates: [ExecutionLocationID: AccountsQuotaDisplayState] = [:]
+    let accountResourceActions = AccountsResourceActions(preferences: .standard)
     @ObservationIgnored var accountsQuotaDisplayGenerations: [ExecutionLocationID: UInt64] = [:]
     @ObservationIgnored var accountsQuotaSubscribers:
         [ExecutionLocationID: Set<UUID>] = [:]
