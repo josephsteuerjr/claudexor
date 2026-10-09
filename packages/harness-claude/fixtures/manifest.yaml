@@ -19,6 +19,11 @@
 # came from (the adapter stamps payload.final_source on final messages).
 cli: claude
 fixtures:
+  # Normalized event replay from the 2026-10-08 failed resume incident.
+  # Raw CLI stdout was not retained: this is NOT a vendor-wire recording.
+  # Session ids and timestamps are synthetic; terminal diagnostic shape is preserved.
+  signals/missing-resume-session.jsonl:
+    source: synthetic
   basic-run.jsonl:
     source: synthetic
     expectations:

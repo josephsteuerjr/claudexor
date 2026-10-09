@@ -1161,7 +1161,10 @@ and retry evidence stays profile-attributable, and the run's `auth_route`
 receipt carries `profile_id`; Control API projects it as `authRoute.profileId`
 without re-deriving it. Vendor sessions record the profile they were
 created under (the attempt's session capsule, `session-capsule.json`); a
-session has one holder row at a time — the engine boundary re-verifies every
+session has one holder row at a time. History lookup uses the full
+`(harness_id, profile_id)` identity for source, target and capsule relocation;
+a disabled holder remains readable for transfer, independently of dispatch
+admission. The engine boundary re-verifies every
 cached session against the RESOLVED account, and a pool switch either MOVES
 the session file into the next row's store through the adapter's
 `continuity` (claude, codex) and resumes it there, or starts a fresh vendor
@@ -4249,7 +4252,11 @@ account (`native`), or `packet` once a typed fact (locate miss, identity
 mismatch, adapter rejection, no session ever reported) proved the native
 carrier unusable, bounded by
 `transient_retry.max_retries` per account; hops are bounded by the profiles
-already tried. A bare backoff frame (`retry_delay_ms`, no reset, no
+already tried. Claude's failed terminal CLI diagnostic naming a missing session
+also rejects the native carrier; generic execution errors and model prose do
+not. Existing transcripts misplaced outside the correct holder store are not
+migrated automatically: a locate miss retains them and uses the evidence packet.
+A bare backoff frame (`retry_delay_ms`, no reset, no
 constraint) is transport when a session exists to resume. On a native carrier
 the user prompt is one constant notice ("the previous process stopped …
 continue from where it stopped … a cut-off tool call may or may not have taken

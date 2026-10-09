@@ -1,5 +1,26 @@
 # @claudexor/orchestrator
 
+## 3.23.1
+
+### Patch Changes
+
+- 1111845: Keep session history bound to both its harness and profile when locating, moving and continuing it. Recognize Claude's failed missing-session diagnostic and continue through the existing evidence packet instead of retrying the unavailable native session. Previously misplaced histories remain preserved and are not relocated automatically.
+  - @claudexor/arbitration@3.23.1
+  - @claudexor/artifact-store@3.23.1
+  - @claudexor/budget@3.23.1
+  - @claudexor/config@3.23.1
+  - @claudexor/context@3.23.1
+  - @claudexor/core@3.23.1
+  - @claudexor/delivery@3.23.1
+  - @claudexor/event-log@3.23.1
+  - @claudexor/gateway@3.23.1
+  - @claudexor/policy@3.23.1
+  - @claudexor/review@3.23.1
+  - @claudexor/schema@3.23.1
+  - @claudexor/synthesis@3.23.1
+  - @claudexor/util@3.23.1
+  - @claudexor/workspace@3.23.1
+
 ## 3.23.0
 
 ### Patch Changes
