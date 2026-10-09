@@ -57,6 +57,7 @@ export async function runStartupCrashGc(
   deps: Pick<LifecycleDeps, "daemonDir" | "diagnostics" | "logPath"> & {
     /** Scope roots of the stage-2 prepared global command projection. */
     knownProjectRoots: () => readonly string[];
+    knownExecutionRoots?: () => readonly string[];
   },
 ): Promise<void> {
   const pidsPath = join(deps.daemonDir, "pids.json");
@@ -66,6 +67,7 @@ export async function runStartupCrashGc(
   try {
     const sweepActions = await sweepOrphanWorkspaces({
       knownProjectRoots: deps.knownProjectRoots,
+      ...(deps.knownExecutionRoots ? { knownExecutionRoots: deps.knownExecutionRoots } : {}),
     });
     for (const action of sweepActions) {
       lifecycleDiagnostic(deps, { stage: "crash_gc_sweep", message: `sweep: ${action}` });

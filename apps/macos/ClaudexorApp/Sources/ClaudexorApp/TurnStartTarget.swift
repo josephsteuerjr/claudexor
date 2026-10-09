@@ -25,6 +25,8 @@ struct TurnStartTarget {
         .init(
             locationID: locationID,
             repoRoot: (repoRoot ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            // A delegated thread executes live in its caller-owned root and never
+            // provisions a worktree: the in-place column is its closest cell.
             workspace: workspaceMode == "isolated" ? .isolated : .inPlace,
             destination: .existing(
                 threadID: threadID, eligibleHarnesses: eligibleHarnesses))

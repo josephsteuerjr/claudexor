@@ -14,8 +14,10 @@ import {
   appliedAttemptFacts,
   appliedEvidenceComplete,
   assertDelegatedEvidence,
+  followSpecHome,
   outerBoundaryNotice,
   scopedHarnessHome,
+  selectLaneHome,
 } from "./delegatedHome.js";
 
 function envelopeAt(base: string, repoRoot: string, inPlace: boolean): WorkspaceEnvelope {
@@ -74,6 +76,112 @@ describe("scopedHarnessHome", () => {
       DelegatedHomeUnavailableError,
     );
     expect(scopedHarnessHome(wsm, envelope, true, false).isolated).toBe(false);
+  });
+});
+
+describe("durable lane home of a delegated thread candidate (INV-034)", () => {
+  const base = mkdtempSync(join(tmpdir(), "claudexor-delegated-lane-"));
+  const project = join(base, "project");
+  const copy = join(base, "copy");
+  ensureDir(project);
+  ensureDir(copy);
+  // The execution root's manager owns per-attempt scratch; the lane belongs to
+  // the stable project identity, exactly as the orchestrator keys it.
+  const wsm = new WorkspaceManager(copy, { runtimeRoot: join(base, "copy-runtime") });
+  const lanes = new WorkspaceManager(project, { runtimeRoot: join(base, "project-runtime") });
+  const laneFor = (profile: string | null) => lanes.laneHomeEnv("th-1", "claude", profile).env;
+  afterAll(() => rmSync(base, { recursive: true, force: true }));
+
+  it("re-keys the in-place candidate to the resolved account's lane, the same home every turn", () => {
+    const first = scopedHarnessHome(wsm, envelopeAt(base, copy, true), true, true, "full", laneFor);
+    const envelopeHome = first.homeDir;
+    selectLaneHome(first, "acct-a");
+    const second = scopedHarnessHome(
+      wsm,
+      envelopeAt(base, copy, true),
+      true,
+      true,
+      "full",
+      laneFor,
+    );
+    selectLaneHome(second, "acct-a");
+    const lane = laneFor("acct-a")["HOME"];
+    expect(first.homeDir).toBe(lane);
+    expect(first.homeDir).not.toBe(envelopeHome);
+    expect(second.homeDir).toBe(first.homeDir);
+    expect(first.env?.["HOME"]).toBe(lane);
+    expect(lane).toContain(join("project-runtime", "lanes", "th-1", "claude-acct-a", "home"));
+    expect(appliedAttemptFacts(first, "full", "requested")).toMatchObject({
+      harness_home_isolated: true,
+      harness_home_dir: lane,
+      credential_profile_applied: "acct-a",
+      confinement_unavailable_reason: DELIBERATE_NO_OUTER_BOUNDARY_REASON,
+    });
+    expect(appliedEvidenceComplete(appliedAttemptFacts(first, "full", "requested"))).toBe(true);
+  });
+
+  it("keeps Best-of/isolated candidates and ordinary in-place turns off the lane", () => {
+    const isolated = scopedHarnessHome(
+      wsm,
+      envelopeAt(base, copy, false),
+      false,
+      true,
+      "full",
+      laneFor,
+    );
+    selectLaneHome(isolated, "acct-a");
+    expect(isolated.laneHomeFor).toBeUndefined();
+    expect(isolated.homeDir).toBe(join(base, "home"));
+    const ordinary = scopedHarnessHome(
+      wsm,
+      envelopeAt(base, copy, true),
+      true,
+      false,
+      "full",
+      laneFor,
+    );
+    selectLaneHome(ordinary, "acct-a");
+    expect(ordinary).toEqual({
+      isolated: false,
+      homeDir: null,
+      outerBoundaryUnavailableReason: null,
+    });
+  });
+
+  it("follows an in-run account hop: home and account move together, failure path included", () => {
+    const home = scopedHarnessHome(
+      wsm,
+      envelopeAt(base, copy, true),
+      true,
+      true,
+      "workspace_write",
+      laneFor,
+    );
+    selectLaneHome(home, "acct-a");
+    const rotatedEnv = laneFor("acct-b");
+    // The live spec after rotatedSpecInLaneHome: account B, B's lane env.
+    followSpecHome(home, { env: rotatedEnv, credential_profile: { profile_id: "acct-b" } }, null);
+    // A later failure records through the SAME object with the run's requested
+    // profile as fallback; the evidence must still name what actually ran.
+    const failure = appliedAttemptFacts(home, "workspace_write", "acct-a");
+    expect(failure.harness_home_dir).toBe(rotatedEnv["HOME"]);
+    expect(failure.credential_profile_applied).toBe("acct-b");
+  });
+
+  it("does not relabel an envelope home that the spec never left", () => {
+    const home = scopedHarnessHome(
+      wsm,
+      envelopeAt(base, copy, true),
+      true,
+      true,
+      "workspace_write",
+    );
+    const before = home.homeDir;
+    followSpecHome(home, { env: { HOME: "/somewhere/else" }, credential_profile: null }, "req");
+    expect(home.homeDir).toBe(before);
+    expect(appliedAttemptFacts(home, "workspace_write", "x").credential_profile_applied).toBe(
+      "req",
+    );
   });
 });
 

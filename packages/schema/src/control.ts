@@ -653,6 +653,13 @@ export const ControlRunSummary = z
       .default(null)
       .describe("Typed failure record; null unless the run failed."),
     project: ControlProjectMetadata.default({}),
+    executionRoot: z
+      .string()
+      .nullable()
+      .default(null)
+      .describe(
+        "Tree this run's file references resolve in: a delegated run's recorded execution.workspaceRoot, otherwise project.root; null without a project. The stable identity stays project.root.",
+      ),
     mode: ModeKind.optional(),
     /** v0.9 engine strategy on the mode (flags, not modes): race width / repair caps / deep-scan / create. */
     strategy: z
@@ -1093,8 +1100,15 @@ export const ControlThread = z
       .default(null)
       .describe("Project root the thread is anchored to; null for a no-project thread."),
     mode: ModeKind.optional().describe("Default mode for new turns."),
-    /** How turns touch files (in-place live tree vs isolated worktree). */
+    /** How turns touch files (in-place live tree, isolated worktree, delegated root). */
     workspaceMode: WorkspaceMode.default("in_place"),
+    workspaceRoot: z
+      .string()
+      .nullable()
+      .default(null)
+      .describe(
+        "Caller-owned workspace a delegated thread executes in; null for in_place and isolated threads.",
+      ),
     authPreference: AuthPreference.default("auto"),
     primaryHarness: z
       .string()

@@ -1,6 +1,27 @@
 import ClaudexorKit
 import Foundation
 
+/// Where one run's remote file references resolve (INV-072/INV-073): its
+/// execution tree, addressed through the stable project identity. A tree other
+/// than the project itself is reachable only through the run whose recorded
+/// binding the engine verifies, never as the project's same-named file.
+struct RemoteFileScope: Equatable, Sendable {
+    let runID: String?
+    let projectRoot: String?
+    let executionRoot: String?
+}
+
+extension TaskRun {
+    /// Local roots this run's answer, retained output and previews may open:
+    /// its execution tree (summary `executionRoot`) and run directory only.
+    var fileScopeRoots: [String] { [executionRoot, runDir].compactMap { $0 } }
+
+    var remoteFileScope: RemoteFileScope {
+        RemoteFileScope(
+            runID: resolvedRunId ?? id, projectRoot: repoRoot, executionRoot: executionRoot)
+    }
+}
+
 extension AppModel {
     var locatedThreads: [LocatedThread] {
         let local = threads.map { LocatedThread(locationID: .local, thread: $0) }
@@ -106,30 +127,60 @@ extension AppModel {
         }
     }
 
+    /// The selected thread's execution tree (`ThreadWorkspacePanel.executionRoot`):
+    /// a delegated thread's file references resolve in its caller-owned workspace,
+    /// never in the project it is identified by.
+    var currentThreadExecutionRoot: String? {
+        guard let thread = currentThread else { return nil }
+        return ThreadWorkspacePanel.executionRoot(for: thread)
+    }
+
+    /// Markdown that names no run resolves in the selected thread, unbound.
+    var currentThreadRemoteFileScope: RemoteFileScope {
+        RemoteFileScope(
+            runID: nil, projectRoot: currentThread?.repoRoot,
+            executionRoot: currentThreadExecutionRoot)
+    }
+
     func remoteProjectFileReference(
-        target: String
-    ) -> (projectID: String, relativePath: String)? {
+        target: String,
+        scope: RemoteFileScope? = nil
+    ) -> RemoteFileReference? {
         remoteProjectFileReference(
             target: target,
             locationID: selectedExecutionLocation,
-            repoRoot: currentThread?.repoRoot)
+            scope: scope ?? currentThreadRemoteFileScope)
     }
 
     func remoteProjectFileReference(
         target: String,
         locationID: ExecutionLocationID,
-        repoRoot: String?
-    ) -> (projectID: String, relativePath: String)? {
-        guard locationID != .local,
-              let root = repoRoot,
-              let project = remoteProjects[locationID]?.first(where: {
-                  $0.root == root
-              })
+        scope: RemoteFileScope
+    ) -> RemoteFileReference? {
+        guard locationID != .local else { return nil }
+        return Self.remoteFileReference(
+            target: target, scope: scope, projects: remoteProjects[locationID] ?? [])
+    }
+
+    typealias RemoteFileReference = (projectID: String, relativePath: String, runID: String?)
+
+    /// Pure resolution (unit-tested): the registered project is found by the
+    /// stable identity; the path is contained by the execution tree; a tree
+    /// other than the project travels with its run, and without one maps nowhere.
+    nonisolated static func remoteFileReference(
+        target: String,
+        scope: RemoteFileScope,
+        projects: [RegisteredProject]
+    ) -> RemoteFileReference? {
+        guard let root = scope.executionRoot,
+              let projectRoot = scope.projectRoot,
+              let project = projects.first(where: { $0.root == projectRoot })
         else { return nil }
-        guard let relative = Self.containedProjectRelativePath(
-            target: target, repoRoot: root)
+        let runID = root == projectRoot ? nil : scope.runID
+        guard root == projectRoot || runID != nil,
+              let relative = containedProjectRelativePath(target: target, repoRoot: root)
         else { return nil }
-        return (project.id, relative)
+        return (project.id, relative, runID)
     }
 
     /// Convert an absolute or project-relative UI target into one lexical,

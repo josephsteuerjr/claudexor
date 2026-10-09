@@ -149,10 +149,58 @@ export interface ScopedProjectFile {
   fileName: string;
 }
 
+/** A run's project identity and optional recorded caller-owned workspace override. */
+export interface RunWorkspaceBinding {
+  projectRoot: string | null;
+  workspaceRoot: string | null;
+}
+
+/** The run's recorded project root names this project (canonical lookup; a
+ *  root that no longer resolves matches only the registered spelling). */
+function identifiesProject(projects: ProjectStore, projectId: string, root: string): boolean {
+  if (projects.get(projectId)?.root === root) return true;
+  try {
+    return projects.findByRoot(root)?.id === projectId;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A run-bound read keeps the project id as the stable address but reads the
+ * run's own execution tree: every supplied run must belong to this project.
+ * An unavailable recorded workspace is a typed refusal, never the project's same-named file.
+ */
+function boundWorkspaceRoot(
+  projects: ProjectStore,
+  projectId: string,
+  binding: RunWorkspaceBinding,
+  projectRoot: string,
+): string {
+  if (!binding.projectRoot || !identifiesProject(projects, projectId, binding.projectRoot)) {
+    throw Object.assign(new Error("run does not belong to this project"), {
+      status: 409,
+      code: "run_project_mismatch",
+    });
+  }
+  if (binding.workspaceRoot === null) return realpathSync(projectRoot);
+  try {
+    const root = realpathSync(binding.workspaceRoot);
+    if (statSync(root).isDirectory()) return root;
+  } catch {
+    // Missing and unreadable workspaces share one refusal below.
+  }
+  throw Object.assign(new Error("the run's execution workspace is unavailable"), {
+    status: 410,
+    code: "execution_workspace_unavailable",
+  });
+}
+
 export function readScopedProjectFile(
   projects: ProjectStore,
   projectId: string,
   requestedPath: string,
+  binding?: RunWorkspaceBinding,
 ): ScopedProjectFile {
   const project = projects.get(projectId);
   if (!project) throw Object.assign(new Error(`no such project: ${projectId}`), { status: 404 });
@@ -166,7 +214,9 @@ export function readScopedProjectFile(
       status: 400,
     });
   }
-  const root = realpathSync(project.root);
+  const root = binding
+    ? boundWorkspaceRoot(projects, projectId, binding, project.root)
+    : realpathSync(project.root);
   const lexical = resolve(root, requestedPath);
   let canonical: string;
   let expected: ReturnType<typeof statSync>;
@@ -282,7 +332,11 @@ export function readScopedProjectFile(
 
 export interface RemoteFilesystemServices {
   listDirectory?: (path?: string) => Promise<ControlDirectoryListing>;
-  fetchProjectFile?: (projectId: string, path: string) => Promise<ScopedProjectFile>;
+  fetchProjectFile?: (
+    projectId: string,
+    path: string,
+    binding?: RunWorkspaceBinding,
+  ) => Promise<ScopedProjectFile>;
 }
 
 /**
@@ -299,8 +353,8 @@ export function remoteFilesystemServices(
   if (env.CLAUDEXOR_REMOTE_RUNTIME !== "1") return {};
   return {
     listDirectory: async (path?: string) => listRemoteDirectory(path),
-    fetchProjectFile: async (projectId: string, path: string) =>
-      readScopedProjectFile(projects(), projectId, path),
+    fetchProjectFile: async (projectId: string, path: string, binding?: RunWorkspaceBinding) =>
+      readScopedProjectFile(projects(), projectId, path, binding),
   };
 }
 

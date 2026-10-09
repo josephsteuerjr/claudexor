@@ -32,7 +32,11 @@ export async function applyThreadDiff(
   const ws = thread.workspace;
   if (ws.mode !== "isolated" || !ws.worktree_path || !thread.repo) {
     throw Object.assign(
-      new Error("thread has no isolated worktree to apply (in-place threads write directly)"),
+      new Error(
+        ws.mode === "delegated"
+          ? "a delegated thread executes in a caller-owned workspace; Claudexor never applies it to the project"
+          : "thread has no isolated worktree to apply (in-place threads write directly)",
+      ),
       { status: 400 },
     );
   }

@@ -110,6 +110,18 @@ export function buildWireFixtures() {
     updatedAt: NOW,
   });
 
+  add("thread-delegated", "ControlThread", {
+    id: "th-3",
+    repoRoot: "/tmp/proj",
+    mode: "agent",
+    workspaceMode: "delegated",
+    workspaceRoot: "/tmp/checking-copy",
+    access: "full",
+    runIds: [],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
   // ControlThreadTurn: minimal (no continuity yet) + a lane-switch continuation
   // (INV-137). The continuity field is the V9b DTO extension the Swift decoder
   // must round-trip.

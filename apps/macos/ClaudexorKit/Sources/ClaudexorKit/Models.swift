@@ -248,8 +248,7 @@ public struct RunSummary: Codable, Sendable, Identifiable, Equatable {
     public let state: String
     /// General server-owned run lineage (retry/follow-up/delegation).
     public let parentRunId: String?
-    /// Narrow Delegate provenance. Only the Claudexor belt sets this field;
-    /// native vendor subagents are not Claudexor runs and never populate it.
+    /// Narrow Delegate provenance: only the Claudexor belt sets it (native vendor subagents never do).
     public let delegatedFromRunId: String?
     /// Requested/effective/used Delegate facts for the run.
     public let delegation: RunDelegationInfo?
@@ -257,9 +256,10 @@ public struct RunSummary: Codable, Sendable, Identifiable, Equatable {
     public let error: String?
     public let failure: RunFailureInfo?
     public let project: RunProjectInfo?
+    /// Where file references resolve (a delegated run's caller-owned workspace); identity stays `project`.
+    public let executionRoot: String?
     public let mode: String?
-    /// v0.9 engine strategy flag on the mode (race/attempts/until_clean/swarm/create).
-    public let strategy: String?
+    public let strategy: String? // v0.9 engine strategy flag (race/attempts/until_clean/swarm/create)
     public let prompt: String?
     public let harnesses: [String]?
     public let primaryHarness: String?

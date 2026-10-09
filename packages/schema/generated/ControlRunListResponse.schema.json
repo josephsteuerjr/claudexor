@@ -859,6 +859,14 @@
                 "description": "Project metadata projected onto a run summary.",
                 "default": {}
               },
+              "executionRoot": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null,
+                "description": "Tree this run's file references resolve in: a delegated run's recorded execution.workspaceRoot, otherwise project.root; null without a project. The stable identity stays project.root."
+              },
               "mode": {
                 "type": "string",
                 "enum": [

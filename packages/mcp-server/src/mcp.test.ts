@@ -460,10 +460,17 @@ describe("Claudexor MCP server (SDK v2)", () => {
     expect(create.description).toContain("Creation starts no model");
     expect(create.description).toContain("project directory directly (in_place)");
     expect(create.description).toContain("workspace=isolated");
+    expect(create.description).toContain("workspace=delegated with workspaceRoot");
     expect(create.inputSchema.properties).toMatchObject({
       workspace: {
-        enum: ["in_place", "isolated"],
+        enum: ["in_place", "isolated", "delegated"],
         description: expect.stringContaining("the default"),
+      },
+      // The delegated mode is usable only with its root; its persistent
+      // authority inheritance is stated where the caller chooses it.
+      workspaceRoot: {
+        type: "string",
+        description: expect.stringContaining("inherits delegated authority"),
       },
     });
 

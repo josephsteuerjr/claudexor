@@ -34,7 +34,8 @@ struct RetainedOutputContent: View {
                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             let text = task.answerText ?? ""
             MarkdownOutputView(markdown: expanded ? text : String(text.prefix(4_000)),
-                               fileScopeRoots: [task.repoRoot, task.runDir].compactMap { $0 },
+                               fileScopeRoots: task.fileScopeRoots,
+                               remoteFileScope: task.remoteFileScope,
                                bodyFont: .body)
             if text.count > 4_000 {
                 Button(expanded ? "Show less" : "Show more") { expanded.toggle() }

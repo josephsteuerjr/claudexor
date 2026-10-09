@@ -285,7 +285,7 @@ describe("delegated execution.workspaceRoot", () => {
         ...base,
         execution: { isolation: "live", delegated: false, workspaceRoot: project },
       }),
-    ).toThrow(/only for project-scoped delegated agent runs/);
+    ).toThrow(/only for project-scoped delegated runs/);
   });
 
   it("allows bounded legacy Exact Retry but revalidates a frozen new-shape workspace", () => {

@@ -23,6 +23,7 @@ import { delegationBeltForRun } from "./delegation-belt-descriptor.js";
 import { accountsMigrationGate } from "./accounts-unified-migration.js";
 import { preflightRunGitRequirement } from "./request-preflight.js";
 import {
+  assertThreadExecutionBinding,
   resolveThreadExecutionWorkspace,
   threadRunStartRequiresGit,
 } from "./thread-execution-workspace.js";
@@ -53,7 +54,12 @@ export function createDaemonAgentRunner(deps: {
   } = deps;
   const NO_PROJECT_ROOT = noProjectRepoRoot();
   return async (params, ctx) => {
-    const p = restoreRecordedRunReviewRequest(normalizeRunStartRequest(params));
+    // A thread-bound run's caller-owned root is revalidated by the thread
+    // resolver below as a durable, retryable refusal on the exact turn.
+    const threadBound = typeof (params as { threadId?: unknown } | null)?.threadId === "string";
+    const p = restoreRecordedRunReviewRequest(
+      normalizeRunStartRequest(params, { deferExecutionWorkspaceAvailability: threadBound }),
+    );
     const continuation = continuationForRun(p, threads);
     const mode = p.mode;
     const noProjectAsk = mode === "ask" && p.scope.kind === "none";
@@ -71,6 +77,7 @@ export function createDaemonAgentRunner(deps: {
       runtimeConcurrencyCaps,
     });
     const { threadId, turnId } = threads.assertKnownIds(p.threadId, p.turnId);
+    assertThreadExecutionBinding(threadId ? threads.getThread(threadId) : undefined, p);
     // Plan readiness gate (QA-045 / D17): refuse an Implement whose frozen
     // plan still has open questions BEFORE any worktree, spawn, or spend —
     // so the refusal is a durable, replayable refused turn (the daemon

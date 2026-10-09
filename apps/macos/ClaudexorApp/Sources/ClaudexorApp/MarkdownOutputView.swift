@@ -12,10 +12,12 @@ struct MarkdownOutputView: View {
     // Passive file snapshots can render without a live conversation model.
     @Environment(AppModel.self) private var model: AppModel?
     let markdown: String
-    /// Roots (thread repoRoot / run dir) whose images may render INLINE and
+    /// Roots (thread execution root / run dir) whose images may render INLINE and
     /// whose file links may open (F2.5 W-C7). Empty = no local-file access:
     /// an image degrades to its visible markdown text, honestly.
     var fileScopeRoots: [String] = []
+    /// The same run's tree for a remote location; nil = the selected thread.
+    var remoteFileScope: RemoteFileScope? = nil
     /// Conversation answers use body-sized prose; dense secondary surfaces
     /// retain the compact callout default.
     var bodyFont: Font = .callout
@@ -48,7 +50,7 @@ struct MarkdownOutputView: View {
                     } else if model?.selectedExecutionLocation == .local {
                         ScopedInlineImage(target: target, alt: alt, roots: fileScopeRoots)
                     } else {
-                        RemoteScopedProjectImage(target: target, alt: alt)
+                        RemoteScopedProjectImage(target: target, alt: alt, scope: remoteFileScope)
                     }
                 case .list:
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
@@ -99,7 +101,7 @@ struct MarkdownOutputView: View {
                 return .discarded
             }
             if model.selectedExecutionLocation != .local {
-                if model.remoteProjectFileReference(target: raw) != nil {
+                if model.remoteProjectFileReference(target: raw, scope: remoteFileScope) != nil {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(raw, forType: .string)
                     linkRefusal =

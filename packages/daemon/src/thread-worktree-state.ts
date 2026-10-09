@@ -12,6 +12,16 @@ export function threadWorktreeMutation(
   baseSha: string,
   deliveredThroughRunId?: string,
 ): ThreadMutation {
+  // A delegated thread's execution tree is caller-owned and immutable: no
+  // managed worktree, promotion, or delivery watermark can replace it.
+  if (thread.workspace.mode === "delegated") {
+    throw Object.assign(
+      new Error(
+        `thread ${thread.id} executes in a caller-owned workspace; it has no managed worktree`,
+      ),
+      { status: 409, code: "thread_workspace_caller_owned", retryable: false },
+    );
+  }
   const promoting = thread.workspace.mode === "in_place";
   const next = ThreadSchema.parse({
     ...thread,

@@ -81,9 +81,14 @@
           "type": "string",
           "enum": [
             "in_place",
-            "isolated"
+            "isolated",
+            "delegated"
           ],
-          "description": "Workspace mode for the thread (in_place or isolated)."
+          "description": "Workspace mode for the thread (in_place, isolated, or delegated)."
+        },
+        "workspaceRoot": {
+          "type": "string",
+          "description": "Absolute existing caller-owned directory every turn of a workspace='delegated' thread executes in. Required exactly for that workspace, project scope only, and immutable after creation; scope.root stays the stable project identity."
         },
         "authPreference": {
           "type": "string",

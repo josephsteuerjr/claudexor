@@ -106,6 +106,8 @@ enum ThreadLifecycleCopy {
         if workspaceMode == "isolated" {
             text += " The thread's separate working copy is deleted, including changes that"
                 + " were never applied to the project."
+        } else if workspaceMode == "delegated" {
+            text += " The caller-owned workspace this thread ran in is not touched."
         }
         return text + " This cannot be undone."
     }

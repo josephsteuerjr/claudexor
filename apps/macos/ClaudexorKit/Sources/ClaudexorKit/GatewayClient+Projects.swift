@@ -27,14 +27,18 @@ extension GatewayClient {
         return try Self.decoder.decode(RemoteDirectoryListing.self, from: data)
     }
 
+    /// `runID` reads that run's recorded caller-owned workspace under this
+    /// project instead of the project tree (the engine verifies the binding).
     public func fetchProjectFile(
         projectID: String,
-        relativePath: String
+        relativePath: String,
+        runID: String? = nil
     ) async throws -> (data: Data, contentType: String) {
         let req = request(
             "projects/\(projectID)/file",
             method: "GET",
-            queryItems: [URLQueryItem(name: "path", value: relativePath)])
+            queryItems: [URLQueryItem(name: "path", value: relativePath)]
+                + (runID.map { [URLQueryItem(name: "runId", value: $0)] } ?? []))
         let (data, resp) = try await session.data(for: req)
         try Self.requireOK(resp, data: data)
         let contentType = (resp as? HTTPURLResponse)?

@@ -1,8 +1,13 @@
 import type { DurableJournal } from "@claudexor/journal";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  handleThreadCreate,
+  type ThreadCreateRouteCtx,
+} from "../../control-api/src/thread-create-route.js";
 import { commandProjection } from "./command-store.js";
 import { interactionProjection } from "./interactions.js";
 import { JournalManager } from "./journal-manager.js";
@@ -65,6 +70,88 @@ function fixture(requestMaintenance?: (journal: DurableJournal) => void) {
 }
 
 describe("ProjectPartitions", () => {
+  it.each(["canonical", "symlink"])(
+    "replays accepted POST /v2/threads from its partition after the %s author path disappears",
+    async (spelling) => {
+      const f = fixture();
+      const author = join(f.root, "author");
+      const other = join(f.root, "other");
+      const workspaceRoot = join(f.root, "copy");
+      for (const path of [author, other, workspaceRoot]) mkdirSync(path);
+      const requestedRoot = spelling === "symlink" ? join(f.root, "author-link") : author;
+      if (spelling === "symlink") symlinkSync(author, requestedRoot, "dir");
+      const body = {
+        scope: { kind: "project", root: requestedRoot },
+        workspace: "delegated",
+        workspaceRoot,
+        access: "full",
+      };
+      const req = {
+        headers: { "idempotency-key": "accepted-create" },
+      } as unknown as IncomingMessage;
+      const res = {} as ServerResponse;
+      async function post(partitions: ProjectPartitions, request = body) {
+        const createThread = vi.fn(async (input: unknown) =>
+          partitions.createThread(input as Parameters<ProjectPartitions["createThread"]>[0]),
+        );
+        const json = vi.fn();
+        const requestError = vi.fn();
+        const ctx: ThreadCreateRouteCtx = {
+          services: {
+            createThread,
+            findThreadCreation: async (input) =>
+              partitions.findThreadCreation(
+                input as Parameters<ProjectPartitions["findThreadCreation"]>[0],
+              ),
+          },
+          readBody: async () => request,
+          json,
+          requestError,
+        };
+        await handleThreadCreate(ctx, req, res);
+        return { createThread, json, requestError };
+      }
+
+      // The same key is independent in another persisted project partition.
+      const unrelated = await post(f.partitions, {
+        ...body,
+        scope: { kind: "project", root: other },
+      });
+      expect(unrelated.requestError).not.toHaveBeenCalled();
+      const first = await post(f.partitions);
+      expect(first.requestError).not.toHaveBeenCalled();
+      expect(first.createThread).toHaveBeenCalledOnce();
+      const accepted = first.json.mock.calls[0]?.[2];
+      expect(accepted).toMatchObject({ workspaceMode: "delegated", workspaceRoot });
+
+      // A changed request in the owning partition still conflicts.
+      const changed = await post(f.partitions, { ...body, access: "readonly" });
+      expect(changed.requestError).toHaveBeenCalledWith(
+        res,
+        expect.objectContaining({ status: 409, code: "idempotency_conflict" }),
+      );
+      rmSync(author, { recursive: true });
+      rmSync(workspaceRoot, { recursive: true });
+      const replay = await post(f.partitions);
+      expect(replay.requestError).not.toHaveBeenCalled();
+      expect(replay.createThread).not.toHaveBeenCalled();
+      expect(replay.json).toHaveBeenCalledExactlyOnceWith(res, 200, accepted);
+      f.partitions.close();
+      f.manager.close();
+
+      const restarted = fixtureAt(f.root);
+      try {
+        const recovered = await post(restarted.partitions);
+        expect(recovered.requestError).not.toHaveBeenCalled();
+        expect(recovered.createThread).not.toHaveBeenCalled();
+        expect(recovered.json).toHaveBeenCalledExactlyOnceWith(res, 200, accepted);
+      } finally {
+        restarted.partitions.close();
+        restarted.manager.close();
+      }
+    },
+  );
+
   it("wires maintenance into new, prepared and reopened project managers", () => {
     const request = vi.fn<(journal: DurableJournal) => void>();
     const f = fixture(request);

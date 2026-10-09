@@ -39,6 +39,12 @@ export function threadTools(runner: RunnerFn): McpTool[] {
         enum: WorkspaceMode.options,
         description: WorkspaceMode.description,
       },
+      workspaceRoot: {
+        type: "string",
+        minLength: 1,
+        description:
+          "Required exactly with workspace=delegated: absolute existing caller-owned directory every turn executes in. Every later turn inherits delegated authority (no repository full-access trust record, no outer OS boundary), so choose it only for a workspace you own.",
+      },
       credentialProfileId: nonBlankString,
       primaryHarness: nonBlankString,
       eligibleHarnesses: { type: "array", minItems: 1, items: nonBlankString },
@@ -116,7 +122,7 @@ export function threadTools(runner: RunnerFn): McpTool[] {
     {
       name: "claudexor_thread_create",
       description:
-        "Create a persistent Claudexor thread bound to a project and optional strict account profile. Creation starts no model. Write turns default to editing the project directory directly (in_place); choose workspace=isolated to use a persistent thread worktree created on the first write turn, then thread Apply to merge changes into the project. Use claudexor_thread_turn to start work in it.",
+        "Create a persistent Claudexor thread bound to a project and optional strict account profile. Creation starts no model. Write turns default to editing the project directory directly (in_place); choose workspace=isolated to use a persistent thread worktree created on the first write turn, then thread Apply to merge changes into the project. workspace=delegated with workspaceRoot binds every turn to that caller-owned directory under delegated authority (persistent, never applied to the project). Use claudexor_thread_turn to start work in it.",
       inputSchema: threadCreateSchema,
       annotations: { readOnlyHint: false, destructiveHint: false },
       handler: async (args) => callThreadTool(args, "__thread_create"),

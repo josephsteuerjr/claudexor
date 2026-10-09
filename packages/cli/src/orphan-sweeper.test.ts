@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { processStartTime, WorkspaceManager } from "@claudexor/workspace";
 import { projectRuntimeDir } from "@claudexor/util";
-import { commandScopeRoots } from "@claudexor/daemon";
+import { commandExecutionRoots, commandScopeRoots } from "@claudexor/daemon";
 import { sweepOrphanWorkspaces } from "./orphan-sweeper.js";
 
 function initRepo(): string {
@@ -212,5 +212,50 @@ describe("commandScopeRoots", () => {
         {},
       ]),
     ).toEqual(["/a", "/b"]);
+  });
+});
+
+describe("crash-GC reach into caller-owned execution roots", () => {
+  it("disposes only Claudexor scratch under a delegated root, never the caller's tree or refs", async () => {
+    const copy = initRepo();
+    try {
+      // A caller ref shaped like attempt debris: under a SCOPE root the branch
+      // sweep would delete it; under a caller-owned execution root it is not
+      // Claudexor's to collect.
+      execFileSync("git", ["-C", copy, "branch", "claudexor/task-gone/a01"]);
+      const base = join(projectRuntimeDir(copy), "workspaces", "task-del", "a01");
+      mkdirSync(join(base, "home"), { recursive: true });
+      writeFileSync(
+        join(base, "owner.json"),
+        JSON.stringify({
+          pid: 999_999_990,
+          started: "Thu Jan  1 00:00:00 1970",
+          created_at: new Date().toISOString(),
+          envelope_id: "env-del",
+          workspace_mode: "in_place",
+        }) + "\n",
+      );
+      const actions = await sweepOrphanWorkspaces({
+        knownProjectRoots: () => [],
+        knownExecutionRoots: () =>
+          commandExecutionRoots([
+            {
+              params: {
+                scope: { kind: "project", root: "/author" },
+                execution: { workspaceRoot: copy },
+              },
+            },
+          ]),
+      });
+      expect(existsSync(base)).toBe(false);
+      expect(actions.some((a) => a.includes("disposed orphan envelope task-del/a01"))).toBe(true);
+      expect(
+        execFileSync("git", ["-C", copy, "branch", "--list", "claudexor/*"], { encoding: "utf8" }),
+      ).toContain("claudexor/task-gone/a01");
+      expect(readFileSync(join(copy, "a.txt"), "utf8")).toBe("a\n");
+    } finally {
+      rmSync(copy, { recursive: true, force: true });
+      rmSync(projectRuntimeDir(copy), { recursive: true, force: true });
+    }
   });
 });

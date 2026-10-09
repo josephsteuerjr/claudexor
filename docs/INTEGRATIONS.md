@@ -505,6 +505,26 @@ trust-writing tool, so there one tool call with `execution.delegated: true` and
 grant, bounded only by the host's own MCP tool-approval policy. The refusal
 above still applies to runs an operator starts at a surface.
 
+An orchestrator that checks work over several rounds in a workspace it owns
+binds a thread to it once: `POST /v2/threads` with `scope` (the stable project
+identity), `workspace: "delegated"`, and `workspaceRoot` (an absolute existing
+directory, typically a private clone with its own Git). Every turn of that
+thread — Agent, readonly Agent, Ask, Plan — then executes in `workspaceRoot`
+under delegated authority, records that address in its run params (run
+summaries report it as `executionRoot` beside `project.root`), and resumes
+the lane's native session from a durable scoped home; the binding cannot be
+patched, and the thread is never applied to the project. The orchestrator owns
+the workspace's subject and evidence (for example HEAD = parent, index = the
+staged candidate, Git-ignored evidence files beside it): it refreshes them only
+between turns, after the previous turn's processes are known to have stopped,
+and archives a turn's outputs before replacing them. A turn the daemon's
+restart terminalized (`resumable.cause: host_restart`) has unknown process
+custody and is not such a proof. Use a stable `Idempotency-Key` per thread and
+per round; an exact replay returns the accepted thread or turn even after a
+restart or after the workspace moved away. A missing workspace makes the turn
+fail with a retryable `delegated_workspace_unavailable`; restore it and call
+`POST /v2/threads/:id/turns/:turnId/retry`.
+
 ## MCP
 
 Run:
@@ -556,8 +576,12 @@ after binding.
 Creation starts no model. The default `workspace: in_place` lets write turns edit
 the project directory directly. Choose `workspace: isolated` for a persistent
 thread worktree created on the first write turn, then use thread Apply to merge
-its changes into the project. The create result discloses the daemon's current
-`workspaceMode` and anchored `repoRoot`, including where write turns change files.
+its changes into the project. `workspace: delegated` with `workspaceRoot` binds
+every turn to that caller-owned directory under delegated authority (see the
+Control API section above and SECURITY.md); it is never applied to the project.
+The create result discloses the daemon's current `workspaceMode`,
+`workspaceRoot` and anchored `repoRoot`, including where write turns change
+files.
 Thread create/turn accept an optional caller-owned `idempotencyKey`. An omitted
 key is generated per invocation; retry an unknown outcome with the same key
 and body, and use a new key for a deliberately new turn. Changed content under

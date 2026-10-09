@@ -19,7 +19,7 @@ export const RunExecution = z
       .string()
       .optional()
       .describe(
-        "Absolute existing execution workspace for a project-scoped delegated agent live run. The stable project identity remains scope.root.",
+        "Absolute existing execution workspace for a project-scoped delegated run: the live tree of an agent run (or the source of its directory execution), and the read-only tree of a delegated thread's Ask/Plan turn. The stable project identity remains scope.root.",
       ),
     workspaceKind: WorkspaceKind.optional().describe(
       "Explicit directory execution needs no Git initialization; omission preserves existing clients.",

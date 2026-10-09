@@ -1,5 +1,12 @@
 # @claudexor/gateway
 
+## 3.23.0
+
+### Patch Changes
+
+- @claudexor/core@3.23.0
+- @claudexor/schema@3.23.0
+
 ## 3.22.1
 
 ### Patch Changes

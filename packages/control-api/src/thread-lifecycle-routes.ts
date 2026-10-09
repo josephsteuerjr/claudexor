@@ -141,8 +141,18 @@ export async function handleThreadLifecycleRoutes(
       const thread = snapshot.thread as {
         repo?: { root?: string } | null;
         run_ids?: string[];
-        workspace?: { delivered_through_run_id?: string | null };
+        workspace?: { mode?: string; delivered_through_run_id?: string | null };
       };
+      // A caller-owned workspace is never delivered to the project: refuse
+      // before any run is gated as if it were a managed thread worktree.
+      if (thread.workspace?.mode === "delegated") {
+        throw Object.assign(
+          new Error(
+            "a delegated thread executes in a caller-owned workspace; Claudexor never applies it to the project",
+          ),
+          { status: 400, code: "thread_workspace_caller_owned" },
+        );
+      }
       const activeRecords = await ctx.listRuns({ activeOnly: true });
       const active = findActiveMutatingThreadRun(activeRecords, threadId);
       if (active) {

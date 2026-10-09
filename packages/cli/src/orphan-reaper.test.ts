@@ -70,6 +70,41 @@ describe("orphan reaper", () => {
     }
   });
 
+  it("is not a quiescence proof: it returns before the recorded group is confirmed gone", () => {
+    // Pinned so no caller treats a restart terminal as "the harness stopped".
+    // A group that ignores SIGTERM is still alive when the reaper returns, its
+    // record is already deleted, and SIGKILL is only scheduled; a child absent
+    // from the last periodic snapshot is never signalled at all. A crash-
+    // interrupted run therefore keeps the typed `host_restart` disposition
+    // (unknown custody), never a confirmed stop.
+    vi.useFakeTimers();
+    dir = mkdtempSync(join(tmpdir(), "claudexor-reaper-"));
+    const pidsPath = join(dir, "pids.json");
+    const signal = vi.fn();
+    try {
+      writeFileSync(
+        pidsPath,
+        JSON.stringify({
+          pids: [{ pid: 51, cmd: "harness", processGroup: handle(51, "linux:9") }],
+        }),
+      );
+      const groups = new ProcessGroupService({
+        platform: "linux",
+        identity: { read: (pid) => known(pid, "linux:9"), self: () => known(1, "linux:1") },
+        signalProcessGroup: signal,
+        probeProcessGroup: () => undefined, // the group survives TERM
+      });
+      expect(reapRecordedOrphans(pidsPath, groups)).toEqual([
+        "SIGTERM orphan process group 51 (harness)",
+      ]);
+      expect(existsSync(pidsPath)).toBe(false);
+      expect(signal.mock.calls).toEqual([[-51, "SIGTERM"]]);
+      expect(groups.probeEmpty(handle(51, "linux:9")).status).toBe("nonempty");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("skips same-pid reuse and legacy pid/cmd snapshots fail-closed", () => {
     dir = mkdtempSync(join(tmpdir(), "claudexor-reaper-"));
     const pidsPath = join(dir, "pids.json");

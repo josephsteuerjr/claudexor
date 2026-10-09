@@ -56,10 +56,19 @@
               "type": "string",
               "enum": [
                 "in_place",
-                "isolated"
+                "isolated",
+                "delegated"
               ],
-              "description": "Per-thread workspace mode: in_place mutates the live project tree directly (the default); isolated keeps a persistent git worktree per thread that apply merges into the project.",
+              "description": "Per-thread workspace mode: in_place mutates the live project tree directly (the default); isolated keeps a persistent git worktree per thread that apply merges into the project; delegated runs every turn in one caller-owned workspace bound at creation, which Claudexor never applies to the project or deletes.",
               "default": "in_place"
+            },
+            "workspaceRoot": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null,
+              "description": "Caller-owned workspace a delegated thread executes in; null for in_place and isolated threads."
             },
             "authPreference": {
               "type": "string",

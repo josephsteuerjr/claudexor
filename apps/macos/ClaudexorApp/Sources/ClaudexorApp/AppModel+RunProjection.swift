@@ -33,6 +33,7 @@ extension AppModel {
         )
         task.resolvedRunId = summary.runId
         task.repoRoot = summary.project?.root
+        task.executionRoot = summary.executionRoot
         task.engineError = summary.failure?.safeMessage ?? summary.error
         task.runDir = summary.runDir ?? summary.failure?.runDir
         task.parentRunId = summary.parentRunId

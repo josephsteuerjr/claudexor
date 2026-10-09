@@ -41,6 +41,10 @@ interface SweepInput {
    * PREPARED global command projection (the stage-2 replay) — never a second
    * `DurableJournal.prepare()` over the same file. */
   knownProjectRoots: () => readonly string[];
+  /** Caller-owned execution roots recorded by delegated commands. Only
+   * Claudexor's envelope scratch under their runtime namespace is swept; the
+   * caller's tree and Git refs are never Claudexor's to collect. */
+  knownExecutionRoots?: () => readonly string[];
 }
 
 export async function sweepOrphanWorkspaces(input: SweepInput): Promise<string[]> {
@@ -53,6 +57,10 @@ export async function sweepOrphanWorkspaces(input: SweepInput): Promise<string[]
       actions.push(...(await sweepEnvelopesUnder(tree)));
       actions.push(...(await sweepAttemptBranches(tree)));
     }
+  }
+  const executionRoots = knownProjectRoots(input.knownExecutionRoots ?? (() => []));
+  for (const root of executionRoots.filter((candidate) => !roots.includes(candidate))) {
+    actions.push(...(await sweepEnvelopesUnder(root)));
   }
   actions.push(...sweepReadOnlyHomes());
   return actions;

@@ -96,6 +96,50 @@ describe("fake harness adapters", () => {
     }
   });
 
+  it("fake-session mints a native id, resumes a carried one, and probes only engine facts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fake-session-"));
+    try {
+      const first = await collect(
+        createFakeHarness("fake-session").run(
+          HarnessRunSpec.parse({
+            session_id: "ses-a",
+            intent: "implement",
+            prompt: "promptLeakCanary",
+            cwd: dir,
+            env: { HOME: "/lane/home" },
+          }),
+        ),
+      );
+      const started = first.find((e) => e.type === "started");
+      expect(started?.payload?.["native_session_id"]).toBe("fake-native-ses-a");
+      const probe = first.find((e) => e.payload?.["code"] === "fake_session_probe");
+      expect(probe?.payload).toMatchObject({ resumed_from: null, home: "/lane/home", cwd: dir });
+      expect(existsSync(join(dir, "FAKE_CHANGE.txt"))).toBe(true);
+      expect(JSON.stringify(first)).not.toContain("promptLeakCanary");
+      const second = await collect(
+        createFakeHarness("fake-session").run(
+          HarnessRunSpec.parse({
+            session_id: "ses-b",
+            intent: "explain",
+            prompt: "q",
+            cwd: dir,
+            access: "readonly",
+            resume_session_id: "fake-native-ses-a",
+          }),
+        ),
+      );
+      expect(second.find((e) => e.type === "started")?.payload?.["native_session_id"]).toBe(
+        "fake-native-ses-a",
+      );
+      expect(
+        second.find((e) => e.payload?.["code"] === "fake_session_probe")?.payload,
+      ).toMatchObject({ resumed_from: "fake-native-ses-a", cwd_entries: ["FAKE_CHANGE.txt"] });
+      expect(second[second.length - 1]?.type).toBe("completed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fake-implement doctor enables create_from_scratch", async () => {
     const reports = await runDoctor(registry(), { cwd: "/tmp" });
     const impl = reports.find((r) => r.harness_id === "fake-implement");

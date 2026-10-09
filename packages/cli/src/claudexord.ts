@@ -4,6 +4,7 @@ import {
   DaemonClient,
   commandActivityRecords,
   commandProjection,
+  commandExecutionRoots,
   commandScopeRoots,
   interactionProjection,
   operatorDecisionProjection,
@@ -18,9 +19,6 @@ import {
   ResourceStore,
   quotaPacerFileStore,
   quotaProjection,
-  threadHeadPingProjection,
-  threadProjection,
-  type ThreadHeadPingSink,
   daemonDir,
   defaultSocketPath,
   acquireRootAuthority,
@@ -35,6 +33,7 @@ import {
   createDaemonQuotaPoller,
   createStartupAdmissionRuntime,
   openStartupDiagnostics,
+  registerDaemonThreadProjection,
 } from "./daemon-admission-runtime.js";
 import { armDaemonLifecycle, logLine } from "./daemon-lifecycle.js";
 import {
@@ -129,20 +128,9 @@ export async function main(): Promise<void> {
         quotaPacerFileStore(daemonDir()),
       ),
     );
-    // Sidebar invalidation ping (W12): a GLOBAL-partition emitter every
-    // ThreadStore (global + per-project) writes through, so any thread
-    // mutation reaches the app's single global stream. The ping is auxiliary
-    // invalidation — it must never fail the mutation that triggered it
-    // (mirrors the runner's turn-binding policy).
-    const threadHeadPingSlot = journalManager.registerProjection(threadHeadPingProjection());
-    const threadHeadPing: ThreadHeadPingSink = (ping) => {
-      try {
-        threadHeadPingSlot.current().ping(ping);
-      } catch {
-        /* invalidation ping must never fail the thread mutation */
-      }
-    };
-    const threadStoreSlot = journalManager.registerProjection(threadProjection(threadHeadPing));
+    const { threadStoreSlot, threadHeadPing } = registerDaemonThreadProjection(journalManager, () =>
+      commandStoreSlot.current().records(),
+    );
     const setupStoreSlot = journalManager.registerProjection({
       name: "setup",
       create: (journal) => new SetupJobStore(daemonDir(), { journal }),
@@ -328,6 +316,12 @@ export async function main(): Promise<void> {
         const commands = commandStoreSlot.prepared();
         return [...commandScopeRoots(commands.records()), ...commands.prunedScopeRoots()];
       },
+      // Delegated runs (thread turns live in project partitions) keep their
+      // runtime scratch under the caller-owned execution root.
+      knownExecutionRoots: () => [
+        ...commandExecutionRoots(commandStoreSlot.prepared().records()),
+        ...threads.preparedExecutionRoots(),
+      ],
       normalPlane: {
         requested: () => shutdownRuntime!.requested(),
         armQuotaPolling: () => quotaPoller!.arm(),

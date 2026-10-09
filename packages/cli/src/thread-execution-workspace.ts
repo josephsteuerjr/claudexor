@@ -101,6 +101,71 @@ function assertExistingIsolatedWorktree(path: string): void {
   }
 }
 
+function threadExecutionMismatch(message: string): Error {
+  return Object.assign(new Error(message), {
+    status: 409,
+    code: "thread_execution_mismatch",
+    retryable: false,
+  });
+}
+
+/**
+ * Fail-loud agreement between a thread-bound run and its thread, enforced at
+ * the runner so the raw daemon socket cannot forge what the HTTP turn route
+ * derives: the run's project is the thread's project, a delegated thread's run
+ * carries exactly its immutable caller-owned root under delegated authority,
+ * and an ordinary thread's run carries neither.
+ */
+export function assertThreadExecutionBinding(
+  thread: Pick<Thread, "id" | "repo" | "workspace"> | undefined,
+  request: Pick<ControlRunStartRequest, "scope" | "execution">,
+): void {
+  if (!thread) return;
+  const scopeRoot = request.scope.kind === "project" ? request.scope.root : null;
+  if (scopeRoot !== (thread.repo?.root ?? null)) {
+    throw threadExecutionMismatch(
+      `run project ${scopeRoot ?? "(none)"} is not thread ${thread.id}'s project ${thread.repo?.root ?? "(none)"}`,
+    );
+  }
+  const { delegated, workspaceRoot } = request.execution;
+  if (thread.workspace.mode === "delegated") {
+    if (delegated !== true || workspaceRoot !== thread.workspace.workspace_root) {
+      throw threadExecutionMismatch(
+        `delegated thread ${thread.id} runs only in its bound workspace ${thread.workspace.workspace_root ?? "(missing)"} under delegated authority`,
+      );
+    }
+  } else if (delegated === true || workspaceRoot !== undefined) {
+    throw threadExecutionMismatch(
+      `thread ${thread.id} is ${thread.workspace.mode}; its turns carry no delegated execution root`,
+    );
+  }
+}
+
+/** A missing caller-owned root is a durable, retryable refusal on the turn:
+ * restoring the directory and retrying replays the same recorded request. */
+function assertDelegatedWorkspaceAvailable(root: string): void {
+  let detail = "the bound path is not a directory";
+  try {
+    if (statSync(root).isDirectory()) return;
+  } catch (error) {
+    detail =
+      error && typeof error === "object" && "code" in error && typeof error.code === "string"
+        ? error.code
+        : "unreadable";
+  }
+  throw Object.assign(
+    new Error(`delegated thread workspace is unavailable at ${root}: ${detail}`),
+    {
+      status: 409,
+      code: "delegated_workspace_unavailable",
+      retryable: true,
+      requiredActions: [
+        "Restore the caller-owned workspace bound to this thread, then retry the turn.",
+      ],
+    },
+  );
+}
+
 /** Resolve the effective execution tree before any adapter can start. */
 export async function resolveThreadExecutionWorkspace(input: {
   threadId?: string;
@@ -115,6 +180,18 @@ export async function resolveThreadExecutionWorkspace(input: {
   ensureWorktree?: (repoRoot: string, threadId: string) => Promise<ThreadWorktreeResult>;
 }): Promise<ThreadExecutionWorkspace> {
   const thread = input.threadId ? input.threads.getThread(input.threadId) : undefined;
+  // The caller-owned binding wins before every managed-workspace rule: no
+  // thread worktree, promotion, or project-root read for any mode or access.
+  const delegatedRoot =
+    thread?.workspace.mode === "delegated" ? thread.workspace.workspace_root : null;
+  if (delegatedRoot) {
+    assertDelegatedWorkspaceAvailable(delegatedRoot);
+    return {
+      executionRoot: delegatedRoot,
+      inPlace: input.workspaceKind === "directory" ? input.requestedInPlace : true,
+      promoted: false,
+    };
+  }
   if (input.workspaceKind === "directory")
     return { inPlace: input.requestedInPlace, promoted: false };
   if (!thread || !input.threadId) {

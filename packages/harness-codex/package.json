@@ -1,6 +1,6 @@
 {
   "name": "@claudexor/harness-codex",
-  "version": "3.22.1",
+  "version": "3.23.0",
   "license": "MIT",
   "description": "Codex CLI adapter (app-server lifecycle protocol).",
   "type": "module",
