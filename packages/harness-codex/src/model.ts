@@ -27,6 +27,7 @@ import {
   providerProblem,
   readResponsesStream,
   record,
+  replayedNativeItems,
   text,
   validateCodexModelOptions,
 } from "./responses.js";
@@ -101,17 +102,36 @@ function capacity(value: unknown): number | null {
 }
 
 /** True when the request carries image content blocks in user or tool messages,
- * the only roles whose content this transport serializes as input_image. Image
- * blocks in other roles are refused by the serializer itself, independent of
- * model capability. */
-function requestCarriesImages(messages: ModelMessage[]): boolean {
+ * the only roles whose content this transport serializes as input_image, or an
+ * image part hidden inside a replayable native continuation: its payload items
+ * reach the provider verbatim without passing through the content serializer,
+ * so the gate scans them structurally too. Image blocks in other roles are
+ * refused by the serializer itself, independent of model capability. */
+function requestCarriesImages(messages: ModelMessage[], route: ModelRoute): boolean {
   return messages.some((message) => {
-    if ((message.role !== "user" && message.role !== "tool") || !Array.isArray(message.content))
-      return false;
-    return message.content.some(
-      (block) => block.type === "image_url" || block.type === "input_image",
-    );
+    if (
+      (message.role === "user" || message.role === "tool") &&
+      Array.isArray(message.content) &&
+      message.content.some((block) => block.type === "image_url" || block.type === "input_image")
+    )
+      return true;
+    const replayed = replayedNativeItems(message, route);
+    return replayed !== null && replayedItemsCarryImages(replayed, new WeakSet());
   });
+}
+
+/** Structural image search over replayed native items. Their parts are wire
+ * objects, never serializer-validated content blocks, so an input_image at any
+ * nesting depth is image content on the wire; cycle-safe because callers may
+ * hand over arbitrary JSON-shaped payload objects. */
+function replayedItemsCarryImages(value: unknown, seen: WeakSet<object>): boolean {
+  if (Array.isArray(value)) return value.some((item) => replayedItemsCarryImages(item, seen));
+  if (value === null || typeof value !== "object") return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  const item = value as Record<string, unknown>;
+  if (item.type === "input_image" || item.type === "image_url") return true;
+  return Object.values(item).some((nested) => replayedItemsCarryImages(nested, seen));
 }
 
 /** An expired/opaque access token's 401 is not proof that a new login is needed. */
@@ -366,7 +386,7 @@ export function createCodexModelAdapter(deps: CodexModelAdapterDeps = {}): Model
         // image modality AND this engine build carries images; anything else —
         // including catalogs from an older engine without the field — refuses
         // image-bearing requests BEFORE dispatch, like the effort gate below.
-        if (model && requestCarriesImages(request.messages) && model.imageInput !== true) {
+        if (model && requestCarriesImages(request.messages, route) && model.imageInput !== true) {
           throw new CodexModelError(
             "unsupported_parameter",
             "This model or engine build does not accept image inputs; the request carries image content.",

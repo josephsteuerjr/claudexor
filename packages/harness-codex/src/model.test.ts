@@ -1098,6 +1098,117 @@ describe("image input capability gating", () => {
     expect(fixture.onDispatch).not.toHaveBeenCalled();
     expect(fixture.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toEqual([]);
   });
+  it.each([
+    { label: "false", textOnly: true },
+    { label: "absent", textOnly: false },
+  ])(
+    "refuses images hidden in a replayable native continuation when imageInput is $label",
+    async ({ textOnly }) => {
+      const fixture = setup();
+      if (textOnly)
+        fixture.fetcher.mockImplementation(async (_url, init) =>
+          init?.method === "POST"
+            ? terminal()
+            : Response.json({
+                ...catalog,
+                models: [{ ...catalog.models[0], input_modalities: ["text"] }],
+              }),
+        );
+      const discovered = await fixture.adapter.catalog(fixture.context);
+      const continuation = {
+        format: "codex.responses.v1",
+        route: {
+          source: discovered.source,
+          credentialProfileId: discovered.credentialProfileId,
+          accountFingerprint: discovered.accountFingerprint,
+          model: "model-one",
+        },
+        payload: [
+          { type: "reasoning", encrypted_content: "OPAQUE+/==" },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }],
+          },
+        ],
+      };
+      const result = await fixture.adapter.invoke(
+        ModelCallRequest.parse({
+          ...fixture.request,
+          messages: [
+            ...fixture.request.messages,
+            {
+              role: "assistant",
+              content: "prior turn",
+              nativeContinuation: continuation,
+            },
+            { role: "user", content: "next question" },
+          ],
+        }),
+        textOnly
+          ? fixture.context
+          : {
+              ...fixture.context,
+              catalog: (() => {
+                const { imageInput: _stripped, ...oldModel } = discovered.models[0]!;
+                return { ...discovered, models: [oldModel] };
+              })(),
+            },
+      );
+      expect(result.problem).toMatchObject({
+        code: "unsupported_parameter",
+        context: { parameter: "imageInput" },
+      });
+      expect(result.outcome).toBe("failed");
+      expect(fixture.onDispatch).not.toHaveBeenCalled();
+      expect(fixture.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toEqual([]);
+    },
+  );
+  it("still replays a text-only native continuation on a text-only model", async () => {
+    const fixture = setup();
+    fixture.fetcher.mockImplementation(async (_url, init) =>
+      init?.method === "POST"
+        ? terminal()
+        : Response.json({
+            ...catalog,
+            models: [{ ...catalog.models[0], input_modalities: ["text"] }],
+          }),
+    );
+    const discovered = await fixture.adapter.catalog(fixture.context);
+    const payload = [
+      { type: "reasoning", encrypted_content: "OPAQUE+/==" },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "готово" }] },
+    ];
+    const result = await fixture.adapter.invoke(
+      ModelCallRequest.parse({
+        ...fixture.request,
+        messages: [
+          ...fixture.request.messages,
+          {
+            role: "assistant",
+            content: "prior turn",
+            nativeContinuation: {
+              format: "codex.responses.v1",
+              route: {
+                source: discovered.source,
+                credentialProfileId: discovered.credentialProfileId,
+                accountFingerprint: discovered.accountFingerprint,
+                model: "model-one",
+              },
+              payload,
+            },
+          },
+          { role: "user", content: "next question" },
+        ],
+      }),
+      fixture.context,
+    );
+    expect(result.outcome).toBe("completed");
+    expect(fixture.onDispatch).toHaveBeenCalledTimes(1);
+    const sends = fixture.fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(sends).toHaveLength(1);
+    expect(JSON.parse(sends[0][1]!.body as string).input).toEqual(expect.arrayContaining(payload));
+  });
   it("sends the image block when the catalog declares imageInput=true", async () => {
     const fixture = setup();
     const result = await fixture.adapter.invoke(
