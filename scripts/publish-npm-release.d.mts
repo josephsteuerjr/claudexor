@@ -18,3 +18,17 @@ export function validatePublishedProvenance(input: PublishedProvenanceInput): {
   ok: boolean;
   reasons: string[];
 };
+
+/** The `npm error` lines of a failed npm command, without npm's debug-log pointer. */
+export function npmFailureText(stderr: unknown): string;
+
+export interface NpmSpawnResult {
+  status: number | null;
+  stderr: string;
+}
+
+/** Attempts to move `next` to every published version; returns the packages it left behind. */
+export function moveNextChannel(
+  packed: ReadonlyArray<{ pkg: { name: string; version: string } }>,
+  spawn?: (command: string, args: string[], options: Record<string, unknown>) => NpmSpawnResult,
+): string[];

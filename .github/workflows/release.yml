@@ -1063,8 +1063,8 @@ jobs:
           node scripts/verify-npm-darwin-package.mjs --tarball "${tarballs[0]}" \
             --win32-helper-sha256 "$CLAUDEXOR_WIN32_CONPTY_SHA256"
       - name: Publish only missing, byte-identical packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Trusted publishing: npm exchanges this job's GitHub OIDC token (id-token: write)
+        # for a short-lived publish credential; no stored npm token is involved.
         run: node scripts/publish-npm-release.mjs --provenance
       - run: npm audit signatures
 

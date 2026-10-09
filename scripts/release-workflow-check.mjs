@@ -634,8 +634,8 @@ for (const [label, pattern] of [
   ["published provenance is bound to source identity", /validatePublishedProvenance/],
   ["published latest dist-tag is verified", /dist-tags.*latest/s],
   ["published package signatures are audited", /audit[",\s]+signatures/],
-  // `latest` rides the publish; `next` has to be moved deliberately, and the
-  // downstream consumer pins it. Dropping the move strands the channel.
+  // `latest` rides the publish; `next` has to be moved deliberately (attempted
+  // after the publish, never blocking it). Dropping the move strands the channel.
   ["next dist-tag is moved to the published version", /dist-tag[",\s]+add[",\s]+.*next/s],
 ]) {
   if (!pattern.test(npmPublisher)) errors.push(`publish-npm-release.mjs: ${label}`);
@@ -692,6 +692,7 @@ for (const [label, pattern] of [
   ["unsigned release fallback is forbidden", /continue-on-error:\s*true/],
   ["runtime package downloads are forbidden", /\bnpx\b|@latest/],
   ["tag-push publication is forbidden", /^\s*push:\s*\n\s*tags:/m],
+  ["a stored npm token is retired: npm publishes through trusted publishing", /secrets\.NPM_TOKEN/],
 ]) {
   if (pattern.test(release)) errors.push(`release.yml: ${label}`);
 }
