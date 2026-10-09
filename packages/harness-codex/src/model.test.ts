@@ -1032,3 +1032,109 @@ describe("single-generation Codex adapter", () => {
     expect(fixture.fetcher).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("image input capability gating", () => {
+  const imageMessages = [
+    { role: "system" as const, content: "Own SYSTEM and BIBLE" },
+    {
+      role: "user" as const,
+      content: [
+        { type: "text", text: "what is in this image?" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=" } },
+      ],
+    },
+  ];
+  it("declares imageInput=true only for image-modal models, false for text-only and absent-modalities ones", () => {
+    const parsed = parseCodexModelCatalog({
+      ...catalog,
+      models: [
+        { ...catalog.models[0], slug: "vision-model", input_modalities: ["text", "image"] },
+        { ...catalog.models[0], slug: "text-model", input_modalities: ["text"] },
+        { ...catalog.models[0], slug: "no-modalities", input_modalities: undefined },
+      ],
+    });
+    expect(parsed).toEqual([
+      expect.objectContaining({ id: "vision-model", imageInput: true }),
+      expect.objectContaining({ id: "text-model", imageInput: false }),
+      expect.objectContaining({ id: "no-modalities", imageInput: false }),
+    ]);
+  });
+  it("refuses an image-bearing request when the catalog declares imageInput=false", async () => {
+    const fixture = setup();
+    fixture.fetcher.mockImplementation(async (_url, init) =>
+      init?.method === "POST"
+        ? terminal()
+        : Response.json({
+            ...catalog,
+            models: [{ ...catalog.models[0], input_modalities: ["text"] }],
+          }),
+    );
+    const result = await fixture.adapter.invoke(
+      ModelCallRequest.parse({ ...fixture.request, messages: imageMessages }),
+      fixture.context,
+    );
+    expect(result.problem).toMatchObject({
+      code: "unsupported_parameter",
+      context: { parameter: "imageInput" },
+    });
+    expect(result.outcome).toBe("failed");
+    expect(fixture.onDispatch).not.toHaveBeenCalled();
+    expect(fixture.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toEqual([]);
+  });
+  it("refuses an image-bearing request when an older engine catalog omits imageInput", async () => {
+    const fixture = setup();
+    const oldCatalog = await fixture.adapter.catalog(fixture.context);
+    expect(oldCatalog.models[0]?.imageInput).toBe(true);
+    const { imageInput: _stripped, ...oldModel } = oldCatalog.models[0]!;
+    const result = await fixture.adapter.invoke(
+      ModelCallRequest.parse({ ...fixture.request, messages: imageMessages }),
+      { ...fixture.context, catalog: { ...oldCatalog, models: [oldModel] } },
+    );
+    expect(result.problem).toMatchObject({
+      code: "unsupported_parameter",
+      context: { parameter: "imageInput" },
+    });
+    expect(result.outcome).toBe("failed");
+    expect(fixture.onDispatch).not.toHaveBeenCalled();
+    expect(fixture.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toEqual([]);
+  });
+  it("sends the image block when the catalog declares imageInput=true", async () => {
+    const fixture = setup();
+    const result = await fixture.adapter.invoke(
+      ModelCallRequest.parse({ ...fixture.request, messages: imageMessages }),
+      fixture.context,
+    );
+    expect(result.outcome).toBe("completed");
+    expect(fixture.onDispatch).toHaveBeenCalledTimes(1);
+    const sends = fixture.fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(sends).toHaveLength(1);
+    expect(JSON.parse(sends[0][1]!.body as string).input).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          role: "user",
+          content: expect.arrayContaining([
+            { type: "input_text", text: "what is in this image?" },
+            { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+          ]),
+        }),
+      ]),
+    );
+  });
+  it("image content in a non-user/tool role is refused by the serializer regardless of capability", async () => {
+    const fixture = setup();
+    const result = await fixture.adapter.invoke(
+      ModelCallRequest.parse({
+        ...fixture.request,
+        messages: [
+          ...imageMessages,
+          { role: "assistant", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=" } }] },
+        ],
+      }),
+      fixture.context,
+    );
+    expect(result.outcome).toBe("failed");
+    expect(result.problem?.code).toBe("invalid_request");
+    expect(fixture.onDispatch).not.toHaveBeenCalled();
+  });
+});
