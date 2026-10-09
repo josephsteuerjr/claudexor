@@ -6,6 +6,7 @@
     "folder": null,
     "repoRoot": null,
     "workspaceMode": "in_place",
+    "workspaceRoot": null,
     "authPreference": "auto",
     "primaryHarness": null,
     "eligibleHarnesses": [],

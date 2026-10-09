@@ -1,0 +1,25 @@
+{
+  "schema": "ControlThread",
+  "value": {
+    "id": "th-3",
+    "title": null,
+    "folder": null,
+    "repoRoot": "/tmp/proj",
+    "mode": "agent",
+    "workspaceMode": "delegated",
+    "workspaceRoot": "/tmp/checking-copy",
+    "authPreference": "auto",
+    "primaryHarness": null,
+    "eligibleHarnesses": [],
+    "credentialProfileId": null,
+    "access": "full",
+    "state": "active",
+    "trashedAt": null,
+    "purgeAfter": null,
+    "runIds": [],
+    "headRunId": null,
+    "needsHuman": false,
+    "createdAt": "2026-07-19T12:00:00.000Z",
+    "updatedAt": "2026-07-19T12:00:00.000Z"
+  }
+}

@@ -7,6 +7,7 @@
   "problem-maximal": "ControlProblem",
   "thread-minimal": "ControlThread",
   "thread-maximal": "ControlThread",
+  "thread-delegated": "ControlThread",
   "thread-turn-minimal": "ControlThreadTurn",
   "thread-turn-continuity-packet": "ControlThreadTurn",
   "thread-turn-delegation": "ControlThreadTurn",

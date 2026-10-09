@@ -25,7 +25,7 @@ export function delegatedChildRunIds(
 export function projectThread(raw: unknown, needsHuman: boolean): ControlThread {
   const t = raw as Record<string, unknown>;
   const repo = t["repo"] as { root?: string } | null;
-  const workspace = t["workspace"] as { mode?: string } | undefined;
+  const workspace = t["workspace"] as { mode?: string; workspace_root?: string | null } | undefined;
   return ControlThread.parse({
     id: t["id"],
     title: t["title"] ?? null,
@@ -33,6 +33,7 @@ export function projectThread(raw: unknown, needsHuman: boolean): ControlThread 
     repoRoot: repo?.root ?? null,
     mode: t["mode"],
     workspaceMode: workspace?.mode ?? "in_place",
+    workspaceRoot: workspace?.workspace_root ?? null,
     authPreference: t["auth_preference"] ?? "auto",
     primaryHarness: t["primary_harness"] ?? null,
     eligibleHarnesses: t["eligible_harnesses"] ?? [],

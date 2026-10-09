@@ -160,7 +160,8 @@ struct RunOutcomeSection: View {
             Panel {
                 if let answer = task.answerText, !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     MarkdownOutputView(markdown: answer,
-                                       fileScopeRoots: [task.repoRoot, task.runDir].compactMap { $0 },
+                                       fileScopeRoots: task.fileScopeRoots,
+                                       remoteFileScope: task.remoteFileScope,
                                        bodyFont: .body)
                 } else {
                     Text(task.outputReadyState == "finalizing"

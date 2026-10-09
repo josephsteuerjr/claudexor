@@ -454,10 +454,7 @@ export class WorkspaceManager {
   async captureFiles(
     env: WorkspaceEnvelope,
     runRoot: string,
-    options: {
-      observedPaths?: string[];
-      sourceRoot?: string;
-    } = {},
+    options: { observedPaths?: string[] } = {},
   ): Promise<CapturedWorkspaceFiles> {
     if (env.workspace_kind !== "directory")
       throw new WorkspaceError("captureFiles requires a directory workspace");

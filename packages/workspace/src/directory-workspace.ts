@@ -106,14 +106,15 @@ export interface CapturedWorkspaceFiles {
   noChanges: boolean | null;
 }
 
-/** Complete bytes live under the run artifact tree; a preview is never apply input. */
+/** Complete bytes live under the run artifact tree; a preview is never apply input.
+ * The manifest's source is the tree its baseline was read from (a delegated
+ * run's bound execution root), never a caller-supplied identity. */
 export async function captureDirectoryWorkspace(input: {
   executionRoot: string;
   envelopeRoot: string;
   runRoot: string;
   observedPaths?: string[];
   excludedPaths?: string[];
-  sourceRoot?: string;
 }): Promise<CapturedWorkspaceFiles> {
   const baseline = JSON.parse(
     await readFile(join(input.envelopeRoot, "directory-baseline.json"), "utf8"),
@@ -173,7 +174,7 @@ export async function captureDirectoryWorkspace(input: {
   }
   const manifest = WorkspaceFilesManifest.parse({
     version: 1,
-    sourceRoot: input.sourceRoot ?? baseline.sourceRoot,
+    sourceRoot: baseline.sourceRoot,
     executionRoot: input.executionRoot,
     isolation: baseline.isolation,
     scopePaths: baseline.scopePaths,

@@ -52,6 +52,7 @@ export async function threadQuery(
         scope: { kind: "project", root: String(input["repoPath"] ?? process.cwd()) },
         ...(input["defaultMode"] ? { mode: input["defaultMode"] } : {}),
         ...(input["workspace"] ? { workspace: input["workspace"] } : {}),
+        ...(input["workspaceRoot"] ? { workspaceRoot: input["workspaceRoot"] } : {}),
         ...(input["credentialProfileId"]
           ? { credentialProfileId: input["credentialProfileId"] }
           : {}),
@@ -104,7 +105,9 @@ export async function threadQuery(
     const location =
       parsed.data.workspaceMode === "in_place"
         ? `Write turns edit the project directory directly: ${project}.`
-        : `Write turns use this thread's isolated persistent worktree for project ${project}; it is created on the first write turn. Use thread Apply to merge changes into the project.`;
+        : parsed.data.workspaceMode === "delegated"
+          ? `Every turn executes in the caller-owned workspace ${parsed.data.workspaceRoot ?? "(unavailable)"} under delegated authority, with project ${project} as identity. Claudexor never applies, resets, or deletes that workspace.`
+          : `Write turns use this thread's isolated persistent worktree for project ${project}; it is created on the first write turn. Use thread Apply to merge changes into the project.`;
     return {
       ...parsed.data,
       threadId: parsed.data.id,

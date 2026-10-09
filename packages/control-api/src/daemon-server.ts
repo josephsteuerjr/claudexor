@@ -55,6 +55,7 @@ import {
   type ThreadTurnRouteCtx,
 } from "./thread-turn-routes.js";
 import { chainIdleRunMutation, chainThreadMutation } from "./thread-mutation.js";
+import { handleThreadCreate } from "./thread-create-route.js";
 import {
   handleThreadLifecycleRoutes,
   type ThreadLifecycleRouteCtx,
@@ -100,6 +101,7 @@ import {
   resolveProjectRoot,
   type ResolvedThreadWorkspace,
 } from "./artifact-serve-routes.js";
+import { runExecutionRoot, runExecutionWorkspaceRoot } from "./run-execution-root.js";
 import { requiredGateSpecsFromTaskArtifact } from "./task-contract-gates.js";
 import { bearerCredential } from "./authorization.js";
 import { assertOnlyQueryParams, singleQuery } from "./query.js";
@@ -188,7 +190,6 @@ import {
   ControlRunDecisionRequest,
   ControlRunDecisionResponse,
   ControlRunApplicabilityResponse,
-  ControlThreadCreateRequest,
   ControlThreadTurnRequest,
   ControlThreadUpdateRequest,
   ControlThreadDetail,
@@ -206,7 +207,6 @@ import {
   type FinalVerifyRecord,
   type RunOutcomeFacts,
   type WorkState,
-  isEphemeralRunScope,
   isTerminalLifecycle,
   needsDecision,
   needsOperatorAttention,
@@ -316,6 +316,7 @@ export interface DaemonControlApiOptions {
         idempotency?: { key: string; client: string; request: unknown },
       ) => { record: ControlOperatorDecisionRecord; reused: boolean };
       createThread?: (input: unknown) => Promise<unknown>;
+      findThreadCreation?: (input: unknown) => Promise<unknown>;
       listThreads?: () => Promise<{ threads: unknown[]; problems?: unknown[] }>;
       threadDetail?: (
         id: string,
@@ -762,6 +763,7 @@ export class DaemonControlApiServer {
           json: (response, status, body) => this.json(response, status, body),
           requestError: (response, error, fallback) => this.requestError(response, error, fallback),
           binary: writeBinaryResponse,
+          findRun: (id) => this.findRun(id),
         },
         method,
         path,
@@ -916,43 +918,16 @@ export class DaemonControlApiServer {
       return;
 
     if (method === "POST" && path === "/threads") {
-      const svc = this.opts.services?.createThread;
-      if (!svc)
-        return this.json(res, 501, { error: "threads are not supported by this engine build" });
-      try {
-        const body = await this.readBody(req);
-        assertNoInlineSecretValues(body);
-        const parsed = ControlThreadCreateRequest.parse(body);
-        const idempotencyKey = runStart.requiredIdempotencyKey(req);
-        let repoRoot: string | null = null;
-        if (parsed.scope.kind === "project") {
-          repoRoot = runStart.normalizeExistingProjectRoot(parsed.scope.root);
-        }
-        const thread = await svc({
-          title: parsed.title,
-          folder: parsed.folder,
-          repoRoot,
-          // Carried explicitly through the SAME predicate the run route and the
-          // partition router use: dropping it here would register a root the
-          // wire contract promises never to register.
-          ephemeral: isEphemeralRunScope(parsed.scope),
-          mode: parsed.mode,
-          workspace: parsed.workspace,
-          authPreference: parsed.authPreference,
-          credentialProfileId: parsed.credentialProfileId ?? null,
-          access: parsed.access,
-          primaryHarness: parsed.primaryHarness ?? null,
-          eligibleHarnesses: parsed.eligibleHarnesses,
-          idempotency: {
-            key: idempotencyKey,
-            client: "control-api",
-            request: parsed,
-          },
-        });
-        return this.json(res, 200, projectThread(thread, false));
-      } catch (err) {
-        return this.requestError(res, err);
-      }
+      return handleThreadCreate(
+        {
+          services: this.opts.services,
+          readBody: (request) => this.readBody(request),
+          json: (response, status, body) => this.json(response, status, body),
+          requestError: (response, error) => this.requestError(response, error),
+        },
+        req,
+        res,
+      );
     }
 
     if (method === "GET" && path === "/threads") {
@@ -1144,8 +1119,12 @@ export class DaemonControlApiServer {
                     { status: 409 },
                   );
                 }
+                // A delegated run's live tree is its recorded caller-owned
+                // address; it never falls back to the stable project identity.
                 const repoRoot =
-                  recordedExecutionRoot(rec) ?? applyTargetRoot({ kind: "original_project" }, rec);
+                  recordedExecutionRoot(rec) ??
+                  runExecutionWorkspaceRoot(rec) ??
+                  applyTargetRoot({ kind: "original_project" }, rec);
                 if (!repoRoot) {
                   throw Object.assign(
                     new Error("cannot resolve the in-place project root to revert"),
@@ -2056,13 +2035,15 @@ export class DaemonControlApiServer {
     // and `resolveProducedRoot` fails CLOSED with a typed authority-unavailable.
     if (!svc) return null;
     const { thread } = await svc(threadId);
-    const ws = (thread as { workspace?: { mode?: unknown; worktree_path?: unknown } })?.workspace;
+    const ws = (
+      thread as {
+        workspace?: { mode?: unknown; worktree_path?: unknown; workspace_root?: unknown };
+      }
+    )?.workspace;
     if (!ws) return null;
-    return {
-      mode: ws.mode === "isolated" ? "isolated" : "in_place",
-      worktreePath:
-        typeof ws.worktree_path === "string" && ws.worktree_path.trim() ? ws.worktree_path : null,
-    };
+    const mode = ws.mode === "isolated" || ws.mode === "delegated" ? ws.mode : "in_place";
+    const tree = mode === "delegated" ? ws.workspace_root : ws.worktree_path;
+    return { mode, worktreePath: typeof tree === "string" && tree.trim() ? tree : null };
   }
 
   private operatorDecisionFor(rec: DaemonRunRecord): ControlOperatorDecisionRecord | null {
@@ -2460,6 +2441,7 @@ function summarizeRun(
   eventsSnapshot?: Record<string, unknown>[],
 ): ControlRunSummary {
   const p = paramsRecord(rec);
+  const project = projectMetadata(rec);
   // safeParse everywhere: one malformed job record (e.g. an old/foreign mode id)
   // must degrade to an unknown field, never 500 the whole run list forever.
   const parsedMode = ModeKind.safeParse(p["mode"]);
@@ -2523,7 +2505,8 @@ function summarizeRun(
     runDir: rec.runDir,
     error: rec.error,
     failure,
-    project: projectMetadata(rec),
+    project,
+    executionRoot: runExecutionRoot(rec, project.root),
     mode: parsedMode.success ? parsedMode.data : undefined,
     strategy: strategyFromParams(p),
     prompt:
@@ -2878,7 +2861,7 @@ function applyTargetRoot(
   rec: DaemonRunRecord,
 ): string | null {
   if (target.kind === "project") return target.root;
-  return runRepoRoot(rec);
+  return runExecutionRoot(rec, runRepoRoot(rec));
 }
 
 /** Project the run record into the delivery package's single-owner apply gate. */
@@ -2915,7 +2898,7 @@ function applyGateInputFor(
     workProduct: safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct),
     patch,
     ...(files ? { filesManifest: files.manifest, manifestSha256: files.manifestSha256 } : {}),
-    originalRepoRoot: runRepoRoot(rec),
+    originalRepoRoot: runExecutionRoot(rec, runRepoRoot(rec)),
     targetRepoRoot,
     operatorDecision: operatorDecision
       ? {
@@ -2940,7 +2923,7 @@ function applyGateInputFor(
 /**
  * The GET /runs/:id projection of the apply gate: null when the run has no
  * patch artifact (nothing to apply); otherwise the derived verdict against
- * the run's own original project root.
+ * the run's recorded delivery target.
  */
 
 /** Readiness AND open questions of a plan run, from ONE read of the same
@@ -2967,8 +2950,8 @@ function applyEligibilityFor(
   rec: DaemonRunRecord,
   operatorDecision: ControlOperatorDecisionRecord | null,
 ): ApplyEligibility | null {
-  const root = runRepoRoot(rec);
-  const { patch, unavailable } = exactPatch.resolveRunPatch(rec, root);
+  const root = runExecutionRoot(rec, runRepoRoot(rec));
+  const { patch, unavailable } = exactPatch.resolveRunPatch(rec, runRepoRoot(rec));
   const files = readFilesWorkProduct(rec);
   if (!files && (patch === null || patch.trim() === "")) return null;
   if (!root) return null;

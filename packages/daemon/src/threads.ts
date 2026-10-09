@@ -39,9 +39,10 @@ import {
 import { reduceThreadLifecycle, type ThreadLifecycleAction } from "./thread-lifecycle.js";
 import { deriveThreadTitle } from "./thread-title.js";
 import {
+  applyThreadIdempotency,
   assertUnique,
+  findIdempotentThread,
   findIdempotentTurn,
-  idempotencyConflict,
   parseMutation,
   threadCreationIdempotency,
   turnRunConflict,
@@ -67,8 +68,9 @@ export interface CreateThreadInput {
   folder?: string | null;
   repoRoot?: string | null;
   mode?: Thread["mode"];
-  /** in_place (default) mutates the live tree; isolated keeps a thread worktree. */
+  /** in_place (default) | isolated (thread worktree) | delegated (`workspaceRoot`). */
   workspace?: WorkspaceMode;
+  workspaceRoot?: string | null;
   authPreference?: Thread["auth_preference"];
   credentialProfileId?: string | null;
   /** Sticky write scope for write turns (null/omit = repo trust default). */
@@ -116,6 +118,8 @@ export type ThreadHeadPingSink = (ping: { threadId: string; projectId: string | 
 /** Journal-backed thread/session projection. Returned mutations are fsynced. */
 export class ThreadStore {
   private state: ThreadStoreState = { threads: [], sessions: [], turns: [], checkpoints: [] };
+  // Derived during replay and commit; retained turns never move or disappear.
+  private readonly turnIndexById = new Map<string, number>();
   private readonly turnIdByKey = new Map<string, { turnId: string; requestDigest: string }>();
   private readonly threadIdByKey = new Map<string, { threadId: string; requestDigest: string }>();
 
@@ -182,42 +186,33 @@ export class ThreadStore {
   private apply(mutation: ThreadMutation): void {
     for (const thread of mutation.threads ?? []) upsert(this.state.threads, thread);
     for (const session of mutation.sessions ?? []) upsert(this.state.sessions, session);
-    for (const turn of mutation.turns ?? []) upsert(this.state.turns, turn);
+    for (const turn of mutation.turns ?? []) upsert(this.state.turns, turn, this.turnIndexById);
     for (const checkpoint of mutation.checkpoints ?? []) upsert(this.state.checkpoints, checkpoint);
-    if (mutation.idempotency) {
-      const { keyDigest, requestDigest, turnId } = mutation.idempotency;
-      const prior = this.turnIdByKey.get(keyDigest);
-      if (prior && (prior.turnId !== turnId || prior.requestDigest !== requestDigest)) {
-        throw new Error("conflicting thread idempotency history");
-      }
-      this.turnIdByKey.set(keyDigest, { turnId, requestDigest });
-    }
-    if (mutation.threadCreation) {
-      const { keyDigest, requestDigest, threadId } = mutation.threadCreation;
-      const prior = this.threadIdByKey.get(keyDigest);
-      if (prior && (prior.threadId !== threadId || prior.requestDigest !== requestDigest)) {
-        throw new Error("conflicting thread creation idempotency history");
-      }
-      this.threadIdByKey.set(keyDigest, { threadId, requestDigest });
-    }
+    applyThreadIdempotency(mutation, this.turnIdByKey, this.threadIdByKey);
   }
 
   createThread(input: CreateThreadInput): Thread {
     const creation = threadCreationIdempotency(this.journal.options.partition, input.idempotency);
-    if (creation) {
-      const prior = this.threadIdByKey.get(creation.keyDigest);
-      if (prior) {
-        if (prior.requestDigest !== creation.requestDigest) throw idempotencyConflict();
-        const existing = this.getThread(prior.threadId);
-        if (!existing)
-          throw new Error(`idempotency record points to missing thread ${prior.threadId}`);
-        return existing;
-      }
-    }
+    const existing = findIdempotentThread(this.threadIdByKey, (id) => this.getThread(id), creation);
+    if (existing) return existing;
     const thread = buildNewThread(input);
     if (creation) creation.threadId = thread.id;
     this.commit({ threads: [thread], ...(creation ? { threadCreation: creation } : {}) });
     return thread;
+  }
+
+  /** Accepted-creation replay lookup, recovered before mutable path admission. */
+  findThreadCreation(
+    input: CreateThreadInput["idempotency"],
+    exactRequestOnly = false,
+  ): Thread | undefined {
+    const creation = threadCreationIdempotency(this.journal.options.partition, input);
+    return findIdempotentThread(
+      this.threadIdByKey,
+      (id) => this.getThread(id),
+      creation,
+      exactRequestOnly,
+    );
   }
 
   /** Rename and/or open/close (archive) a thread. */
@@ -290,7 +285,8 @@ export class ThreadStore {
   }
 
   getTurn(turnId: string): ThreadTurn | undefined {
-    return this.state.turns.find((t) => t.id === turnId);
+    const index = this.turnIndexById.get(turnId);
+    return index === undefined ? undefined : this.state.turns[index];
   }
 
   /**
@@ -399,7 +395,7 @@ export class ThreadStore {
 
   /** Bind a started run to its turn and advance the thread head (runner-owned). */
   bindTurnRun(turnId: string, runId: string): void {
-    const turn = this.state.turns.find((t) => t.id === turnId);
+    const turn = this.getTurn(turnId);
     if (!turn) return;
     if (turn.run_id === runId) return;
     if (turn.run_id) throw turnRunConflict(turnId, turn.run_id, runId);
@@ -428,7 +424,7 @@ export class ThreadStore {
    * adding a field cannot silently fall out of a positional callback chain.
    */
   setTurnEnqueueError(turnId: string, problem: TurnEnqueueProblem): void {
-    const turn = this.state.turns.find((t) => t.id === turnId);
+    const turn = this.getTurn(turnId);
     if (!turn || turn.run_id) return;
     const nextTurn = ThreadTurnSchema.parse({
       ...turn,
@@ -498,7 +494,7 @@ export class ThreadStore {
 
   /** Stamp how a turn's lane was continued (INV-137); last-writer-wins. */
   setTurnContinuity(turnId: string, disclosure: ContinuityDisclosure): void {
-    const turn = this.state.turns.find((t) => t.id === turnId);
+    const turn = this.getTurn(turnId);
     if (!turn) return;
     this.commit({ turns: [stampContinuity(turn, disclosure)] });
   }

@@ -45,13 +45,11 @@ export async function captureDirectoryCandidate(input: {
   manager: WorkspaceManager;
   envelope: WorkspaceEnvelope;
   artifactRoot: string;
-  sourceRoot: string;
   observedPaths: string[];
 }): Promise<{ files?: DirectoryCandidate; refusal?: CaptureRefusal }> {
   try {
     const files = await input.manager.captureFiles(input.envelope, input.artifactRoot, {
       observedPaths: input.observedPaths,
-      sourceRoot: input.sourceRoot,
     });
     return { files: { ...files, artifactRoot: input.artifactRoot } };
   } catch {
@@ -149,7 +147,6 @@ export async function directoryCandidateStable(
       manager,
       envelope,
       artifactRoot,
-      sourceRoot: files.manifest.sourceRoot,
       observedPaths: files.manifest.entries.map((entry) => entry.path),
     });
     return current.files?.manifestSha256 === files.manifestSha256;

@@ -193,7 +193,7 @@ export const CatalogMutabilityMatrix = z
       ),
     workspaceModes: z
       .array(WorkspaceMode)
-      .describe("Thread workspace modes (in_place | isolated)."),
+      .describe("Thread workspace modes (in_place | isolated | delegated)."),
     accessProfiles: z
       .array(AccessProfile)
       .describe(

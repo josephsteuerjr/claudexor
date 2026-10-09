@@ -95,9 +95,10 @@ func stagedArtifactPreview(
     let url = try ExternalArtifactHandoff.standard()
         .stage(data: bytes, suggestedName: (path as NSString).lastPathComponent)
     let task = model.task(runId, at: locationID)
-    return .localFile(
-        url: url, kind: kind,
-        fileScopeRoots: [task?.repoRoot, task?.runDir].compactMap { $0 })
+    var request = SafeFilePreviewRequest.localFile(
+        url: url, kind: kind, fileScopeRoots: task?.fileScopeRoots ?? [])
+    request.remoteFileScope = task?.remoteFileScope
+    return request
 }
 
 /// The gallery presents its existing payload state immediately, before a fetch

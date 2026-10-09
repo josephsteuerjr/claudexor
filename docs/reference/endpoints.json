@@ -531,6 +531,15 @@
           "enum": null,
           "schema_ref": null,
           "description": "Relative path contained by the registered project; the content must be a raster image (magic-byte validated)."
+        },
+        {
+          "name": "runId",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": null,
+          "description": "Run of this project whose recorded caller-owned execution workspace the path is relative to; a missing workspace answers 410 execution_workspace_unavailable, never the project's file."
         }
       ],
       "response_schema": null,

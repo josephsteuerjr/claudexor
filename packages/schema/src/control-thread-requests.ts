@@ -14,8 +14,15 @@ export const ControlThreadCreateRequest = z
     scope: RunScope.default({ kind: "none" }),
     mode: ModeKind.optional().describe("Default mode for new turns."),
     workspace: WorkspaceMode.optional().describe(
-      "Workspace mode for the thread (in_place or isolated).",
+      "Workspace mode for the thread (in_place, isolated, or delegated).",
     ),
+    /** Create-only binding of a delegated thread; never patched or replaced by a turn. */
+    workspaceRoot: z
+      .string()
+      .optional()
+      .describe(
+        "Absolute existing caller-owned directory every turn of a workspace='delegated' thread executes in. Required exactly for that workspace, project scope only, and immutable after creation; scope.root stays the stable project identity.",
+      ),
     authPreference: AuthPreference.optional().describe("Per-thread auth preference override."),
     credentialProfileId: NonBlankString.optional().describe(
       "Sticky credential profile for the thread (INV-135); per-turn selection wins.",
@@ -33,6 +40,29 @@ export const ControlThreadCreateRequest = z
   .strict()
   .describe("Request body for POST /threads.");
 export type ControlThreadCreateRequest = z.infer<typeof ControlThreadCreateRequest>;
+
+/**
+ * The one shape rule for a delegated thread binding, shared by every creation
+ * owner (Control API, daemon store). Existence of the directory is a mutable
+ * filesystem fact checked separately, after accepted-replay lookup.
+ */
+export function threadCreateWorkspaceViolation(
+  request: Pick<ControlThreadCreateRequest, "workspace" | "workspaceRoot"> & {
+    scope?: { kind: string };
+  },
+): string | null {
+  const delegated = request.workspace === "delegated";
+  if (delegated && request.workspaceRoot === undefined) {
+    return "workspaceRoot is required for workspace='delegated'";
+  }
+  if (!delegated && request.workspaceRoot !== undefined) {
+    return "workspaceRoot is accepted only with workspace='delegated'";
+  }
+  if (delegated && request.scope?.kind !== "project") {
+    return "workspace='delegated' requires a project scope";
+  }
+  return null;
+}
 
 /** Mutate a thread's title, sidebar folder, open/closed state, or sticky routing
  * (rename, file, archive, switch primary/pool). primaryHarness nullable => clear back to auto. */

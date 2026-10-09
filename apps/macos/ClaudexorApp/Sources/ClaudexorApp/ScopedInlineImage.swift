@@ -5,7 +5,7 @@ import ImageIO
 
 /// Inline preview of an agent-produced image (F2.5 W-C7, the "it could not
 /// send me the screenshot" fix). SECURITY SCOPE: only files inside the thread's
-/// repoRoot or the run's directory render — canonical (symlink-resolved)
+/// execution root or the run's directory render — canonical (symlink-resolved)
 /// paths, prefix-checked with a path-boundary, image extensions only. Out of
 /// scope degrades to the visible markdown text plus a DISCLOSED refusal
 /// caption, never a silent blank. Loading is bounded: a CGImageSource

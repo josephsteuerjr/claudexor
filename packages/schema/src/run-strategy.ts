@@ -67,6 +67,28 @@ export interface RunExecutionWorkspaceViolation {
 }
 
 /**
+ * Where `execution.workspaceRoot` is a real execution address: a project-scoped
+ * delegated run that executes the Agent live (or copies/reads its explicit
+ * directory footprint from there), or a read-only Ask/Plan that reads it — the
+ * shape a delegated thread records for every turn. Elsewhere it would be a
+ * dead knob or a silent redirect, so the shared normalizer refuses it.
+ */
+export function runExecutionWorkspaceRootAllowed(value: {
+  mode?: ModeKind;
+  scope?: { kind: string };
+  execution?: {
+    isolation?: "envelope" | "live";
+    delegated?: boolean;
+    workspaceKind?: "git" | "directory";
+  };
+}): boolean {
+  if (value.scope?.kind !== "project" || value.execution?.delegated !== true) return false;
+  const mode = value.mode ?? "agent";
+  if (mode !== "agent") return true;
+  return value.execution.isolation === "live" || value.execution.workspaceKind === "directory";
+}
+
+/**
  * A fresh delegated live write must name the caller-owned execution tree.
  * Exact Retry may replay the bounded historical shape whose stable scope root
  * was itself the frozen execution tree.

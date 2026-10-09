@@ -35,6 +35,11 @@ export const REMOTE_OPERATION_DRAFTS = [
         description:
           "Relative path contained by the registered project; the content must be a raster image (magic-byte validated).",
       }),
+      queryParam({
+        name: "runId",
+        description:
+          "Run of this project whose recorded caller-owned execution workspace the path is relative to; a missing workspace answers 410 execution_workspace_unavailable, never the project's file.",
+      }),
     ],
   },
 ] as const satisfies readonly OperationDraft[];

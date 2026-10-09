@@ -125,6 +125,7 @@ extension AppModel {
             if !task.prompt.isEmpty { task.title = String(task.prompt.prefix(64)) }
             task.project = detail.summary.project?.projectName ?? detail.summary.project?.root.map { URL(fileURLWithPath: $0).lastPathComponent } ?? task.project
             task.repoRoot = detail.summary.project?.root ?? task.repoRoot
+            task.executionRoot = detail.summary.executionRoot ?? task.executionRoot
             task.harnesses = (detail.summary.harnesses ?? []).compactMap { HarnessFamily(rawValue: $0) }
             task.applyPaidBudget(detail.summary.paidBudget)
             task.spendUsd = detail.summary.spendUsd ?? task.spendUsd

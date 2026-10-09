@@ -7,6 +7,7 @@
     "repoRoot": "/tmp/proj",
     "mode": "agent",
     "workspaceMode": "isolated",
+    "workspaceRoot": null,
     "authPreference": "subscription",
     "primaryHarness": "claude",
     "eligibleHarnesses": [

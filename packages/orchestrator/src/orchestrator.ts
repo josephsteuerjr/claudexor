@@ -60,6 +60,8 @@ import {
   isMutatingAccess,
   outerBoundaryNotice,
   scopedHarnessHome,
+  selectLaneHome,
+  followSpecHome,
   type ScopedHarnessHome,
 } from "./delegatedHome.js";
 import * as AC from "./attemptUsageCost.js";
@@ -1888,10 +1890,10 @@ export class Orchestrator {
     log: EventLog,
   ): Promise<string> {
     if (input.repoRoot === NO_PROJECT_ROOT || input.contextMode === "off") return "";
-    // the versioned project config drives the context pack — mandatory files
-    // (fail-closed when listed), plus include/exclude globs for the Scope Atlas.
+    // Project identity owns config; the execution tree supplies content.
+    // Mandatory files and include/exclude globs still come from project config.
     const projectCtx = this.projectConfig(input.repoRoot).context;
-    const pack = await buildContextPack(input.repoRoot, contract, {
+    const pack = await buildContextPack(this.execRootOf(input), contract, {
       mandatory: projectCtx.mandatory_files.length > 0 ? projectCtx.mandatory_files : undefined,
       include: projectCtx.include,
       exclude: projectCtx.exclude,
@@ -2276,6 +2278,7 @@ export class Orchestrator {
       envelope.worktree_path === envelope.repo_root,
       runInput?.delegated === true,
       routed.adapterAccess,
+      runInput?.threadId ? (id) => this.laneHomeEnvFor(runInput, routed.adapter.id, id) : null,
     );
   }
 
@@ -2327,7 +2330,6 @@ export class Orchestrator {
         manager: wsm,
         envelope,
         artifactRoot: join(paths.attemptsDir, attemptId),
-        sourceRoot: contract.repo.root,
         observedPaths: [...observedPaths],
       }));
     const rawContextPacket = await rawContextForEnvelope(routed.implementationTransport, envelope);
@@ -2341,6 +2343,11 @@ export class Orchestrator {
           routed.quotaAdmission,
         )
       : undefined;
+    // A delegated thread's in-place lane home is keyed by the RESOLVED account.
+    selectLaneHome(
+      harnessHome,
+      sessionFields?.credential_profile?.profile_id ?? runInput?.credentialProfileId ?? null,
+    );
     const processingAdmission = processingAdmissionForLease(
       ledger,
       processingLease.lease,
@@ -2449,7 +2456,7 @@ export class Orchestrator {
     // must name the profile that ran, never the one the request asked for.
     const appliedNow = () =>
       appliedAttemptFacts(
-        harnessHome,
+        followSpecHome(harnessHome, spec, runInput?.credentialProfileId ?? null),
         spec.access,
         spec.credential_profile?.profile_id ?? runInput?.credentialProfileId ?? null,
       );
@@ -2842,7 +2849,7 @@ export class Orchestrator {
               ? {
                   files_manifest: directoryCapture.files.manifestPath,
                   manifest_sha256: directoryCapture.files.manifestSha256,
-                  source_root: contract.repo.root,
+                  source_root: directoryCapture.files.manifest.sourceRoot,
                   execution_root: envelope.worktree_path,
                   no_changes: directoryCapture.files.noChanges,
                 }
@@ -5006,7 +5013,6 @@ export class Orchestrator {
               manager: wsm,
               envelope,
               artifactRoot: join(paths.attemptsDir, attemptId),
-              sourceRoot: contract.repo.root,
               observedPaths: [...observedPaths],
             });
             run.files = captured.files;

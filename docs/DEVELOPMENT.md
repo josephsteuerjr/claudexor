@@ -297,7 +297,10 @@ Tests and local smokes must never touch real user state:
   (`--harness fake-success`, etc.); they are only selectable by explicit id and
   never enter automatic or reviewer pools. `fake-implement` additionally writes
   a real worktree file for producing intents, so the Agent write→apply and
-  Create chains are exercisable with no real harness.
+  Create chains are exercisable with no real harness. `fake-session` reports a
+  native session id (resuming one the engine carries) plus a probe of the cwd and
+  `HOME` it was handed, so thread lane-home and native-resume stories run
+  offline.
 - Council regression fixtures exercise actual planner transports and final
   artifacts: retained unverified drafts, original failures, merge selection and
   terminal RunFacts must agree. Check solo/draft/merge prompt guidance through

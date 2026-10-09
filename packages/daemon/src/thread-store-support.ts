@@ -14,7 +14,7 @@ import type { CreateThreadInput, CreateTurnInput, UpdateThreadInput } from "./th
  * Pure ThreadStore support: the journal mutation codec and the idempotency
  * digests. Extracted from `threads.ts` so the store file stays under the
  * new-file complexity cap (INV-124); no behavior lives here — only parsing,
- * hashing, and array upkeep.
+ * hashing, and collection upkeep.
  */
 
 export interface ThreadMutation {
@@ -150,10 +150,59 @@ export function findIdempotentTurn(
   return turn;
 }
 
-export function upsert<T extends { id: string }>(items: T[], value: T): void {
-  const index = items.findIndex((item) => item.id === value.id);
-  if (index < 0) items.push(value);
-  else items[index] = value;
+export function findIdempotentThread(
+  index: ReadonlyMap<string, { threadId: string; requestDigest: string }>,
+  getThread: (id: string) => Thread | undefined,
+  input: ThreadMutation["threadCreation"],
+  exactRequestOnly = false,
+): Thread | undefined {
+  if (!input) return undefined;
+  const prior = index.get(input.keyDigest);
+  if (!prior) return undefined;
+  if (prior.requestDigest !== input.requestDigest) {
+    if (exactRequestOnly) return undefined;
+    throw idempotencyConflict();
+  }
+  const thread = getThread(prior.threadId);
+  if (!thread) throw new Error(`idempotency record points to missing thread ${prior.threadId}`);
+  return thread;
+}
+
+export function applyThreadIdempotency(
+  mutation: ThreadMutation,
+  turnIdByKey: Map<string, { turnId: string; requestDigest: string }>,
+  threadIdByKey: Map<string, { threadId: string; requestDigest: string }>,
+): void {
+  if (mutation.idempotency) {
+    const { keyDigest, requestDigest, turnId } = mutation.idempotency;
+    const prior = turnIdByKey.get(keyDigest);
+    if (prior && (prior.turnId !== turnId || prior.requestDigest !== requestDigest)) {
+      throw new Error("conflicting thread idempotency history");
+    }
+    turnIdByKey.set(keyDigest, { turnId, requestDigest });
+  }
+  if (mutation.threadCreation) {
+    const { keyDigest, requestDigest, threadId } = mutation.threadCreation;
+    const prior = threadIdByKey.get(keyDigest);
+    if (prior && (prior.threadId !== threadId || prior.requestDigest !== requestDigest)) {
+      throw new Error("conflicting thread creation idempotency history");
+    }
+    threadIdByKey.set(keyDigest, { threadId, requestDigest });
+  }
+}
+
+export function upsert<T extends { id: string }>(
+  items: T[],
+  value: T,
+  indexById?: Map<string, number>,
+): void {
+  const index = indexById
+    ? (indexById.get(value.id) ?? -1)
+    : items.findIndex((item) => item.id === value.id);
+  if (index < 0) {
+    indexById?.set(value.id, items.length);
+    items.push(value);
+  } else items[index] = value;
 }
 
 export function assertUnique(items: Array<{ id: string }>, kind: string): void {
@@ -165,6 +214,17 @@ export function assertUnique(items: Array<{ id: string }>, kind: string): void {
 /** Construct a NEW thread from its create input (defaults documented inline). */
 export function buildNewThread(input: CreateThreadInput): Thread {
   const now = nowIso();
+  const delegated = input.workspace === "delegated";
+  // A delegated binding never degrades: without a project or a root it would
+  // silently become an in-place thread on the author tree.
+  if (delegated !== Boolean(input.workspaceRoot) || (delegated && !input.repoRoot)) {
+    throw Object.assign(
+      new Error(
+        "workspace='delegated' requires a project scope and workspaceRoot, and workspaceRoot requires workspace='delegated'",
+      ),
+      { status: 400, code: "thread_workspace_invalid", retryable: false },
+    );
+  }
   // A sticky primary must be a member of a non-empty eligible pool — enforce
   // at CREATE too (the request carries primary + pool independently) so a
   // thread is never born incoherent.
@@ -187,6 +247,7 @@ export function buildNewThread(input: CreateThreadInput): Thread {
       mode: input.repoRoot ? (input.workspace ?? "in_place") : "in_place",
       worktree_path: null,
       base_sha: null,
+      workspace_root: delegated ? input.workspaceRoot : null,
     },
     auth_preference: input.authPreference ?? "auto",
     credential_profile_id: input.credentialProfileId ?? null,
