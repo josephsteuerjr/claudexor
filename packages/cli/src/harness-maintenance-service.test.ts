@@ -75,7 +75,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function harnessWorld(config: Record<string, unknown> = {}) {
+function harnessWorld(config: Record<string, unknown> = {}, spawn = spawnProcess) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "cx-maint-op-")));
   roots.push(root);
   const script = join(root, "fake-cli.mjs");
@@ -123,7 +123,7 @@ function harnessWorld(config: Record<string, unknown> = {}) {
         args: argv.slice(2),
         resultAtSpawn: structuredClone(store.records().at(-1)?.result ?? null),
       });
-      return spawnProcess(command, argv, options);
+      return spawn(command, argv, options);
     }) as typeof spawnProcess,
   });
   const calls = () =>
@@ -156,6 +156,75 @@ function harnessWorld(config: Record<string, unknown> = {}) {
 const latest = { harness: "codex", target: { kind: "latest" as const } };
 
 describe("harness maintenance operation", () => {
+  it.each([true, false])(
+    "a pre-update inspection cannot restore old observations (newer read: %s)",
+    async (newerRead) => {
+      let release!: () => void;
+      let started!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const captured = new Promise<void>((resolve) => (started = resolve));
+      let version = "1.0.0";
+      let inspections = 0;
+      const w = harnessWorld({}, async function* (_command, args) {
+        const [, , , verb, ...rest] = args;
+        if (verb === "inspect") {
+          const ids = rest[0]?.startsWith("--") ? ["codex", "claude"] : [rest[0]!];
+          const rows = ids.map((harness) => ({
+            ...ROW,
+            harness,
+            observedAt: new Date().toISOString(),
+            selection: { ...ROW.selection, version: harness === "codex" ? version : "1.0.0" },
+            installed: { ...ROW.installed, version: harness === "codex" ? version : "1.0.0" },
+            available: rest.includes("--latest")
+              ? { version, observedAt: new Date().toISOString() }
+              : null,
+          }));
+          if (++inspections === 1) {
+            started();
+            await held;
+          }
+          yield { type: "stdout", line: JSON.stringify({ harnesses: rows }) };
+        } else {
+          expect(verb).toBe("update");
+          version = "7.7.7";
+          yield { type: "stdout", line: JSON.stringify(UPDATED) };
+        }
+        yield { type: "exit", code: 0, signal: null };
+      });
+      const inventory = w.maintenance.routes.maintenanceInventory;
+      const pending = inventory({ harnessIds: ["codex", "claude"], checkLatest: true });
+      await captured;
+      const { id } = await w.maintenance.routes.createMaintenanceOperation(
+        { harness: "codex", target: { kind: "version", version: "7.7.7" } },
+        "update",
+      );
+      expect(await w.run(id)).toMatchObject({ state: "succeeded", after: { version: "7.7.7" } });
+      if (newerRead)
+        expect(
+          (await inventory({ harnessIds: ["codex"], checkLatest: true })).harnesses[0],
+        ).toMatchObject({ installed: { version: "7.7.7" } });
+      release();
+      const rows = (await pending).harnesses;
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toMatchObject({
+        selection: { version: "7.7.7" },
+        installed: { version: "7.7.7" },
+        available: { version: "7.7.7" },
+      });
+      expect(rows[1]).toMatchObject({ harness: "claude", installed: { version: "1.0.0" } });
+      expect((await inventory({ harnessIds: ["codex", "claude"] })).harnesses).toEqual(rows);
+      // Reuse the newer read, or reacquire only the invalidated harness. The
+      // unaffected row from the original all-harness read remains reusable.
+      expect(
+        w.spawnArgs.filter((call) => call.args[1] === "inspect").map((call) => call.args),
+      ).toEqual([
+        ["harness", "inspect", "--latest", "--json"],
+        ["harness", "inspect", "codex", "--json"],
+        ["harness", "inspect", "codex", "--latest", "--json"],
+      ]);
+    },
+  );
+
   it("one key + same body rejoins the same operation; a different body conflicts", async () => {
     const w = harnessWorld();
     const first = await w.maintenance.routes.createMaintenanceOperation(latest, "k1");

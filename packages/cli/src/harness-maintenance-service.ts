@@ -85,6 +85,7 @@ export function createHarnessMaintenance(deps: HarnessMaintenanceDependencies) {
   const cli = deps.cli ?? { command: process.execPath, args: [claudexorCliEntry()] };
   const spawn = deps.spawn ?? spawnProcess;
   const inventory = new Map<string, HarnessInspection>();
+  const inventoryGenerations = new Map<string, number>();
   const latestSeen = new Map<string, Pick<HarnessInspection, "available" | "availableProblem">>();
   const creating = new Set<string>();
   let index: Map<string, string[]> | null = null;
@@ -161,8 +162,10 @@ export function createHarnessMaintenance(deps: HarnessMaintenanceDependencies) {
     fresh: boolean,
     signal?: AbortSignal,
   ): Promise<HarnessInspection[]> {
-    const stale = fresh || latest ? ids : ids.filter((id) => !inventory.has(id));
-    if (stale.length) {
+    let stale = fresh || latest ? ids : ids.filter((id) => !inventory.has(id));
+    while (stale.length) {
+      // A multi-harness child returns all rows, including ones not requested.
+      const generations = new Map(inventoryGenerations);
       const one = stale.length === 1 ? [stale[0]!] : [];
       const out = await runChild(
         ["harness", "inspect", ...one, ...(latest ? ["--latest"] : [])],
@@ -185,9 +188,15 @@ export function createHarnessMaintenance(deps: HarnessMaintenanceDependencies) {
         );
       for (const row of parsed) {
         const value = row.data! as HarnessInspection;
+        if (generations.get(value.harness) !== inventoryGenerations.get(value.harness)) continue;
         if (latest) latestSeen.set(value.harness, value);
         inventory.set(value.harness, value);
       }
+      // A newer read may already own the invalidated row. Otherwise acquire it
+      // now, so this caller also gets current facts instead of an empty answer.
+      stale = ids.filter(
+        (id) => generations.get(id) !== inventoryGenerations.get(id) && !inventory.has(id),
+      );
     }
     return ids.flatMap((id) => inventory.get(id) ?? []);
   }
@@ -232,6 +241,7 @@ export function createHarnessMaintenance(deps: HarnessMaintenanceDependencies) {
   /** After any step that may have changed bytes: drop this harness's cached
    * observations so the next read re-proves them (no account fanout). */
   function invalidate(harness: string): void {
+    inventoryGenerations.set(harness, (inventoryGenerations.get(harness) ?? 0) + 1);
     inventory.delete(harness);
     accountObservations.invalidateHarness(harness);
     deps.readiness?.().invalidate(harness);

@@ -167,6 +167,11 @@ const BOOLEAN_FLAG_MAP = {
   },
   all: { mcp: null, reason: "subcommand scope flag, not a run control" },
   refresh: { mcp: null, reason: "quota subcommand operation, not a run control" },
+  latest: {
+    mcp: null,
+    reason:
+      "harness inspect vendor-version lookup, exposed by the maintenance control API; not an Agent run control",
+  },
   "dry-run": { mcp: null, reason: "subcommand plumbing" },
   yes: {
     mcp: null,
@@ -191,6 +196,8 @@ const BOOLEAN_FLAG_MAP = {
 // CLI run-control flags with NO MCP argument: each needs a stated reason.
 // (Non-run-control CLI flags — subcommand plumbing — are structurally exempt.)
 const CLI_ONLY_EXEMPT = {
+  "vendor-version":
+    "harness update install target, exposed by the maintenance control API; not an Agent run control",
   instructions:
     "embedder contract is CLI/HTTP-first (v2.1 W5, DECIDED_TRADEOFFS DT2.1-1); MCP exposure of per-run system instructions is deferred",
   "instructions-file": "file form of --instructions; MCP exposure deferred with it (DT2.1-1)",

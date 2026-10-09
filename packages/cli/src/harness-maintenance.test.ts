@@ -21,7 +21,7 @@ import type { ParsedArgs } from "./args.js";
 import { harnessInstallCommand, localPlatformRefusal } from "./harness-installer.js";
 import { compareVendorVersions } from "./harness-install-proof.js";
 import { harnessMaintenanceRecipe } from "./harness-install-recipes.js";
-import { inspectHarness, runHarnessUpdate } from "./harness-maintenance.js";
+import { harnessUpdateCommand, inspectHarness, runHarnessUpdate } from "./harness-maintenance.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -164,22 +164,53 @@ describe("harness maintenance primitive", () => {
     );
   });
 
-  it("an exact target installs that version and records the proved previous one", () => {
+  it.each(["1.0.0", "2.0.0"])(
+    "an exact target installs up or down from %s and records the proved previous one",
+    (before) => {
+      const w = world();
+      w.installCodex(before);
+      const { spawn, calls } = fakeSpawn(w);
+      const receipt = runHarnessUpdate("codex", "1.2.3", opts(w, spawn));
+      expect(receipt).toMatchObject({
+        ok: true,
+        mutation: "applied",
+        requestedVersion: "1.2.3",
+        resolvedVersion: "1.2.3",
+        previousVersion: before,
+        before: { version: before, selection: "managed", proved: true },
+        after: { version: "1.2.3", selected: true, proved: true },
+      });
+      expect(calls.filter((call) => call.includes("install"))).toHaveLength(1);
+      expect(calls.find((call) => call.includes("install"))?.at(-1)).toBe("@openai/codex@1.2.3");
+      expect(calls.filter((call) => call.includes("view"))).toHaveLength(0);
+    },
+  );
+
+  it("the public Update command without a version selects latest, never the bundled baseline", () => {
     const w = world();
-    w.installCodex("1.0.0");
-    const { spawn, calls } = fakeSpawn(w);
-    const receipt = runHarnessUpdate("codex", "1.2.3", opts(w, spawn));
-    expect(receipt).toMatchObject({
-      ok: true,
-      mutation: "applied",
-      requestedVersion: "1.2.3",
-      resolvedVersion: "1.2.3",
-      previousVersion: "1.0.0",
-      before: { version: "1.0.0", selection: "managed", proved: true },
-      after: { version: "1.2.3", selected: true, proved: true },
+    w.installCodex("99.0.0");
+    const { spawn, calls } = fakeSpawn(w, "100.0.0");
+    const out: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      out.push(String(chunk));
+      return true;
     });
-    expect(calls.filter((call) => call.includes("install"))).toHaveLength(1);
-    expect(calls.find((call) => call.includes("install"))?.at(-1)).toBe("@openai/codex@1.2.3");
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const code = harnessUpdateCommand(
+      args(["harness", "update", "codex"], { yes: true }),
+      true,
+      opts(w, spawn),
+    );
+    expect(code).toBe(0);
+    expect(calls.filter((call) => call.includes("view"))).toHaveLength(1);
+    expect(calls.find((call) => call.includes("install"))?.at(-1)).toBe("@openai/codex@100.0.0");
+    expect(JSON.parse(out.join(""))).toMatchObject({
+      ok: true,
+      before: { version: "99.0.0" },
+      after: { version: "100.0.0", selected: true, proved: true },
+      resolvedVersion: "100.0.0",
+      mutation: "applied",
+    });
   });
 
   it("latest is resolved ONCE to an exact version before the install", () => {

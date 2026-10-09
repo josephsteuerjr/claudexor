@@ -247,7 +247,7 @@ export interface HarnessUpdateReceipt {
 }
 
 /** Exactly one maintenance step. `requested` is an exact version, "latest", or
- * omitted (latest for the vendor updater; the pin for npm). */
+ * omitted (latest for either mechanism). */
 export function runHarnessUpdate(
   harness: InstallableHarness,
   requested: string | undefined,
@@ -293,7 +293,7 @@ export function runHarnessUpdate(
       );
     return vendorUpdate(harness, runtime, base, options);
   }
-  let exact = requested ?? NPM_PINS[harness]!.version;
+  let exact = requested ?? "latest";
   if (exact === "latest") {
     const latest = resolveLatestNpmVersion(harness, runtime);
     if ("problem" in latest) return refuse(latest.problem.code, latest.problem.message);
@@ -437,7 +437,7 @@ export function harnessUpdateCommand(
         print("Not updating: confirm with --yes, or run on an interactive terminal to be asked.");
       return 1;
     }
-    if (!confirmOnTty(`Update ${harness}${requested ? ` to ${requested}` : ""}? [y/N] `)) return 1;
+    if (!confirmOnTty(`Update ${harness} to ${requested ?? "latest"}? [y/N] `)) return 1;
   }
   // A cancelled operation's TERM reaches this process and npm together: stay
   // alive until npm is reaped so the lease is released and a receipt prints.
