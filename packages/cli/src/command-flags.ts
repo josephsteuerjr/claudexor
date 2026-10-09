@@ -296,6 +296,12 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
   booleanFlag("rerun", null),
   valueFlag("apply-mode", "<m>", null),
   valueFlag("feedback", '"<text>"', null),
+  valueFlag(
+    "vendor-version",
+    "<exact|latest>",
+    "harness update: install one exact vendor version, or resolve latest once",
+  ),
+  booleanFlag("latest", "harness inspect: also read the newest published vendor version"),
   booleanFlag("help", "Show this help"),
   booleanFlag("version", "Print the CLI version"),
 ];

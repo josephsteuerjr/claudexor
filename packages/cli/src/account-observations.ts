@@ -36,6 +36,12 @@ class AccountObservations {
     this.generation += 1;
   }
 
+  /** One harness's observations only (e.g. after its CLI was replaced). */
+  invalidateHarness(harnessId: string): void {
+    for (const key of this.entries.keys())
+      if (key.split("\0")[2] === harnessId) this.entries.delete(key);
+  }
+
   invalidateCatalogs(): void {
     for (const key of this.entries.keys())
       if (key.split("\0")[1] !== "profile") this.entries.delete(key);

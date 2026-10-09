@@ -1,4 +1,5 @@
 import { EffortResolution } from "./effort.js";
+import { HarnessCapabilities } from "./harness.js";
 import { z } from "zod/v3";
 import { CostEvidence } from "./budget.js";
 import { CostKnowledge } from "./auth.js";
@@ -292,14 +293,13 @@ export const ControlModelCatalogResponse = z
     provenance: NonBlankString.describe(
       "provider_http means the catalog body was read and validated from a successful upstream HTTP response at observedAt. Other values do not certify provider contact.",
     ),
-    /** The backend filters this catalog by the client version the transport
-     * declared; a model above that version's floor is absent here even when
-     * the same account can generate with it. Null only for catalogs handed
-     * over by an older engine. */
+    /** The backend may vary discovery by this declared client version;
+     * absence is not proof of a minimum-version or entitlement refusal.
+     * Null only for catalogs handed over by an older engine. */
     clientVersion: NonBlankString.nullable()
       .default(null)
       .describe(
-        "Client version the transport declared when it read this catalog; the backend lists only models whose minimum client version is at or below it. Null for catalogs from an older engine.",
+        "Client version the transport declared when it read this catalog; server discovery may vary with it. Null for catalogs from an older engine.",
       ),
     clientVersionSource: z
       .enum(["verified_transport", "installed_cli"])
@@ -307,6 +307,16 @@ export const ControlModelCatalogResponse = z
       .default(null)
       .describe(
         "Where the declared client version came from: verified_transport (the version this Claudexor release verified its HTTP transport against) or installed_cli (a newer installed Codex CLI raised it). Null for catalogs from an older engine.",
+      ),
+    admission: z
+      .object({
+        requestedModel: NonBlankString,
+        inventoryAbsence: HarnessCapabilities.shape.model_inventory_absence.unwrap(),
+      })
+      .strict()
+      .optional()
+      .describe(
+        "Negotiated selected-account admission for this exact model, after auth and model-scoped quota checks. A valid catalog miss may be advisory; no generation or entitlement is proved.",
       ),
     models: z.array(ModelCatalogEntry),
   })

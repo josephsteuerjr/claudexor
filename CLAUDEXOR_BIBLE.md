@@ -675,9 +675,16 @@ invariant or operator decision before proceeding.
   another to admit a model; model truth is surfaced to UIs (`source: api |
   manifest`); known-model hints carry a `verifiedAgainst` freshness note
   checked by the model-hints-freshness gate; automatic reviewer selection still
-  skips an unlisted family at zero cost; HTTP model operations stay strict
-  against the account catalog read at a named client version; raw-api and
-  opencode stay authoritative by declaration, not by proof of completeness.
+  skips an unlisted family at zero cost. Raw model sources declare their own
+  absence policy: Codex HTTP operations forward an explicit unlisted model
+  after a valid account catalog read at a named client version. Missing metadata
+  remains unknown; ordinary explicit effort is sent unchanged with unverified
+  capability disclosure, while known wire limits, authentication and model-scoped
+  quota still bind. A failed catalog read is never a successful empty catalog.
+  Negotiated requested-model admission tells callers they may attempt the model,
+  not that it was listed or generation-proven; wait/readiness readers use the same
+  declaration. Raw-api and opencode stay authoritative by declaration, not by
+  proof of completeness.
   Residuals, disclosed: the explicit reviewer panel forwards without the
   run-event disclosure (its spawn does not pass the per-spawn gate); on the CLI
   run path a vendor model refusal arrives as an untyped error carrying the

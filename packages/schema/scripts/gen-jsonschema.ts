@@ -32,6 +32,9 @@ import {
   ControlAuthReadinessRefreshRequest,
   ControlAuthReadinessRefreshResponse,
   ControlHarnessListResponse,
+  ControlHarnessMaintenanceInventory,
+  ControlHarnessMaintenanceCreateRequest,
+  ControlHarnessMaintenanceOperation,
   ControlHarnessModelsResponse,
   ControlInteractionAnswerRequest,
   ControlInteractionAnswerResponse,
@@ -194,6 +197,9 @@ for (const name of readdirSync(outDir)) {
 }
 
 const schemas = {
+  ControlHarnessMaintenanceInventory,
+  ControlHarnessMaintenanceCreateRequest,
+  ControlHarnessMaintenanceOperation,
   EffortResolution,
   ProcessingPreference,
   ProcessingCapability,

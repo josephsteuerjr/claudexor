@@ -1,0 +1,298 @@
+{
+  "$ref": "#/definitions/ControlHarnessMaintenanceOperation",
+  "definitions": {
+    "ControlHarnessMaintenanceOperation": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "preparing",
+            "installing",
+            "settled"
+          ]
+        },
+        "mechanism": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "managed_npm",
+                "vendor_updater",
+                "vendor_script"
+              ],
+              "description": "managed_npm installs one exact registry version in place; vendor_updater runs the vendor's own `update` on its canonical launcher (latest only); vendor_script has no engine-run update."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "managed_npm installs one exact registry version in place; vendor_updater runs the vendor's own `update` on its canonical launcher (latest only); vendor_script has no engine-run update."
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "latest",
+                "version",
+                "previous",
+                "baseline"
+              ]
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "version"
+          ],
+          "additionalProperties": false
+        },
+        "before": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "binary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "selection": {
+                  "type": "string",
+                  "enum": [
+                    "managed",
+                    "override",
+                    "path",
+                    "missing"
+                  ],
+                  "description": "managed = Claudexor's managed npm copy; override = the explicit CLAUDEXOR_<HARNESS>_BIN program; path = another copy found on the harness PATH; missing = nothing launchable."
+                },
+                "proved": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "version",
+                "binary",
+                "selection",
+                "proved"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "after": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "binary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "selected": {
+                  "type": "boolean",
+                  "description": "The harness now resolves this program."
+                },
+                "proved": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "version",
+                "binary",
+                "selected",
+                "proved"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mutation": {
+          "type": "string",
+          "enum": [
+            "none",
+            "applied",
+            "unknown"
+          ],
+          "description": "Whether installed bytes could have changed."
+        },
+        "termination": {
+          "type": "string",
+          "enum": [
+            "not_applicable",
+            "confirmed",
+            "unconfirmed"
+          ]
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "progress": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 40
+        },
+        "problem": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                },
+                "fieldErrors": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "default": {}
+                },
+                "requiredActions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "default": []
+                },
+                "evidenceRefs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "default": []
+                },
+                "context": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "default": {},
+                  "description": "Typed route-specific recovery context; never a duplicate error message."
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "retryable"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "harness": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "interrupted"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ISO-8601 timestamp string."
+        },
+        "startedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ControlHarnessMaintenanceOperation/properties/createdAt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ISO-8601 timestamp string."
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ControlHarnessMaintenanceOperation/properties/createdAt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ISO-8601 timestamp string."
+        }
+      },
+      "required": [
+        "phase",
+        "mechanism",
+        "target",
+        "before",
+        "after",
+        "mutation",
+        "termination",
+        "limitations",
+        "progress",
+        "problem",
+        "id",
+        "harness",
+        "state",
+        "createdAt",
+        "startedAt",
+        "finishedAt"
+      ],
+      "additionalProperties": false,
+      "description": "A durable harness maintenance operation; 202 on create is a handle, not success."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
