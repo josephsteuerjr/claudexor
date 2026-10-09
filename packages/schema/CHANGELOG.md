@@ -4,7 +4,7 @@
 
 ### Minor Changes
 
-- Expose typed per-account resources and explicit rate-limit resets across the control API, CLI, MCP and native Accounts UI. Preserve request identity through uncertain replies and keep reset effects separate from refreshed usage.
+- Add shared vendor CLI inspection and maintenance with durable update, cancellation and previous-version evidence. Preserve newer managed installations and support native Cursor and Antigravity updates. Permit explicit Codex models absent from a successful catalog without misreporting account availability as exhausted quota.
 
 ### Patch Changes
 

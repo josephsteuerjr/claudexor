@@ -453,6 +453,55 @@ describe("raw model operation HTTP surface", () => {
     expect(descriptor?.responseSchema).toBe("ControlModelCatalogQueryResponse");
   });
 
+  it("negotiates exact requested-model admission without inventing a model or changing legacy reads", async () => {
+    const admission = { requestedModel: "unlisted/model", inventoryAbsence: "advisory" };
+    const catalog = {
+      source: "codex",
+      credentialProfileId: "a",
+      accountFingerprint: "a",
+      observedAt: "2026-10-09T00:00:00.000Z",
+      provenance: "provider_http",
+      clientVersion: "0.156.1",
+      clientVersionSource: "verified_transport",
+      models: [],
+      admission,
+    };
+    const modelCatalog = vi.fn(async () => catalog);
+    const f = await fixture({ modelCatalog });
+    const path =
+      "/model-sources/codex/models?credentialProfileId=a&requestedModel=unlisted%2Fmodel";
+    const legacy = await (await f.request(path)).json();
+    const explicitFalse = await (await f.request(path + "&includeAdmission=false")).json();
+    expect(legacy).toEqual(explicitFalse);
+    expect(legacy).not.toHaveProperty("admission");
+    expect(legacy).not.toHaveProperty("clientVersion");
+    const modern = await f.request(path + "&includeAdmission=true");
+    expect(modern.status).toBe(200);
+    expect(await modern.json()).toEqual(catalog);
+    expect(modelCatalog).toHaveBeenLastCalledWith("codex", "a", "unlisted/model", true);
+    const count = modelCatalog.mock.calls.length;
+    for (const query of [
+      "includeAdmission=true",
+      "includeAdmission=wrong&requestedModel=x",
+      "includeAdmission=true&includeAdmission=false&requestedModel=x",
+      "view=accounts&includeAdmission=true&requestedModel=x",
+    ]) {
+      expect((await f.request(`/model-sources/codex/models?${query}`)).status).toBe(400);
+    }
+    expect(modelCatalog).toHaveBeenCalledTimes(count);
+    const descriptor = OPERATION_CATALOG.operations.find(
+      (row) => row.path === "/v2/model-sources/:id/models",
+    );
+    expect(descriptor?.parameters).toContainEqual(
+      expect.objectContaining({ name: "includeAdmission", enum: ["true", "false"] }),
+    );
+    const mismatch = await f.request(
+      "/model-sources/codex/models?requestedModel=another&includeAdmission=true",
+    );
+    expect(mismatch.status).toBe(500);
+    expect(await mismatch.json()).toMatchObject({ code: "invalid_service_response" });
+  });
+
   it("refuses malformed service output and protects all model routes in recovery mode", async () => {
     const invalid = await fixture({ getModelOperation: async () => ({ id: "lying" }) });
     const response = await invalid.request("/model-operations/job-model");

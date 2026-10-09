@@ -151,8 +151,8 @@ export function createModelServices(deps: Dependencies) {
     }
     const excluded = new Set<string>();
     const catalogRefusals = new Map<string, ControlProblem>();
-    // Catalog membership is checked on exactly the selected account, before inference.
-    // The same pool resolver chooses any next candidate; this loop never generates.
+    // Exact-account discovery follows the raw source's absence declaration.
+    // Actual catalog failures retain their causes; this loop never generates.
     while (true) {
       signal.throwIfAborted();
       const currentQuota = quotaEvidence();
@@ -206,7 +206,9 @@ export function createModelServices(deps: Dependencies) {
                 ? "auth"
                 : refusal.code === "subscription_window_exhausted"
                   ? "quota"
-                  : "unavailable",
+                  : refusal.code === "model_unavailable"
+                    ? "model"
+                    : "unavailable",
             );
             if (refusal.code === "subscription_window_exhausted")
               resets.push(
@@ -218,7 +220,7 @@ export function createModelServices(deps: Dependencies) {
               ? "quota"
               : causes.size === 1 && causes.has("auth")
                 ? "auth"
-                : causes.size > 1 && !causes.has("unavailable")
+                : causes.size === 2 && causes.has("auth") && causes.has("quota")
                   ? "mixed"
                   : "unavailable";
           const code =
@@ -226,7 +228,7 @@ export function createModelServices(deps: Dependencies) {
               ? "subscription_window_exhausted"
               : poolCause === "auth"
                 ? "auth_required"
-                : excluded.size > 0 && causes.size === 0
+                : causes.size === 1 && causes.has("model")
                   ? "model_unavailable"
                   : "credential_pool_exhausted";
           const message =
@@ -236,6 +238,7 @@ export function createModelServices(deps: Dependencies) {
                 ? "Every available model account requires sign-in"
                 : "No managed account can currently serve this model request";
           const resetsAt =
+            poolCause !== "unavailable" &&
             resets.length > 0 &&
             resets.every((at): at is string => at !== null && Number.isFinite(Date.parse(at)))
               ? resets.reduce((earliest, at) =>
@@ -312,13 +315,27 @@ export function createModelServices(deps: Dependencies) {
         );
       if (catalog.provenance === "provider_http" && catalog.observedAt)
         evidence.honorCatalog(catalog.observedAt);
-      if (model === null || catalog.models.some((entry) => entry.id === model))
+      if (
+        model === null ||
+        source.adapter.inventoryAbsence === "advisory" ||
+        catalog.models.some((entry) => entry.id === model)
+      )
         return { profile, catalog };
+      const refusal = ControlProblem.parse({
+        code: "model_unavailable",
+        message: `The selected account does not advertise the requested model in its catalog as served to ${describeCodexClientVersion(catalog)}`,
+        retryable: false,
+        context: {
+          source: source.adapter.id,
+          credentialProfileId: profile.profile_id,
+          requestedModel: model,
+          clientVersion: catalog.clientVersion,
+          clientVersionSource: catalog.clientVersionSource,
+        },
+      });
       if (account.mode === "pin")
-        throw modelError(
-          "model_unavailable",
-          `The pinned account does not advertise the requested model in its catalog as served to ${describeCodexClientVersion(catalog)}`,
-        );
+        throw Object.assign(modelError(refusal.code, refusal.message), { problem: refusal });
+      catalogRefusals.set(profile.profile_id, refusal);
       excluded.add(profile.profile_id);
     }
   };
@@ -420,15 +437,27 @@ export function createModelServices(deps: Dependencies) {
         sourceId: string,
         credentialProfileId?: string,
         requestedModel?: string,
+        includeAdmission = false,
       ) => {
+        if (includeAdmission && !requestedModel)
+          throw modelError("invalid_request", "Admission observation requires requestedModel", 400);
+        const source = getSource(sourceId);
         const { catalog } = await resolve(
-          getSource(sourceId),
+          source,
           credentialProfileId ? { mode: "pin", profileId: credentialProfileId } : { mode: "auto" },
           requestedModel ?? null,
           lifetime.signal,
         );
         return {
           ...catalog,
+          ...(includeAdmission
+            ? {
+                admission: {
+                  requestedModel: requestedModel!,
+                  inventoryAbsence: source.adapter.inventoryAbsence ?? "authoritative",
+                },
+              }
+            : {}),
           models: catalog.models.map(({ processing: _processing, ...model }) => model),
         };
       },

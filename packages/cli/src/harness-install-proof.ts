@@ -42,6 +42,38 @@ const SCRIPT_VENDOR_VERSION_MAX_CHARS = 256;
 const SEMVER_TOKEN =
   /(?:^|[^0-9A-Za-z.+-])(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)(?=$|[^0-9A-Za-z.+-])/g;
 
+/** One exact registry version (no ranges, tags or `v` prefix). */
+export const EXACT_VENDOR_VERSION =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+/** SemVer precedence of two exact versions: negative when `a` is older. Build
+ * metadata is ignored; a prerelease precedes its release. */
+export function compareVendorVersions(a: string, b: string): number {
+  const split = (value: string) => {
+    const [core = "", pre] = value.split("+", 1)[0]!.split(/-(.*)/s, 2);
+    return { core: core.split(".").map(Number), pre: pre ? pre.split(".") : [] };
+  };
+  const left = split(a);
+  const right = split(b);
+  for (let index = 0; index < 3; index += 1) {
+    const delta = (left.core[index] ?? 0) - (right.core[index] ?? 0);
+    if (delta !== 0) return delta;
+  }
+  if (!left.pre.length || !right.pre.length) return right.pre.length - left.pre.length;
+  for (let index = 0; index < Math.max(left.pre.length, right.pre.length); index += 1) {
+    const l = left.pre[index];
+    const r = right.pre[index];
+    if (l === undefined || r === undefined) return l === undefined ? -1 : 1;
+    if (l === r) continue;
+    const ln = /^\d+$/.test(l);
+    const rn = /^\d+$/.test(r);
+    if (ln && rn) return Number(l) - Number(r);
+    if (ln !== rn) return ln ? -1 : 1;
+    return l < r ? -1 : 1;
+  }
+  return 0;
+}
+
 function isStrictlyContained(root: string, candidate: string): boolean {
   const remainder = relative(root, candidate);
   return (
@@ -57,7 +89,7 @@ function outputText(value: string | Buffer | null | undefined): string {
   return Buffer.isBuffer(value) ? value.toString("utf8") : "";
 }
 
-function exactSemverTokens(value: string): string[] {
+export function exactSemverTokens(value: string): string[] {
   return [...value.matchAll(SEMVER_TOKEN)].map((match) => match[1] ?? "");
 }
 
@@ -116,21 +148,22 @@ function proveVersion(
   };
 }
 
-/** Prove an exact npm package and its target-owned launcher, then execute the
- * absolute launcher for a matching version receipt. */
-export function proveInstalledNpm(
-  spec: NpmInstallProofSpec,
-  runtime: InstallProofRuntime,
-): HarnessProofResult {
-  const packageRoot = join(
-    npmGlobalPackagesDir(spec.vendorRoot, runtime.platform),
-    ...spec.npmPackage.split("/"),
-  );
+type ManagedNpmPackage =
+  { ok: true; canonicalRoot: string; version: string | null } | { ok: false; reason: string };
+
+/** The package manifest a managed npm prefix holds for one exact package,
+ * read through the same containment rules the proof uses. */
+function readManagedNpmPackage(
+  vendorRoot: string,
+  npmPackage: string,
+  platform: NodeJS.Platform,
+): ManagedNpmPackage {
+  const packageRoot = join(npmGlobalPackagesDir(vendorRoot, platform), ...npmPackage.split("/"));
   let canonicalRoot: string;
   let canonicalPackageRoot: string;
   let canonicalPackageJson: string;
   try {
-    canonicalRoot = realpathSync(spec.vendorRoot);
+    canonicalRoot = realpathSync(vendorRoot);
     canonicalPackageRoot = realpathSync(packageRoot);
     canonicalPackageJson = realpathSync(join(packageRoot, "package.json"));
   } catch {
@@ -142,15 +175,40 @@ export function proveInstalledNpm(
   if (!isStrictlyContained(canonicalPackageRoot, canonicalPackageJson)) {
     return { ok: false, reason: "the npm package manifest escapes the exact package root" };
   }
-  let packageVersion: string | null = null;
   try {
     const parsed = JSON.parse(readFileSync(canonicalPackageJson, "utf8")) as {
       version?: unknown;
     };
-    packageVersion = typeof parsed.version === "string" ? parsed.version : null;
+    return {
+      ok: true,
+      canonicalRoot,
+      version: typeof parsed.version === "string" ? parsed.version : null,
+    };
   } catch {
     return { ok: false, reason: "the exact npm package manifest is unreadable" };
   }
+}
+
+/** The managed copy's declared package version, or null when there is none.
+ * A declaration only: `proveInstalledNpm` is what proves it runs. */
+export function managedNpmPackageVersion(
+  vendorRoot: string,
+  npmPackage: string,
+  platform: NodeJS.Platform,
+): string | null {
+  const read = readManagedNpmPackage(vendorRoot, npmPackage, platform);
+  return read.ok ? read.version : null;
+}
+
+/** Prove an exact npm package and its target-owned launcher, then execute the
+ * absolute launcher for a matching version receipt. */
+export function proveInstalledNpm(
+  spec: NpmInstallProofSpec,
+  runtime: InstallProofRuntime,
+): HarnessProofResult {
+  const manifest = readManagedNpmPackage(spec.vendorRoot, spec.npmPackage, runtime.platform);
+  if (!manifest.ok) return manifest;
+  const { canonicalRoot, version: packageVersion } = manifest;
   if (packageVersion !== spec.expectedVersion) {
     return {
       ok: false,

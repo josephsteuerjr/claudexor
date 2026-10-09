@@ -1,14 +1,17 @@
 import { parseCommandListQuery, selectCommandRecords } from "./command-list-select.js";
 import { retainedEnvelopeOfRun } from "@claudexor/workspace";
 import type { JobRecord } from "./server.js";
-import { continuedRunOf, isModelOperation } from "@claudexor/schema";
+import { continuedRunOf, isHarnessMaintenanceOperation, isModelOperation } from "@claudexor/schema";
 
+/** Agent run commands only: model and harness-maintenance operations are
+ * commands without a run and have their own typed read surfaces. */
 export function productCommandRecords(records: readonly JobRecord[]): JobRecord[] {
   return records.filter(
     (record) =>
       !record.id.startsWith("account-reset-") &&
       !isDeliveryCommand(record) &&
-      !isModelOperation(record.params),
+      !isModelOperation(record.params) &&
+      !isHarnessMaintenanceOperation(record.params),
   );
 }
 

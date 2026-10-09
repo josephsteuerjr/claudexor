@@ -5,12 +5,12 @@
 ### Patch Changes
 
 - Updated dependencies
+  - @claudexor/core@3.24.0
   - @claudexor/schema@3.24.0
+  - @claudexor/context@3.24.0
+  - @claudexor/workspace@3.24.0
   - @claudexor/budget@3.24.0
   - @claudexor/config@3.24.0
-  - @claudexor/context@3.24.0
-  - @claudexor/core@3.24.0
-  - @claudexor/workspace@3.24.0
   - @claudexor/util@3.24.0
 
 ## 3.23.2

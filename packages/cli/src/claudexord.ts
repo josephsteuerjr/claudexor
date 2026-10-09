@@ -70,6 +70,7 @@ import { runStartupAccountsMigration } from "./accounts-unified-migration.js";
 import { runStopIfRequested } from "./runtime-replacement-stop.js";
 import { createDaemonAgentRunner } from "./daemon-agent-runner.js";
 import { createModelServices } from "./model-services.js";
+import { daemonHarnessMaintenance } from "./harness-maintenance-service.js";
 import { isModelOperation } from "@claudexor/schema";
 
 export async function main(): Promise<void> {
@@ -184,6 +185,7 @@ export async function main(): Promise<void> {
       quota: () => quotaStoreSlot.current(),
       warn: (message) => logLine(logPath(), message),
     });
+    const maintenance = daemonHarnessMaintenance(threads, selfClient, () => authReadiness);
     const agentRunner = createDaemonAgentRunner({
       delegationBudgetAuthority,
       quotaStore: () => quotaStoreSlot.current(),
@@ -229,7 +231,9 @@ export async function main(): Promise<void> {
       runner: (params, ctx) =>
         isModelOperation(params)
           ? models.operations.execute(params, ctx)
-          : agentRunner(params, ctx),
+          : maintenance.owns(params)
+            ? maintenance.execute(params, ctx)
+            : agentRunner(params, ctx),
     });
     bindDelegationDaemon(server);
 
@@ -290,6 +294,7 @@ export async function main(): Promise<void> {
       () => quotaStoreSlot.current(),
     );
     Object.assign(services, models.routes, accountControls);
+    maintenance.bind(services);
     control = !controlApiEnabledForStartup({
       disabledByEnv: process.env.CLAUDEXOR_NO_CONTROL_API === "1",
       blockedPartitions: startupBlockedPartitions,

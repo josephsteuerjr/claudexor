@@ -5,18 +5,18 @@
 ### Patch Changes
 
 - Updated dependencies
+  - @claudexor/core@3.24.0
   - @claudexor/schema@3.24.0
+  - @claudexor/context@3.24.0
+  - @claudexor/delivery@3.24.0
+  - @claudexor/gateway@3.24.0
+  - @claudexor/review@3.24.0
+  - @claudexor/workspace@3.24.0
   - @claudexor/arbitration@3.24.0
   - @claudexor/budget@3.24.0
   - @claudexor/config@3.24.0
-  - @claudexor/context@3.24.0
-  - @claudexor/core@3.24.0
-  - @claudexor/delivery@3.24.0
   - @claudexor/event-log@3.24.0
-  - @claudexor/gateway@3.24.0
   - @claudexor/policy@3.24.0
-  - @claudexor/review@3.24.0
-  - @claudexor/workspace@3.24.0
   - @claudexor/synthesis@3.24.0
   - @claudexor/artifact-store@3.24.0
   - @claudexor/util@3.24.0

@@ -48,18 +48,11 @@
  *   vendor script) run with their stdout routed onto stderr, so vendor
  *   output stays visible without corrupting the machine envelope.
  */
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import {
-  composeBaseEnv,
-  embeddedNpmCli,
-  pickAllowlistedEnv,
-  WINDOWS_RUNTIME_ENV_KEYS,
-  isWindowsNativeArch,
-} from "@claudexor/core";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { embeddedNpmCli, isWindowsNativeArch } from "@claudexor/core";
 import { flagBool, flagStr, type ParsedArgs } from "./args.js";
 import { CliError, renderCliFailure } from "./cli-error.js";
 import { print, printJson, printUsageError } from "./cli-io.js";
@@ -70,10 +63,14 @@ import {
   type HarnessInstallLease,
 } from "./harness-install-lease.js";
 import {
+  compareVendorVersions,
+  EXACT_VENDOR_VERSION,
+  managedNpmPackageVersion,
   proveInstalledNpm,
   proveInstalledScriptVendor,
   type HarnessProofResult,
 } from "./harness-install-proof.js";
+import { installerRuntime, type InstallerRuntimeOptions } from "./harness-install-runtime.js";
 
 import {
   harnessInstallerDisclosure,
@@ -83,7 +80,6 @@ import {
   scriptInstaller,
   TARGET_LAYOUTS,
   type HarnessInstallerDisclosure,
-  type HarnessInstallTarget,
   type InstallableHarness,
 } from "./harness-install-recipes.js";
 
@@ -97,7 +93,6 @@ export {
   harnessInstallerDisclosure,
   isHarnessInstallTarget,
   isInstallableHarness,
-  type HarnessInstallTarget,
   type InstallableHarness,
 } from "./harness-install-recipes.js";
 
@@ -116,6 +111,9 @@ export interface HarnessInstallRunResult {
   /** Present on every SUCCESS: the exact npm pin, or the script vendor's own
    * trimmed `--version` line. */
   installedVersion?: string;
+  /** Explicit-version installs only: the managed package version declared
+   * before the first mutation (null when there was none). */
+  previousVersion?: string | null;
 }
 
 function verificationFailure(
@@ -135,7 +133,7 @@ function verificationFailure(
  * has declared Windows support for this architecture. Post-install proof uses
  * its standard npm entrypoint, whether native or Node. Other recipes keep
  * their existing platform boundary; the remote target is unaffected. */
-function localPlatformRefusal(
+export function localPlatformRefusal(
   harness: InstallableHarness,
   platform: NodeJS.Platform,
   arch: string,
@@ -171,45 +169,30 @@ function harnessInstallException(error: unknown): CliError {
 
 export function runHarnessInstaller(
   harness: InstallableHarness,
-  options: {
-    home?: string;
-    nodePath?: string;
-    /** Explicit install layout. Omitted preserves the historical remote target. */
-    target?: HarnessInstallTarget;
-    spawn?: typeof spawnSync;
+  options: InstallerRuntimeOptions & {
     mkdir?: typeof mkdirSync;
     exists?: typeof existsSync;
     /** Production installs serialize cross-process. Tests may disable only this
      * wrapper while preserving the install recipe under test. */
     lock?: boolean;
     lockTimeoutMs?: number;
-    platform?: NodeJS.Platform;
-    /** The runner Node's architecture (npm selects the platform package by it). */
-    arch?: string;
-    /** Test/integration source before the clean allowlist and target-aware PATH
-     * normalization are applied. Provider credentials are still scrubbed. */
-    sourceEnv?: NodeJS.ProcessEnv;
     /** `--json` stdout purity: route human progress lines AND child stdout
      * to stderr, so stdout carries exactly one JSON object (the caller's
      * final envelope). Human mode keeps everything on stdout as before. */
     json?: boolean;
+    /** Explicit exact maintenance target (local npm recipes only). Omitted is
+     * the ensure path: install the release pin unless the managed copy already
+     * runs it or a NEWER runnable version, which is never downgraded. */
+    version?: string;
   } = {},
 ): HarnessInstallRunResult {
-  // Anchored on the SAME `HOME` the harness PATH producer reads, so the prefix
-  // this installs into is the prefix doctor/login/run resolve — on Windows
-  // `homedir()` follows USERPROFILE and would silently diverge from a scoped
-  // HOME.
-  const home = resolve(options.home ?? ((options.sourceEnv ?? process.env).HOME || homedir()));
-  const target = options.target ?? "remote";
-  const platform = options.platform ?? process.platform;
-  const arch = options.arch ?? process.arch;
+  const runtime = installerRuntime(options);
+  const { home, target, platform, arch, runnerNodePath, environment, spawn } = runtime;
   if (target === "local") {
     const unsupported = localPlatformRefusal(harness, platform, arch);
     if (unsupported) return unsupported;
   }
-  const spawn = options.spawn ?? spawnSync;
   const json = options.json === true;
-  const runnerNodePath = resolve(options.nodePath ?? process.execPath);
   // stdin inherited; child stdout -> OUR stderr (fd 2) in json mode so
   // vendor/npm output stays visible but never pollutes the JSON envelope.
   const childStdio: "inherit" | [number, number, number] = json ? [0, 2, 2] : "inherit";
@@ -217,27 +200,16 @@ export function runHarnessInstaller(
     if (json) process.stderr.write(line + "\n");
     else print(line);
   };
-  // Vendor-controlled npm/curl/shell children receive the shared minimal
-  // runtime env, never the parent process's provider credentials.
-  const resolutionSource = {
-    ...(options.sourceEnv ?? process.env),
-    HOME: home,
-    // Local resolution must not read the SSH-runtime vendor prefix; the remote
-    // flow keeps whatever its own runtime already exported.
-    ...(target === "local" ? { CLAUDEXOR_REMOTE_RUNTIME: "0" } : {}),
-  };
-  const environment = {
-    ...composeBaseEnv("clean", resolutionSource, runnerNodePath, platform),
-    // npm and the vendor image cannot start on Windows without the process
-    // environment the OS itself resolves against (the login/setup lanes
-    // forward the same named set).
-    ...(platform === "win32"
-      ? pickAllowlistedEnv(resolutionSource, WINDOWS_RUNTIME_ENV_KEYS, platform)
-      : {}),
-    HOME: home,
-  };
   const pin = NPM_PINS[harness];
   const script = scriptInstaller(harness);
+  const explicit = options.version !== undefined;
+  if (explicit && (!pin || target !== "local" || !EXACT_VENDOR_VERSION.test(options.version!))) {
+    return {
+      exitCode: 1,
+      code: "version_selection_unsupported",
+      refusal: `${harness} accepts an explicit vendor version only as one exact version of a local npm recipe; nothing was executed`,
+    };
+  }
   let npmCLI: string | undefined;
   if (pin) {
     npmCLI = embeddedNpmCli(runnerNodePath, platform);
@@ -251,24 +223,24 @@ export function runHarnessInstaller(
       };
     }
   }
-  const proofRuntime = { runnerNodePath, platform, arch, resolutionSource, environment, spawn };
   // The remote target runs in a PTY the operator is watching and keeps the
   // historical exit-code contract. Only the unattended local target has to
   // prove what it installed.
   const proofRequired = target === "local";
-  const proveInstalled = (): HarnessProofResult =>
-    pin
+  const wanted = options.version ?? pin?.version;
+  const proveInstalled = (version = wanted): HarnessProofResult =>
+    pin && version
       ? proveInstalledNpm(
           {
             vendorRoot: TARGET_LAYOUTS[target].root(home),
             npmPackage: pin.npmPackage,
             binaryNames: pin.binaryNames,
-            expectedVersion: pin.version,
+            expectedVersion: version,
           },
-          proofRuntime,
+          runtime,
         )
       : /* c8 ignore next -- every non-npm harness has a script row */
-        proveInstalledScriptVendor(script?.binaryName ?? harness, proofRuntime);
+        proveInstalledScriptVendor(script?.binaryName ?? harness, runtime);
 
   let lease: HarnessInstallLease | undefined;
   try {
@@ -295,25 +267,46 @@ export function runHarnessInstaller(
       }
     }
 
-    if (pin && npmCLI) {
+    if (pin && npmCLI && wanted) {
       const vendorRoot = TARGET_LAYOUTS[target].root(home);
       const alreadyInstalled = proofRequired ? proveInstalled() : null;
       if (alreadyInstalled?.ok) {
-        note(`${harness} ${pin.version} is already installed at ${vendorRoot}; nothing to change`);
+        note(`${harness} ${wanted} is already installed at ${vendorRoot}; nothing to change`);
         return { exitCode: 0, ...alreadyInstalled.proof };
       }
+      const declared = proofRequired
+        ? managedNpmPackageVersion(vendorRoot, pin.npmPackage, platform)
+        : null;
+      const newer =
+        !explicit && declared && EXACT_VENDOR_VERSION.test(declared)
+          ? compareVendorVersions(declared, pin.version) > 0 && proveInstalled(declared)
+          : false;
+      if (newer && newer.ok) {
+        // Ensure never downgrades a runnable newer copy; the pin stays a separate fact.
+        note(
+          `${harness} ${declared} (newer than the tested ${pin.version}) is installed; nothing to change`,
+        );
+        return { exitCode: 0, ...newer.proof };
+      }
+      const previous = explicit ? { previousVersion: declared } : {};
       (options.mkdir ?? mkdirSync)(vendorRoot, { recursive: true, mode: 0o700 });
       const result = spawn(
         runnerNodePath,
-        [npmCLI, "install", "--global", "--prefix", vendorRoot, `${pin.npmPackage}@${pin.version}`],
+        [npmCLI, "install", "--global", "--prefix", vendorRoot, `${pin.npmPackage}@${wanted}`],
         { stdio: childStdio, env: environment },
       );
-      if (result.status !== 0) return { exitCode: result.status ?? 1 };
+      if (result.status !== 0) {
+        return {
+          exitCode: result.status ?? 1,
+          ...(result.signal ? { code: "installer_terminated" } : {}),
+          ...previous,
+        };
+      }
       if (!proofRequired) return { exitCode: 0 };
       const installed = proveInstalled();
       return installed.ok
-        ? { exitCode: 0, ...installed.proof }
-        : verificationFailure(harness, installed.reason);
+        ? { exitCode: 0, ...installed.proof, ...previous }
+        : { ...verificationFailure(harness, installed.reason), ...previous };
     }
 
     // Script vendors (cursor, agy): download the COMPLETE vendor script before
@@ -436,7 +429,7 @@ function printHumanDisclosure(disclosure: HarnessInstallerDisclosure): void {
 
 /** Blocking y/N read on the controlling TTY (fd 0). Anything but an explicit
  * yes declines — closing stdin or an unreadable terminal never installs. */
-function confirmOnTty(question: string): boolean {
+export function confirmOnTty(question: string): boolean {
   process.stdout.write(question);
   const buffer = Buffer.alloc(1024);
   let input = "";

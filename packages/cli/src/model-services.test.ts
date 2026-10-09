@@ -25,6 +25,7 @@ import {
   isModelOperation,
   type CredentialProfileStatus,
   type ModelCatalogEntry,
+  type ModelInventoryAbsence,
 } from "@claudexor/schema";
 import type { ModelAdapter } from "@claudexor/core";
 import { accountObservations } from "./account-observations.js";
@@ -53,7 +54,13 @@ function model(id = "test-model"): ModelCatalogEntry {
   };
 }
 
-async function fixture(options: { lazy?: boolean; adapter?: ModelAdapter } = {}) {
+async function fixture(
+  options: {
+    lazy?: boolean;
+    adapter?: ModelAdapter;
+    inventoryAbsence?: ModelInventoryAbsence;
+  } = {},
+) {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "cx-ms-")));
   const journal = new DurableJournal({ rootDir: join(root, "journal"), partition: "global" });
   const store = new CommandStore(journal);
@@ -164,7 +171,12 @@ async function fixture(options: { lazy?: boolean; adapter?: ModelAdapter } = {})
     registry: new Map([["codex", { ...createCodexAdapter(), probeCredentialProfile: probe }]]),
     sources: [
       {
-        adapter: options.adapter ?? { id: "codex", catalog, invoke },
+        adapter: options.adapter ?? {
+          id: "codex",
+          inventoryAbsence: options.inventoryAbsence,
+          catalog,
+          invoke,
+        },
         label: "Codex",
         credentialHarness: "codex",
       },
@@ -632,6 +644,108 @@ describe("production model service composition", () => {
     const unsupported = await f.run();
     expect(unsupported.problem?.code).toBe("model_unavailable");
     expect(f.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["auto", "pin"] as const)(
+    "advisory %s admits an explicit unlisted model without borrowing another account",
+    async (mode) => {
+      const f = await fixture({ inventoryAbsence: "advisory" });
+      f.catalogModels.a = [];
+      f.failures.b = "subscription_window_exhausted";
+      await f.run({ mode: "pin", profileId: "b" });
+      f.catalog.mockClear();
+      f.invoke.mockClear();
+      const done = await f.run(mode === "pin" ? { mode, profileId: "a" } : { mode });
+      expect(done.state).toBe("succeeded");
+      expect(done.dispatch.route?.credentialProfileId).toBe("a");
+      expect(f.catalog).toHaveBeenCalledTimes(1);
+      expect(f.invoke).toHaveBeenCalledTimes(1);
+      expect(f.invoke.mock.calls[0]![0].model).toBe("test-model");
+      const catalog = await f.services.routes.modelCatalog("codex", "a", "test-model", true);
+      expect(catalog.models).toEqual([]);
+      expect(catalog.admission).toEqual({
+        requestedModel: "test-model",
+        inventoryAbsence: "advisory",
+      });
+      expect(await f.services.routes.modelCatalog("codex", "a", "test-model")).not.toHaveProperty(
+        "admission",
+      );
+    },
+  );
+
+  it("advisory requested-model observation and generation still obey model-scoped quota", async () => {
+    const f = await fixture({ inventoryAbsence: "advisory" });
+    f.catalogModels.a = [];
+    f.failures.a = "subscription_window_exhausted";
+    await f.run({ mode: "pin", profileId: "a" });
+    const readQuota = f.quota.read.bind(f.quota);
+    vi.spyOn(f.quota, "read").mockImplementation(() => {
+      const state = readQuota();
+      return {
+        ...state,
+        snapshots: state.snapshots.map((row) => ({
+          ...row,
+          constraints: row.constraints.map((constraint) => ({
+            ...constraint,
+            applies_to_models: ["test-model"],
+            applies_to_model_prefixes: [],
+            applies_to_unspecified_model: false,
+          })),
+        })),
+      };
+    });
+    const other = await f.services.routes.modelCatalog("codex", "a", "other-model", true);
+    expect(other.admission?.requestedModel).toBe("other-model");
+    const blocked = await f.run({ mode: "pin", profileId: "a" });
+    expect(blocked.problem?.code).toBe("subscription_window_exhausted");
+    expect(blocked.dispatch.state).toBe("not_started");
+    await expect(
+      f.services.routes.modelCatalog("codex", "a", "test-model", true),
+    ).rejects.toMatchObject({ code: "subscription_window_exhausted" });
+    expect(f.invoke).toHaveBeenCalledTimes(1);
+    const sibling = await f.services.routes.modelCatalog("codex", undefined, "test-model", true);
+    expect(sibling.credentialProfileId).toBe("b");
+    expect(sibling.admission?.requestedModel).toBe("test-model");
+  });
+
+  it("an authoritative source preserves catalog absence beside unrelated quota", async () => {
+    const f = await fixture();
+    f.failures.b = "subscription_window_exhausted";
+    await f.run({ mode: "pin", profileId: "b" });
+    f.invoke.mockClear();
+    f.catalogModels.a = [];
+    const done = await f.run();
+    expect(done.problem).toMatchObject({
+      code: "credential_pool_exhausted",
+      context: { poolCause: "unavailable", resetsAt: null },
+    });
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+
+  it("catalog failure plus genuine quota retains unavailability without a whole-request reset", async () => {
+    const f = await fixture({ inventoryAbsence: "advisory" });
+    f.failures.b = "subscription_window_exhausted";
+    await f.run({ mode: "pin", profileId: "b" });
+    f.invoke.mockClear();
+    f.catalog.mockRejectedValue(
+      Object.assign(new Error("catalog offline"), {
+        problem: ControlProblem.parse({
+          code: "catalog_unavailable",
+          message: "catalog offline",
+          retryable: true,
+        }),
+      }),
+    );
+    const done = await f.run();
+    expect(done.problem).toMatchObject({
+      code: "credential_pool_exhausted",
+      context: { poolCause: "unavailable", resetsAt: null },
+    });
+    expect(done.dispatch.state).toBe("not_started");
+    expect(f.invoke).not.toHaveBeenCalled();
+    await expect(
+      f.services.routes.modelCatalog("codex", "a", "test-model", true),
+    ).rejects.toMatchObject({ problem: { code: "catalog_unavailable" } });
   });
 
   it("records confirmed quota in the shared registry; the next Auto operation rotates but pin refuses", async () => {

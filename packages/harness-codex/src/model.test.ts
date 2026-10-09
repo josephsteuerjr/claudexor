@@ -883,39 +883,60 @@ describe("single-generation Codex adapter", () => {
     },
   );
   it.each(["not-in-this-account", " model-one "])(
-    "does not accept unknown or normalized-away model %s",
+    "forwards the exact unlisted model %s after valid discovery",
     async (model) => {
       const fixture = setup();
       const result = await fixture.adapter.invoke({ ...fixture.request, model }, fixture.context);
-      expect(result.problem?.code).toBe("model_unavailable");
+      expect(result.problem).toBeNull();
+      expect(fixture.onDispatch).toHaveBeenCalledTimes(1);
+      expect(fixture.fetcher).toHaveBeenCalledTimes(2);
+      const sent = JSON.parse(String(fixture.fetcher.mock.calls[1]![1]!.body));
+      expect(sent.model).toBe(model);
+      expect(sent.reasoning.effort).toBe("medium");
+      expect(result.effortResolution).toMatchObject({
+        source: "adapter",
+        resolution: "exact",
+        submitted: "medium",
+      });
+    },
+  );
+  it("declares raw advisory membership independently from the native inventory", () => {
+    expect(CODEX_MODEL_INVENTORY.model_inventory_absence).toBe("advisory");
+    expect(setup().adapter.inventoryAbsence).toBe("advisory");
+  });
+  it("preserves an actual provider model-not-found refusal after sending an unlisted id", async () => {
+    const fixture = setup(() =>
+      Response.json({ error: { code: "model_not_found" } }, { status: 404 }),
+    );
+    const result = await fixture.adapter.invoke(
+      { ...fixture.request, model: "unlisted" },
+      fixture.context,
+    );
+    expect(result.outcome).toBe("failed");
+    expect(result.problem).toMatchObject({
+      code: "model_unavailable",
+      context: { vendorCode: "model_not_found", httpStatus: 404 },
+    });
+    expect(fixture.onDispatch).toHaveBeenCalledTimes(1);
+    expect(fixture.fetcher).toHaveBeenCalledTimes(2);
+  });
+  it.each(["network", "malformed"])(
+    "does not turn %s catalog acquisition into empty success",
+    async (failure) => {
+      const fixture = setup();
+      fixture.fetcher.mockImplementation(async () => {
+        if (failure === "network") throw new Error("offline");
+        return Response.json({ notModels: [] });
+      });
+      const result = await fixture.adapter.invoke(
+        { ...fixture.request, model: "unlisted" },
+        fixture.context,
+      );
+      expect(result.problem?.code).toBe("catalog_unavailable");
       expect(fixture.onDispatch).not.toHaveBeenCalled();
       expect(fixture.fetcher).toHaveBeenCalledTimes(1);
     },
   );
-  it("stays STRICT even though the codex manifest declares its CLI inventory advisory", async () => {
-    // Two different inventories: the CLI's `model/list` (advisory — a bundled
-    // default list is indistinguishable from the account's own, INV-104) and
-    // THIS catalog, a live authenticated HTTP read of the selected account.
-    // The advisory fact belongs to the first and must never reach the second.
-    expect(CODEX_MODEL_INVENTORY.model_inventory_absence).toBe("advisory");
-    const fixture = setup();
-    const result = await fixture.adapter.invoke(
-      { ...fixture.request, model: "gpt-6-astra" },
-      fixture.context,
-    );
-    expect(result.problem?.code).toBe("model_unavailable");
-    expect(result.outcome).toBe("failed");
-    expect(fixture.onDispatch).not.toHaveBeenCalled();
-    // The refusal names the declared client version and its source (issue
-    // #339): the version filter, not the account, decided the list.
-    expect(result.problem?.message).toContain(
-      `client_version ${CODEX_HTTP_CLIENT_VERSION} (the version this Claudexor release verified its Codex HTTP transport against)`,
-    );
-    expect(result.problem?.context).toMatchObject({
-      clientVersion: CODEX_HTTP_CLIENT_VERSION,
-      clientVersionSource: "verified_transport",
-    });
-  });
   it("declares a NEWER installed CLI's version on the wire and in the catalog, never the installer pin", async () => {
     const fixture = setup(undefined, undefined, { version: "9.9.9", source: "installed_cli" });
     const result = await fixture.adapter.catalog(fixture.context);
@@ -926,7 +947,8 @@ describe("single-generation Codex adapter", () => {
       { ...fixture.request, model: "gpt-6-astra" },
       fixture.context,
     );
-    expect(refused.problem?.message).toContain("client_version 9.9.9 (the installed Codex CLI)");
+    expect(refused.problem).toBeNull();
+    expect(fixture.onDispatch).toHaveBeenCalledTimes(1);
   });
   it("refuses unadvertised effort and does not clamp or silently retry", async () => {
     const fixture = setup();

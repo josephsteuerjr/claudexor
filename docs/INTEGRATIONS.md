@@ -33,6 +33,14 @@ reading alone does not acknowledge custody. See
 for lifecycle, retention, continuation and capacity semantics, and the
 [feature ledger](FEATURES.md) for transport and acceptance limitations.
 
+Selected-account discovery can negotiate `includeAdmission=true` with an exact
+`requestedModel`. Its `admission` reports the source's inventory-absence policy
+after account admission: Codex permits an explicit model absent from a successful
+catalog. Keep unknown model metadata unknown, and keep acquisition failures
+distinct. The response adds declared client-version facts; without the opt-in,
+the legacy envelope remains unchanged. This is permission to attempt, not evidence
+that a generation completed or that an older uncertain request can be replayed.
+
 Processing uses the optional `processingPreference` contract and the
 [single advisory rule](DEVELOPMENT.md#processing-preference). Discover account
 view support from the existing operation catalog before requesting `view=accounts`;
@@ -71,6 +79,10 @@ The effort receipt preserves `requested: ultra`, the prepared value and independ
 provider observation; it discloses that raw calls do not execute native automatic
 delegation. Native Codex sessions retain their full Ultra mode. Catalog object
 shapes and the opt-in result contract are unchanged.
+For an unlisted raw model, ordinary explicit effort is forwarded exactly with
+adapter-sourced submission evidence and unconfirmed model support. Ultra cannot
+be mapped without a known generation ladder and returns an unsupported-option
+refusal; an account's unrelated model ladder is not a substitute.
 
 ## Embedded Engine Runtime
 
@@ -114,8 +126,9 @@ JSON object. Every executed result carries `ok: boolean`, `dryRun: false`,
 `command: string`, `installLocation: string`, `pinnedVersion: string | null`, and
 `verification: string`. Every successful `--target local` result additionally carries
 `installedBinary` (an absolute launcher path; on Windows the package-native
-image) and `installedVersion` (the exact
-npm pin, or Cursor's bounded non-empty version line). On the local target,
+image) and `installedVersion` (the exact npm pin, a kept runnable newer managed
+version, or the script vendor's bounded non-empty version line). `pinnedVersion`
+continues to name the release baseline; Ensure never downgrades a newer copy. On the local target,
 child exit zero is not sufficient: if that launcher/version proof fails, the
 result is `ok: false`, `code: "install_verification_failed"`. A remote success
 keeps the historical contract — `exitCode: 0` with no proof fields. A Cursor result after a
@@ -129,6 +142,17 @@ disclosure field (and the native `causeCode` when available). Dry-run
 returns the disclosure fields with
 `ok: true` and `dryRun: true`, without executing, proving a binary, or acquiring
 the install lease.
+
+For updates, negotiate the maintenance routes from the operation catalog rather
+than calling Ensure again. `GET /v2/maintenance/harnesses` returns selected-version
+facts and each installation's `maintainable`, `targets` and `canCheckLatest`.
+`POST /v2/maintenance/operations` accepts a harness and target with a stable
+Idempotency-Key; recover a lost reply with that same key/body, then read or cancel
+the returned operation. Acceptance is not completion. Latest-only native updaters
+can return an unchanged version without proving newest; npm return/exact targets
+require the package to remain downloadable. The CLI uses `harness inspect` and
+`harness update <id> --vendor-version <exact|latest> --yes --json`; its new receipt
+keeps before/after and effect facts separate from the legacy install envelope.
 
 The public [Ouroboros runtime pin](https://github.com/razzant/ouroboros/blob/ouroboros/ouroboros/claudexor_runtime_pin.json)
 is a working example of that exact-version, exact-build, and checksum contract.

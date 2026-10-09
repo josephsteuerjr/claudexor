@@ -4,7 +4,8 @@
 
 ### Patch Changes
 
-- @claudexor/cli@3.24.0
+- Updated dependencies
+  - @claudexor/cli@3.24.0
 
 ## 3.23.2
 

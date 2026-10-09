@@ -73,7 +73,7 @@ describe("harnessCommand", () => {
     expect(harnessCommand(parseArgs(["harness", "bogus"]), false)).toBe(2);
     expect(mocks.printUsageError).toHaveBeenCalledWith(
       false,
-      "usage: claudexor harness list [--all] | install <agy|claude|codex|copilot|cursor|opencode> [--target <local|remote>] [--dry-run] [--yes]",
+      "usage: claudexor harness list [--all] | install <agy|claude|codex|copilot|cursor|opencode> [--target <local|remote>] [--dry-run] [--yes] | inspect [<id>] [--latest] | update <id> [--vendor-version <exact|latest>] [--yes]",
     );
   });
 

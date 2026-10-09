@@ -5,8 +5,8 @@
 ### Patch Changes
 
 - Updated dependencies
-  - @claudexor/schema@3.24.0
   - @claudexor/core@3.24.0
+  - @claudexor/schema@3.24.0
 
 ## 3.23.2
 

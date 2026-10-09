@@ -5,7 +5,7 @@ import {
   codexProcessingCost,
 } from "./processing.js";
 import type { ProcessingReceipt, EffortResolution } from "@claudexor/schema";
-import { validateModel, type ModelAdapter, type ModelAdapterContext } from "@claudexor/core";
+import type { ModelAdapter, ModelAdapterContext } from "@claudexor/core";
 import type {
   ControlModelCatalogResponse,
   ModelCallResult,
@@ -31,7 +31,6 @@ import {
 } from "./responses.js";
 import {
   codexCatalogClientVersion,
-  describeCodexClientVersion,
   type CodexCatalogClientVersion,
 } from "./http-client-version.js";
 import { processingAdmissionProblem } from "./processing-refusal.js";
@@ -184,9 +183,9 @@ async function catalogFor(
   clientVersion: () => Promise<CodexCatalogClientVersion>,
 ): Promise<ControlModelCatalogResponse> {
   context.signal.throwIfAborted();
-  // The backend lists only models whose minimum client version is at or below
-  // the declared one; the declaration is this transport's own level, raised to
-  // a newer installed CLI, never the installer pin (issue #339).
+  // Server discovery varies with the declared client version. This transport's
+  // verified level is raised by a newer installed CLI, never the installer pin.
+  // A missing row does not establish a minimum-version or entitlement refusal.
   const declared = await clientVersion();
   let response: Response;
   try {
@@ -240,6 +239,7 @@ export function createCodexModelAdapter(deps: CodexModelAdapterDeps = {}): Model
   const clientVersion = deps.clientVersion ?? (() => codexCatalogClientVersion());
   return {
     id: "codex",
+    inventoryAbsence: "advisory",
     async catalog(context) {
       const auth = await prepareCodexModelAuth(context.profile, context.signal, deps);
       return catalogFor(auth, context, fetcher, now, clientVersion);
@@ -332,27 +332,9 @@ export function createCodexModelAdapter(deps: CodexModelAdapterDeps = {}): Model
         const catalog = discovered?.accountFingerprint
           ? discovered
           : await catalogFor(auth, context, fetcher, now, clientVersion);
-        // The account catalog is a complete enumeration for the declared
-        // client version, so absence IS proof here (INV-104): authoritative.
-        const checked = validateModel(
-          request.model,
-          catalog.models.map((model) => model.id),
-          "api",
-          "authoritative",
-        );
+        // The raw source declares what a valid catalog miss proves (INV-104).
+        // Missing metadata never becomes a fabricated model row or sibling limits.
         const model = catalog.models.find((entry) => entry.id === request.model);
-        // Strict on purpose: the catalog row is the request contract (efforts,
-        // service tiers, windows). The refusal names the declared client
-        // version, because that filter — not the account — decides the list.
-        if (checked.status !== "ok" || !model)
-          throw new CodexModelError(
-            "model_unavailable",
-            `The requested model is not in this account's Codex model catalog as served to ${describeCodexClientVersion(catalog)}.`,
-            {
-              clientVersion: catalog.clientVersion,
-              clientVersionSource: catalog.clientVersionSource,
-            },
-          );
         effortResolution = codexModelEffortResolution(
           request.options.reasoningEffort,
           model,
@@ -365,7 +347,7 @@ export function createCodexModelAdapter(deps: CodexModelAdapterDeps = {}): Model
         }
         processing = prepareCodexProcessing(
           request.options.processingPreference,
-          model.processing,
+          model?.processing,
           request.options.serviceTier,
         );
         const { reasoningEffort: _requestedEffort, ...otherOptions } = request.options;

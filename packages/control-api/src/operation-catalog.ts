@@ -9,6 +9,7 @@ import {
 import { queryParam, resumeHeader } from "./operation-parameters.js";
 import { REMOTE_OPERATION_DRAFTS } from "./remote-operation-descriptors.js";
 import { MODEL_OPERATION_DRAFTS } from "./model-routes.js";
+import { MAINTENANCE_OPERATION_DRAFTS } from "./maintenance-routes.js";
 import type { OperationDraft } from "./operation-draft.js";
 import { OPERATION_SUMMARIES } from "./operation-summaries.js";
 
@@ -87,9 +88,7 @@ const operations: ControlOperationDescriptor[] = [
   j("POST", "/v2/handshake", "read_only", "ControlHandshakeRequest", "ControlHandshakeResponse"),
   j("GET", "/v2/daemon/status", "read_only", null, "ControlDaemonStatus"),
   j("GET", "/v2/operations", "read_only", null, "ControlOperationCatalog"),
-  j("POST", "/v2/maintenance/gc", "mutating", "ControlGcRequest", "ControlGcReceipt", {
-    idempotency: "natural",
-  }),
+  ...MAINTENANCE_OPERATION_DRAFTS.map(descriptor),
   j("GET", "/v2/agent-capabilities", "read_only", null, "AgentCapabilityCatalog"),
   j("GET", "/v2/run-applicability", "read_only", null, "ControlRunApplicabilityResponse", {
     applicability: "project",

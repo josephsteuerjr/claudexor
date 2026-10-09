@@ -267,3 +267,47 @@ it("does not invent an Ultra replacement when vendor orders contradict each othe
   expect(f.dispatch).not.toHaveBeenCalled();
   expect(f.fetch.mock.calls.map(([, init]) => init?.method ?? "GET")).toEqual(["GET"]);
 });
+
+it.each([undefined, "max", "future-native"])(
+  "preserves unlisted-model effort %s without a sibling ladder",
+  async (effort) => {
+    const f = fixture(["low"]);
+    const result = await f.adapter.invoke(
+      { ...f.request, model: "unlisted", options: { reasoningEffort: effort } },
+      f.context,
+    );
+    const body = JSON.parse(await new Response(f.fetch.mock.calls[1]![1]!.body).text());
+    expect(body.model).toBe("unlisted");
+    expect(body.reasoning?.effort).toBe(effort);
+    expect(result.effortResolution).toMatchObject({
+      requested: effort ?? null,
+      submitted: effort ?? null,
+      resolution: effort ? "exact" : "omitted",
+      source: "adapter",
+      observed: null,
+      observedSource: null,
+    });
+    expect(result.effortResolution?.reason).toContain("without capability confirmation");
+    expect(f.dispatch).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("refuses native-only Ultra for an unlisted raw model as an option, not an account or model", async () => {
+  const f = fixture();
+  const result = await f.adapter.invoke(
+    { ...f.request, model: "unlisted", options: { reasoningEffort: "ultra" } },
+    f.context,
+  );
+  expect(result.problem).toMatchObject({
+    code: "unsupported_parameter",
+    context: { parameter: "reasoningEffort" },
+  });
+  expect(result.effortResolution).toMatchObject({
+    requested: "ultra",
+    submitted: null,
+    resolution: "rejected",
+    source: "adapter",
+  });
+  expect(f.dispatch).not.toHaveBeenCalled();
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+});
