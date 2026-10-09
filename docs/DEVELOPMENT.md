@@ -301,6 +301,12 @@ Tests and local smokes must never touch real user state:
   native session id (resuming one the engine carries) plus a probe of the cwd and
   `HOME` it was handed, so thread lane-home and native-resume stories run
   offline.
+- Canary fixtures use their candidate's built daemon and isolated endpoint,
+  regardless of inherited entry/socket overrides. Cleanup must check the stop
+  result and the root's current writer lease, not just the old owner's exit.
+  Known absence and repeated disposal succeed; uncertain cleanup retains the
+  root with `canary-cleanup.json`. This is normal teardown, not a guarantee
+  against a runner killed before its cleanup executes.
 - Council regression fixtures exercise actual planner transports and final
   artifacts: retained unverified drafts, original failures, merge selection and
   terminal RunFacts must agree. Check solo/draft/merge prompt guidance through

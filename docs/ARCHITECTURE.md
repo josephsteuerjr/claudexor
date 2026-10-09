@@ -292,7 +292,10 @@ at every wire boundary.
   are finalized through the daemon attachment pipeline before a turn enqueues.
 - `packages/canary`: canary golden stories — user-level E2E smokes over the
   BUILT CLI with offline fake harnesses, each pinned to a Bible invariant
-  tag (`pnpm canary`; runs in CI on every PR).
+  tag (`pnpm canary`; runs in CI on every PR). The shared fixture pins the built
+  daemon entry and its own endpoint. Disposal removes its root only after the
+  writer lease proves absence or a stale owner; a failed stop or live/unknown
+  successor retains the root and cleanup diagnostic.
 - `benchmarks/runner`: the SWE-bench Verified benchmark runner (predictions
   via the Claudexor CLI; see `benchmarks/`).
 - `apps/macos`: native app; displays/edits what the engine exposes.
@@ -2445,7 +2448,13 @@ Request validation remains a typed 400; transport does not retry automatically.
   `POST /v2/runs` and Exact Retry answer typed `404 project_not_registered`
   (`retryable: false`, required action: register the root with
   `POST /v2/projects` or declare `scope.ephemeral`) instead of the retryable
-  `503 idempotency_status_unavailable`. If no command was
+  `503 idempotency_status_unavailable`. The lookup also preserves canonical
+  `409 idempotency_conflict` and `400 invalid_idempotency_key` refusals. Other
+  lookup failures retain the retryable 503 and same-key recovery: their safe
+  cause and `lookup_before_preflight` / `lookup_after_preflight` stage travel
+  in the existing problem context, with the preflight error separately retained
+  when that second lookup failed. Neither failure proves no prior acceptance.
+  If no command was
   accepted, a replay may reuse its one journaled runless turn only while that
   turn is still the conversation tail; the recovery boundary refuses a
   historical orphan before enqueue. Already accepted commands remain valid and
@@ -2833,8 +2842,9 @@ therefore cannot turn an old or newly busy daemon into a replacement casualty.
 Explicit operator shutdown keeps its forceful semantics. The daemon records its
 birth identity in the writer lease at startup; `claudexor daemon stop` then CONFIRMS death
 (released lease, gone pid, or identity-verified SIGKILL escalation — a
-recycled pid is never signalled) before reporting success, so scripts and
-test disposers can trust its exit code. The lease is acquired before the
+recycled pid is never signalled) before reporting success. Scripts can trust
+that exit code for the pinned generation; canary disposal additionally checks
+the current writer lease for a successor. The lease is acquired before the
 daemon publishes its socket or Control descriptor, so a present lease without
 a reachable socket remains a protected startup window unless its owner is
 proven stale. That proof is deliberately narrow: a missing pid, a birth-identity

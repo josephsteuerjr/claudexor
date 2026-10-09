@@ -44,6 +44,21 @@ describe("normalizeExistingProjectRoot", () => {
 });
 
 describe("findAcceptedAroundPreflight", () => {
+  it("returns an earlier accepted command without invoking mutable preflight", async () => {
+    const accepted = { id: "job-prior" };
+    let preflights = 0;
+    await expect(
+      findAcceptedAroundPreflight(
+        async () => accepted,
+        async () => {
+          preflights += 1;
+          throw new Error("mutable capability disappeared");
+        },
+      ),
+    ).resolves.toBe(accepted);
+    expect(preflights).toBe(0);
+  });
+
   it("returns a command accepted while a failing mutable preflight was in flight", async () => {
     const accepted = { id: "job-raced" };
     let durable: typeof accepted | null = null;
@@ -86,14 +101,17 @@ describe("findAcceptedAroundPreflight", () => {
     const preflightError = Object.assign(new Error("retired access"), {
       status: 409,
       code: "retired_access_profile",
+      retryable: false,
+      requiredActions: ["Choose an active access profile."],
     });
+    const lookupError = new Error("durable command index unavailable");
     let probes = 0;
     await expect(
       findAcceptedAroundPreflight(
         async () => {
           probes += 1;
           if (probes === 1) return null;
-          throw new Error("durable command index unavailable");
+          throw lookupError;
         },
         async () => {
           throw preflightError;
@@ -103,6 +121,23 @@ describe("findAcceptedAroundPreflight", () => {
       status: 503,
       code: "idempotency_status_unavailable",
       retryable: true,
+      cause: lookupError,
+      context: {
+        stage: "lookup_after_preflight",
+        cause: {
+          message: "durable command index unavailable",
+          requiredActions: [],
+          context: {},
+        },
+        preflight: {
+          message: "retired access",
+          code: "retired_access_profile",
+          status: 409,
+          retryable: false,
+          requiredActions: ["Choose an active access profile."],
+          context: {},
+        },
+      },
     });
     expect(probes).toBe(2);
   });
@@ -148,6 +183,42 @@ describe("findAcceptedAroundPreflight", () => {
       status: 503,
       code: "idempotency_status_unavailable",
       retryable: true,
+      context: {
+        stage: "lookup_before_preflight",
+        cause: {
+          code: "partition_unavailable",
+          status: 503,
+          message: "journal partition quarantined",
+        },
+      },
+    });
+  });
+
+  it.each([
+    ["idempotency_conflict", 409],
+    ["invalid_idempotency_key", 400],
+  ])("preserves the canonical %s refusal and its original facts", async (code, status) => {
+    const error = Object.assign(new Error("canonical lookup refusal"), {
+      code,
+      status,
+      context: { detail: "original evidence" },
+      requiredActions: ["Original remedy."],
+    });
+    const result = await findAcceptedAroundPreflight(
+      async () => {
+        throw error;
+      },
+      async () => {
+        throw new Error("must not reach preflight");
+      },
+    ).catch((failure: unknown) => failure);
+    expect(result).toBe(error);
+    expect(result).toMatchObject({
+      code,
+      status,
+      retryable: false,
+      context: { detail: "original evidence" },
+      requiredActions: ["Original remedy."],
     });
   });
 });

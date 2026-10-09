@@ -18,7 +18,13 @@ import {
   runExecutionWorkspaceViolation,
   runStartStrategyViolations,
 } from "@claudexor/schema";
-import { assertNoInlineSecretValues, noProjectRepoRoot } from "@claudexor/util";
+import {
+  assertNoInlineSecretValues,
+  noProjectRepoRoot,
+  safeProblemContext,
+  safeProblemMessage,
+  safeProblemRequiredActions,
+} from "@claudexor/util";
 import type { DaemonFacadeClient, DaemonRunRecord } from "./daemon-server.js";
 import { assertContinuationAdmissible, resolveContinuationBody } from "./run-continuation-start.js";
 
@@ -270,6 +276,19 @@ function projectNotRegisteredError(error: unknown): Error | null {
   });
 }
 
+/** Keep only existing problem fields, never raw exception stacks or causes. */
+function lookupProblemEvidence(error: unknown): Record<string, unknown> {
+  const source = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  return {
+    message: safeProblemMessage(error),
+    ...(typeof source["code"] === "string" ? { code: source["code"] } : {}),
+    ...(typeof source["status"] === "number" ? { status: source["status"] } : {}),
+    ...(typeof source["retryable"] === "boolean" ? { retryable: source["retryable"] } : {}),
+    requiredActions: safeProblemRequiredActions(source["requiredActions"]),
+    context: safeProblemContext(source["context"]),
+  };
+}
+
 export interface RunCreateRouteContext {
   daemon: DaemonFacadeClient;
   readBody(req: IncomingMessage): Promise<unknown>;
@@ -285,39 +304,59 @@ export interface RunCreateRouteContext {
  * fails after the first durable lookup missed it. The second lookup is a
  * single race-closing probe, not polling. Only a successful miss preserves
  * the preflight refusal; an unreadable durable index leaves custody unknown
- * and asks the caller to replay the same idempotency key. The daemon's typed
- * `project_not_registered` is not an unreadable index: it passes through as
- * its own 404 so the caller registers the root instead of retrying forever.
+ * and asks the caller to replay the same idempotency key. Only the daemon's
+ * canonical key/project refusals establish a definite refusal of THIS body;
+ * a conflict may still refer to an earlier accepted command under that key.
  */
 export async function findAcceptedAroundPreflight<T>(
   findAccepted: () => Promise<T | null | undefined>,
   preflight: () => Promise<void>,
 ): Promise<T | null> {
-  const lookup = async (): Promise<T | null | undefined> => {
+  const lookup = async (
+    stage: "lookup_before_preflight" | "lookup_after_preflight",
+    preflightError?: unknown,
+  ): Promise<T | null | undefined> => {
     try {
       return await findAccepted();
     } catch (error) {
       const unregistered = projectNotRegisteredError(error);
       if (unregistered) throw unregistered;
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error.code === "idempotency_conflict" || error.code === "invalid_idempotency_key")
+      ) {
+        // CommandStore supplies code/status but no retryable property; expose
+        // the definite refusal explicitly without changing other lookup errors.
+        throw Object.assign(error, { retryable: false });
+      }
       throw Object.assign(
         new Error(
           "idempotency status is temporarily unavailable; retry the same operation with the same Idempotency-Key",
+          { cause: error },
         ),
         {
           status: 503,
           code: "idempotency_status_unavailable",
           retryable: true,
           requiredActions: ["Retry the same operation with the same Idempotency-Key."],
+          context: safeProblemContext({
+            stage,
+            cause: lookupProblemEvidence(error),
+            ...(stage === "lookup_after_preflight"
+              ? { preflight: lookupProblemEvidence(preflightError) }
+              : {}),
+          }),
         },
       );
     }
   };
-  const prior = await lookup();
+  const prior = await lookup("lookup_before_preflight");
   if (prior) return prior;
   try {
     await preflight();
   } catch (preflightError) {
-    const raced = await lookup();
+    const raced = await lookup("lookup_after_preflight", preflightError);
     if (raced) return raced;
     throw preflightError;
   }

@@ -14,6 +14,15 @@
   - @claudexor/secrets@3.24.0
   - @claudexor/util@3.24.0
 
+## 3.23.2
+
+### Patch Changes
+
+- @claudexor/core@3.23.2
+- @claudexor/schema@3.23.2
+- @claudexor/secrets@3.23.2
+- @claudexor/util@3.23.2
+
 ## 3.23.1
 
 ### Patch Changes

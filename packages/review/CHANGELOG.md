@@ -13,6 +13,18 @@
   - @claudexor/config@3.24.0
   - @claudexor/util@3.24.0
 
+## 3.23.2
+
+### Patch Changes
+
+- @claudexor/budget@3.23.2
+- @claudexor/config@3.23.2
+- @claudexor/context@3.23.2
+- @claudexor/core@3.23.2
+- @claudexor/schema@3.23.2
+- @claudexor/util@3.23.2
+- @claudexor/workspace@3.23.2
+
 ## 3.23.1
 
 ### Patch Changes

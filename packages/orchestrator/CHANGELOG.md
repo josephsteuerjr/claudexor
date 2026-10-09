@@ -21,6 +21,26 @@
   - @claudexor/artifact-store@3.24.0
   - @claudexor/util@3.24.0
 
+## 3.23.2
+
+### Patch Changes
+
+- @claudexor/arbitration@3.23.2
+- @claudexor/artifact-store@3.23.2
+- @claudexor/budget@3.23.2
+- @claudexor/config@3.23.2
+- @claudexor/context@3.23.2
+- @claudexor/core@3.23.2
+- @claudexor/delivery@3.23.2
+- @claudexor/event-log@3.23.2
+- @claudexor/gateway@3.23.2
+- @claudexor/policy@3.23.2
+- @claudexor/review@3.23.2
+- @claudexor/schema@3.23.2
+- @claudexor/synthesis@3.23.2
+- @claudexor/util@3.23.2
+- @claudexor/workspace@3.23.2
+
 ## 3.23.1
 
 ### Patch Changes

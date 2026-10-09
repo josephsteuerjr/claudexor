@@ -2,6 +2,12 @@
 
 ## 3.24.0
 
+## 3.23.2
+
+### Patch Changes
+
+- Preserve typed idempotency lookup failures and safe underlying causes without losing same-key recovery. Pin canary daemons to the built candidate and retain fixture evidence when cleanup cannot prove the root inactive.
+
 ## 3.23.1
 
 ## 3.23.0
