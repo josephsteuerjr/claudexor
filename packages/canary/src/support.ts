@@ -25,6 +25,71 @@ import { parse as parseYaml } from "yaml";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 export const CLI = join(repoRoot, "packages", "cli", "dist", "cli.js");
+const DAEMON = join(repoRoot, "packages", "cli", "dist", "claudexord.js");
+
+// Read the built engine's strict authority in the fixture environment. In
+// particular, Windows pipe/lease addresses depend on its config root. This is
+// a read-only Node process, not a daemon or another lifecycle controller.
+const LEASE_PROBE = `
+  const { canonicalDefaultSocketPath } = await import(${JSON.stringify(new URL("../../daemon/dist/token.js", import.meta.url).href)});
+  const { inspectDaemonWriterLease } = await import(${JSON.stringify(new URL("../../daemon/dist/writer-lease.js", import.meta.url).href)});
+  const lease = inspectDaemonWriterLease(canonicalDefaultSocketPath());
+  const observation = lease.status === "owned"
+    ? { status: lease.status, path: lease.path, pid: lease.owner.pid,
+        capability: lease.capability.status, reason: lease.capability.reason }
+    : lease;
+  process.stdout.write(JSON.stringify(observation));
+`;
+
+interface LeaseObservation {
+  status: "absent" | "owned" | "unknown";
+  path: string;
+  pid?: number;
+  capability?: "capable" | "proven_stale" | "unknown";
+  reason?: string;
+}
+
+function failureDetail(error: unknown): { message: string; code?: string } {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return {
+    message: error instanceof Error ? error.message : String(error),
+    ...(code ? { code } : {}),
+  };
+}
+
+function inspectSandboxLease(env: NodeJS.ProcessEnv, cwd: string): LeaseObservation {
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", LEASE_PROBE], {
+    env,
+    cwd,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (result.error || result.signal || result.status !== 0) {
+    throw new Error(
+      `writer-lease inspection failed: ${JSON.stringify({
+        status: result.status,
+        signal: result.signal,
+        stderr: result.stderr,
+        ...(result.error ? { error: failureDetail(result.error) } : {}),
+      })}`,
+    );
+  }
+  const lease = JSON.parse(result.stdout) as LeaseObservation;
+  if (
+    !lease ||
+    typeof lease.path !== "string" ||
+    !["absent", "owned", "unknown"].includes(lease.status)
+  ) {
+    throw new Error("writer-lease inspection returned an invalid observation");
+  }
+  return lease;
+}
+
+function inactiveLease(lease: LeaseObservation): boolean {
+  return (
+    lease.status === "absent" || (lease.status === "owned" && lease.capability === "proven_stale")
+  );
+}
 
 export interface Sandbox {
   home: string;
@@ -73,6 +138,7 @@ export function makeSandbox(): Sandbox {
     ...process.env,
     HOME: home,
     CLAUDEXOR_CONFIG_DIR: configDir,
+    CLAUDEXOR_DAEMON_ENTRY: DAEMON,
     CLAUDEXOR_DISABLE_STORED_SECRETS: "1",
     CLAUDEXOR_CODEX_BIN: codexStub,
     CLAUDEXOR_CLAUDE_BIN: claudeStub,
@@ -80,41 +146,60 @@ export function makeSandbox(): Sandbox {
     CLAUDEXOR_OPENCODE_BIN: opencodeStub,
     // Keep daemon state inside the sandbox too (config dir owns it).
   };
+  delete env.CLAUDEXOR_DAEMON_SOCK;
+  let disposed = false;
   return {
     home,
     configDir,
     repo,
     env,
     dispose: () => {
-      // Stop a sandbox daemon if one was auto-started by an acting command.
-      // `daemon stop` CONFIRMS the daemon's death (or escalates an
-      // identity-verified SIGKILL) before exiting, so the sandbox removal
-      // below never races a live process (W3.5). The timeout covers the
-      // stop's own worst-case confirmation budget (~20s) with slack.
+      if (disposed) return;
+      const receipt: Record<string, unknown> = { base, configDir, daemonEntry: DAEMON };
       try {
-        spawnSync(process.execPath, [CLI, "daemon", "stop"], { env, cwd: repo, timeout: 30_000 });
-      } catch {
-        /* best effort */
-      }
-      // The daemon may still be closing its durable journal during shutdown; retry the
-      // removal briefly instead of failing the story on ENOTEMPTY. A leftover
-      // temp dir on the final attempt is acceptable OS-tmp residue, never a
-      // test failure.
-      for (let attempt = 0; attempt < 10; attempt++) {
-        try {
-          rmSync(base, { recursive: true, force: true });
-          return;
-        } catch {
-          const until = Date.now() + 200;
-          while (Date.now() < until) {
-            /* sync backoff — vitest hooks may not await here */
+        const before = inspectSandboxLease(env, repo);
+        receipt.before = before;
+        // Physical absence or a proven-stale owner handles never-started and
+        // already-stopped fixtures without inferring death from a missing token.
+        if (!inactiveLease(before)) {
+          const result = spawnSync(process.execPath, [CLI, "daemon", "stop", "--json"], {
+            env,
+            cwd: repo,
+            encoding: "utf8",
+            // Covers the engine's own ~20s confirmation budget with slack.
+            timeout: 30_000,
+          });
+          receipt.stop = {
+            status: result.status,
+            signal: result.signal,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            ...(result.error ? { error: failureDetail(result.error) } : {}),
+          };
+          if (result.error || result.signal || result.status !== 0) {
+            throw new Error("daemon stop did not complete successfully");
           }
+          // Operator stop proves the pinned owner's exit, not the absence of
+          // a successor. The existing lease owner decides whether this root
+          // can be removed; CLI prose is never that proof.
+          const after = inspectSandboxLease(env, repo);
+          receipt.after = after;
+          if (!inactiveLease(after))
+            throw new Error("writer-lease activity remains live or unknown");
         }
-      }
-      try {
-        rmSync(base, { recursive: true, force: true });
-      } catch {
-        /* leave residue in OS tmp */
+        rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+        disposed = true;
+      } catch (error) {
+        receipt.failure = failureDetail(error);
+        const receiptPath = join(base, "canary-cleanup.json");
+        try {
+          writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+        } catch (writeError) {
+          receipt.receiptWriteFailure = failureDetail(writeError);
+        }
+        throw new Error(`Canary cleanup incomplete at ${base}: ${JSON.stringify(receipt)}`, {
+          cause: error,
+        });
       }
     },
   };

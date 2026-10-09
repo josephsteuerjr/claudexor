@@ -1,5 +1,11 @@
 # claudexor
 
+## 3.23.2
+
+### Patch Changes
+
+- @claudexor/cli@3.23.2
+
 ## 3.23.1
 
 ### Patch Changes
