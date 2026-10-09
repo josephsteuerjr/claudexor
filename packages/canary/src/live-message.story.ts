@@ -175,11 +175,6 @@ async function waitTerminal(api: ReturnType<typeof requestApi>, jobId: string): 
 
 let sb: Sandbox;
 afterEach(() => {
-  try {
-    cli(sb, ["daemon", "stop", "--json"]);
-  } catch {
-    /* the sandbox is disposed either way */
-  }
   sb.dispose();
 });
 

@@ -1,5 +1,17 @@
 # @claudexor/control-api
 
+## 3.23.2
+
+### Patch Changes
+
+- Preserve typed idempotency lookup failures and safe underlying causes without losing same-key recovery. Pin canary daemons to the built candidate and retain fixture evidence when cleanup cannot prove the root inactive.
+  - @claudexor/delivery@3.23.2
+  - @claudexor/event-log@3.23.2
+  - @claudexor/schema@3.23.2
+  - @claudexor/secrets@3.23.2
+  - @claudexor/util@3.23.2
+  - @claudexor/workspace@3.23.2
+
 ## 3.23.1
 
 ### Patch Changes

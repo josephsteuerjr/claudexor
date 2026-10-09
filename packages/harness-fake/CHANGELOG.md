@@ -1,5 +1,13 @@
 # @claudexor/harness-fake
 
+## 3.23.2
+
+### Patch Changes
+
+- @claudexor/core@3.23.2
+- @claudexor/schema@3.23.2
+- @claudexor/util@3.23.2
+
 ## 3.23.1
 
 ### Patch Changes
