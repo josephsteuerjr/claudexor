@@ -1,0 +1,2 @@
+{"type":"error","session_id":"ses-missing","ts":"2026-10-08T12:00:00.000Z","error":"result subtype: error_during_execution"}
+{"type":"completed","session_id":"ses-missing","ts":"2026-10-08T12:00:00.100Z","payload":{"exit_code":1,"harness_reported_error":true,"stderr_tail":"No conversation found with session ID: 00000000-0000-4000-8000-000000000001"}}

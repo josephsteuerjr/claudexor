@@ -199,7 +199,7 @@ function samePath(a: string | null, b: string): boolean {
 }
 
 function profileRef(deps: InRunContinuityDeps, spec: HarnessRunSpec, profileId: string | null) {
-  const row = registryProfile(deps.registry, profileId);
+  const row = registryProfile(deps.registry, profileId, deps.adapter.id);
   return {
     profileId,
     env: storeEnvFor(spec.env, row),

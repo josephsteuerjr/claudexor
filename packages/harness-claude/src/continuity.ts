@@ -102,9 +102,27 @@ export const claudeContinuity: HarnessContinuityCapability = {
     };
   },
 
-  /** On a RESUMED try (the engine asks only then) an API 400 is the vendor
-   * refusing the request built from the carried transcript. */
+  /** Only asked on a resumed try. API 400 rejects the carried request;
+   * a failed CLI exit can also report the documented missing-session diagnostic.
+   * This is vendor stderr, never model prose or a generic execution failure. */
   rejectsCarriedState(ev) {
-    return ev.type === "error" && ev.payload?.["api_error_status"] === 400;
+    if (ev.type === "error") return ev.payload?.["api_error_status"] === 400;
+    if (ev.type !== "completed") return false;
+    const exitCode = ev.payload?.["exit_code"];
+    const failed =
+      ev.payload?.["harness_reported_error"] === true ||
+      (typeof exitCode === "number" && exitCode > 0);
+    const stderr = ev.payload?.["stderr_tail"];
+    return (
+      failed &&
+      typeof stderr === "string" &&
+      stderr
+        .split(/\r?\n/)
+        .some((line) =>
+          /^No conversation found with session ID: [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            line.trim(),
+          ),
+        )
+    );
   },
 };

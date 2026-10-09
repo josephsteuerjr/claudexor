@@ -64,10 +64,33 @@ describe("session capsule", () => {
     });
     // The engine default store carries no locator key at all.
     expect(storeEnvFor({ HOME: "/h" }, null)).toEqual({ HOME: "/h" });
-    expect(registryProfile([row], "a")).toBe(row);
-    expect(registryProfile([row], "zz")).toBeNull();
-    expect(registryProfile([row], null)).toBeNull();
+    expect(registryProfile([row], "a", "claude")).toBe(row);
+    expect(registryProfile([row], "zz", "claude")).toBeNull();
+    expect(registryProfile([row], null, "claude")).toBeNull();
   });
+
+  it.each([false, true])(
+    "keeps history lookup harness-scoped regardless of registry order (%s)",
+    (reverse) => {
+      const rows: CredentialProfile[] = ["claude", "codex", "future-harness"].map((harness_id) => ({
+        profile_id: "shared",
+        harness_id,
+        display_name: "shared",
+        credential_kind: "config_dir_login",
+        isolation_locator: `/stores/${harness_id}-shared`,
+        secret_ref: null,
+        // A disabled source can still hold the history a healthy account must resume.
+        enabled: false,
+        created_at: null,
+      }));
+      const registry = reverse ? [...rows].reverse() : rows;
+      for (const row of rows) {
+        expect(registryProfile(registry, "shared", row.harness_id)).toBe(row);
+      }
+      expect(registryProfile([rows[1]!], "shared", "claude")).toBeNull();
+      expect(registryProfile(registry, null, "claude")).toBeNull();
+    },
+  );
 
   it("relocates the holder through the adapter and keeps the capsule on a miss", async () => {
     const located: HarnessContinuityCapability = {

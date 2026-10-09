@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONTINUITY_PROFILE_LOCATOR_ENV } from "@claudexor/core";
+import { HarnessEvent } from "@claudexor/schema";
 import { claudeContinuity, claudeProjectDirName, claudeStoreDir } from "./continuity.js";
 
 const roots: string[] = [];
@@ -107,6 +108,50 @@ describe("claude continuity", () => {
       false,
     );
     expect(reject({ ...base, type: "message", text: "400" })).toBe(false);
+  });
+
+  it("recognizes the missing-session diagnostic on the failed native exit, not the generic error", () => {
+    const events = readFileSync(
+      new URL("../fixtures/signals/missing-resume-session.jsonl", import.meta.url),
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .map((line) => HarnessEvent.parse(JSON.parse(line)));
+    expect(events.map((event) => claudeContinuity.rejectsCarriedState!(event))).toEqual([
+      false,
+      true,
+    ]);
+  });
+
+  it.each([
+    {
+      type: "message",
+      text: "No conversation found with session ID: 00000000-0000-4000-8000-000000000001",
+    },
+    { type: "error", error: "result subtype: error_during_execution" },
+    { type: "completed", payload: { exit_code: 1, stderr_tail: "connection reset" } },
+    {
+      type: "completed",
+      payload: {
+        exit_code: 0,
+        stderr_tail: "No conversation found with session ID: 00000000-0000-4000-8000-000000000001",
+      },
+    },
+    {
+      type: "completed",
+      payload: {
+        exit_code: 1,
+        stderr_tail:
+          "Example: No conversation found with session ID: 00000000-0000-4000-8000-000000000001",
+      },
+    },
+  ])("does not abandon usable native history for unrelated output ($type)", (event) => {
+    expect(
+      claudeContinuity.rejectsCarriedState!(
+        HarnessEvent.parse({ session_id: "s", ts: "t", ...event }),
+      ),
+    ).toBe(false);
   });
 });
 

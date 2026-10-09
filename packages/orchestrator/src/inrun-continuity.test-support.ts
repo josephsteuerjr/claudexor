@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { HarnessAdapter, HarnessContinuityCapability } from "@claudexor/core";
 import {
   ConformanceReport,
+  CredentialProfile,
   HarnessManifest,
   type HarnessEvent,
   type HarnessRunSpec,
@@ -51,6 +52,7 @@ interface Scenario {
   snapshots?: QuotaSnapshot[];
   reviewers?: ReviewerSpec[];
   capabilities?: Partial<HarnessManifest["capabilities"]>;
+  registryProfiles?: (profiles: CredentialProfile[]) => CredentialProfile[];
 }
 
 export const RESET = "2026-10-06T21:00:00.000Z";
@@ -97,6 +99,15 @@ export async function run(scenario: Scenario) {
   const root = gitRepo();
   const configDir = process.env.CLAUDEXOR_CONFIG_DIR!;
   const stores = Object.fromEntries(scenario.profiles.map((id) => [id, join(root, `store-${id}`)]));
+  const profiles = scenario.profiles.map((id) =>
+    CredentialProfile.parse({
+      profile_id: id,
+      harness_id: "fake",
+      display_name: id,
+      credential_kind: "config_dir_login",
+      isolation_locator: stores[id],
+    }),
+  );
   writeFileSync(
     join(configDir, "config.yaml"),
     JSON.stringify({
@@ -107,13 +118,7 @@ export async function run(scenario: Scenario) {
           max_delay_ms: 2,
         },
       },
-      credential_profiles: scenario.profiles.map((id) => ({
-        profile_id: id,
-        harness_id: "fake",
-        display_name: id,
-        credential_kind: "config_dir_login",
-        isolation_locator: stores[id],
-      })),
+      credential_profiles: scenario.registryProfiles?.(profiles) ?? profiles,
       harnesses: { fake: { profile_policy: { limit_action: scenario.limitAction ?? "rotate" } } },
     }),
   );

@@ -61,13 +61,16 @@ export function storeEnvFor(
   };
 }
 
-/** The registry row of a profile id, or null for the engine default. */
+/** History belongs to a harness/profile pair, even when its holder is disabled. */
 export function registryProfile(
   registry: readonly CredentialProfile[],
   profileId: string | null,
+  harnessId: string,
 ): CredentialProfile | null {
   if (profileId === null) return null;
-  return registry.find((row) => row.profile_id === profileId) ?? null;
+  return (
+    registry.find((row) => row.profile_id === profileId && row.harness_id === harnessId) ?? null
+  );
 }
 
 /**

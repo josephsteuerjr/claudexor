@@ -310,6 +310,94 @@ function attemptDirOf(runDir: string): string {
 }
 
 describe("continueFrom successor: first try", () => {
+  it.each(
+    (["agent", "ask"] as const).flatMap((mode) =>
+      ["a", "b"].flatMap((target) =>
+        [true, false].map((foreignFirst) => ({ mode, target, foreignFirst })),
+      ),
+    ),
+  )(
+    "resolves both stores by harness ($mode, target $target, foreign first: $foreignFirst)",
+    async ({ mode, target, foreignFirst }) => {
+      const foreignFiles: string[] = [];
+      let f!: Fixture;
+      f = fixture(["a", "b"], function* ({ phase, spec, emit, resume }) {
+        const store = spec.credential_profile!.isolation_locator!;
+        if (phase === "predecessor") {
+          seedSession(store, "sid-A");
+          yield emit({
+            type: "started",
+            observed_model: "m1",
+            payload: { native_session_id: "sid-A" },
+          });
+          yield emit({
+            type: "tool_call",
+            tool: { name: "Read", kind: "file", target: "README.md" },
+          });
+          yield* limit(emit);
+          return;
+        }
+        expect(resume).toBe("sid-A");
+        expect(readFileSync(join(store, "sessions", "sid-A.jsonl"), "utf8")).toBe(
+          '{"sid":"sid-A"}\n',
+        );
+        yield emit({
+          type: "started",
+          observed_model: "m1",
+          payload: { native_session_id: "sid-A" },
+        });
+        yield emit({ type: "message", text: "Finished the saved work.", final: true });
+        yield emit({ type: "completed" });
+      });
+      const { pred, succ } = await chain(f, {
+        predecessor: { mode, credentialProfileId: "a" },
+        successor: { mode, credentialProfileId: target },
+        between: () => {
+          const file = join(process.env.CLAUDEXOR_CONFIG_DIR!, "config.yaml");
+          const config = JSON.parse(readFileSync(file, "utf8"));
+          const profiles = config.credential_profiles as {
+            profile_id: string;
+            harness_id: string;
+            isolation_locator: string;
+            enabled?: boolean;
+          }[];
+          const foreign = profiles.map((row) => {
+            const store = join(f.root, `foreign-${row.profile_id}`);
+            seedSession(store, "sid-A");
+            const path = join(store, "sessions", "sid-A.jsonl");
+            writeFileSync(path, "foreign history\n");
+            foreignFiles.push(path);
+            return {
+              ...row,
+              harness_id: row.profile_id === "a" ? "claude" : "codex",
+              isolation_locator: store,
+            };
+          });
+          // History reads remain legal after the source account is disabled for dispatch.
+          if (target === "b") profiles.find((row) => row.profile_id === "a")!.enabled = false;
+          config.credential_profiles = foreignFirst
+            ? [...foreign, ...profiles]
+            : [...profiles, ...foreign];
+          writeFileSync(file, JSON.stringify(config));
+        },
+      });
+      expect(pred.result.lifecycle).toBe("failed");
+      expect(succ.result.lifecycle, succ.result.summary).toBe("succeeded");
+      expect(succ.receipts[0]).toMatchObject({
+        carrier: target === "a" ? "native" : "native_moved",
+        from: { runId: pred.result.runId, profileId: "a" },
+        to: { profileId: target },
+      });
+      expect(readSessionCapsule(attemptDirOf(succ.result.runDir))).toMatchObject({
+        harness: "fake",
+        holderProfileId: target,
+        file: join(f.stores[target]!, "sessions", "sid-A.jsonl"),
+      });
+      expect(existsSync(join(f.stores.a!, "sessions", "sid-A.jsonl"))).toBe(target === "a");
+      for (const path of foreignFiles) expect(readFileSync(path, "utf8")).toBe("foreign history\n");
+    },
+  );
+
   it.each(["native identity rejection", "typed limit"] as const)(
     "keeps predecessor evidence in a later packet after the successor's %s",
     async (stop) => {
