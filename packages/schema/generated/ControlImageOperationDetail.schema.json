@@ -162,7 +162,7 @@
                     "sizeBytes"
                   ],
                   "additionalProperties": false,
-                  "description": "Digest-bound model-purpose resource; never an Agent attachment."
+                  "description": "Digest-bound image-purpose resource; never an Agent attachment."
                 },
                 "readyAt": {
                   "$ref": "#/definitions/ControlImageOperationDetail/properties/createdAt"

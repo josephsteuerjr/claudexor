@@ -14,7 +14,9 @@ import { RunLifecycle } from "./status-projection.js";
 export const IMAGE_REQUEST_LIMIT_BYTES = 144 * 1024 * 1024;
 
 /** Image custody reuses the digest-bound payload-ref shape; same bytes contract, separate purpose. */
-export const ImagePayloadRef = ModelPayloadRef;
+export const ImagePayloadRef = ModelPayloadRef.describe(
+  "Digest-bound image-purpose resource; never an Agent attachment.",
+);
 export type ImagePayloadRef = ModelPayloadRef;
 
 export const ImageEditInput = z
