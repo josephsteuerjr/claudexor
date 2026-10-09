@@ -19,8 +19,9 @@ struct TranscriptView: View, Equatable {
     var trimmedOlder: Int = 0
     /// Characters the reducer's per-block byte bound cut (W23) — disclosed.
     var truncatedChars: Int = 0
-    /// Image/file scope for narration markdown (thread repoRoot / run dir).
+    /// Image/file scope for narration markdown (thread execution root / run dir).
     var fileScopeRoots: [String] = []
+    var remoteFileScope: RemoteFileScope? = nil
 
     var body: some View {
         // D-13 E: debug-only render-count hook (no-op unless CLAUDEXOR_RENDER_PROBE
@@ -67,7 +68,8 @@ struct TranscriptView: View, Equatable {
                     // compete with its own progress notes.
                     MarkdownOutputView(
                         markdown: TranscriptPresentation.chatMessage(text).text,
-                        fileScopeRoots: fileScopeRoots)
+                        fileScopeRoots: fileScopeRoots,
+                        remoteFileScope: remoteFileScope)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .opacity(0.7)
                 }

@@ -115,7 +115,7 @@ export function admitRun(
   }
 
   if (input.repoRoot !== NO_PROJECT_ROOT) {
-    assertMandatoryContext(input.repoRoot, deps.mandatoryFiles());
+    assertMandatoryContext(input.executionRoot ?? input.repoRoot, deps.mandatoryFiles());
   }
   return outputSchema;
 }

@@ -66,15 +66,21 @@ What Claudexor already does, so you can calibrate reports:
   mean the selected adapter's native policy, whose exact enforcement differs by
   vendor. A run marked `execution.delegated` carries the external orchestrator's
   own authority instead and needs no trust record. Two surfaces can set that
-  marker, and what the exemption costs differs between them, so both are stated
-  separately. A control-API client holds the daemon token and can already grant
+  marker — on a one-shot run, or once on a thread created with
+  `workspace: "delegated"` and a `workspaceRoot`, whose every later turn then
+  inherits it — and what the exemption costs differs between them, so both are
+  stated separately. A control-API client holds the daemon token and can already grant
   itself the allow through `POST /v2/trust`, so requiring a second ceremony
   there bought nothing. An MCP tool caller is the host's model: it holds no
   token and has no trust-writing tool, so for it the marker is a real widening.
   One call with `execution.delegated: true` and `access: "full"` now runs
   unsandboxed native `full` on any `repoPath` without the grant, where before it
   received the typed refusal, and the only remaining control is the host's own
-  MCP tool-approval policy. The marker is caller-asserted and is not
+  MCP tool-approval policy. `claudexor_thread_create` with
+  `workspace: "delegated"` is the persistent form of the same widening: one
+  approved creation call makes every later `claudexor_thread_turn` on that thread
+  run with delegated authority in the named `workspaceRoot`, including `full`
+  access without a grant, with no further approval beyond each turn call's own. The marker is caller-asserted and is not
   authenticated proof that an external orchestrator is really driving the run.
   It is recorded for an auditor in the run's job params, the recorded run start
   request that Exact Retry replays, and the per-attempt confinement disclosure
@@ -85,10 +91,14 @@ What Claudexor already does, so you can calibrate reports:
   Exact replays the recorded request and the Run Again draft keeps
   `execution`, so both carry `delegated` forward into a new `full` run without a
   grant; `claudexor retry` and `claudexor run-again` behave the same way.
-  Delegation-belt sub-runs cannot set it, and public thread turns cannot either,
-  because their strict execution schema does not accept the field. Either way
-  the harness runs as the signed-in OS user with no outer boundary, as described
-  above. For an externally orchestrated mutating run, the registered/trusted
+  Delegation-belt sub-runs cannot set it, and a thread turn cannot set it per
+  turn either, because its strict execution schema does not accept the field;
+  only a thread's creation-time `workspace: "delegated"` binding makes its turns
+  carry it, and that binding cannot be changed afterwards. The app cannot create
+  such a thread. Either way the harness runs as the signed-in OS user with no
+  outer boundary, as described above: a delegated thread's durable scoped `HOME`
+  per (thread, harness, account) separates vendor state, but it is not
+  containment, and its `workspaceRoot` is not a confinement root. For an externally orchestrated mutating run, the registered/trusted
   project stays `scope.root` while the harness executes in the caller-supplied
   `execution.workspaceRoot`; neither path relationship nor a second trust
   store is implied.

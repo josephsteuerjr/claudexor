@@ -547,10 +547,10 @@ struct TaskRun: Identifiable, Hashable {
     var artifactPaths: [String] = []
     var runDir: String?
     var repoRoot: String?
+    var executionRoot: String? // summary `executionRoot`: where file links resolve; nil = run dir only
     /// General server-owned lineage (retry/follow-up/delegation).
     var parentRunId: String? = nil
-    /// Narrow provenance set only by the Claudexor belt. Native vendor
-    /// subagents never produce a Claudexor run row and never set this field.
+    /// Narrow provenance set only by the Claudexor belt (native vendor subagents never set it).
     var delegatedFromRunId: String? = nil
     /// Durable requested/effective/used Delegate outcome facts.
     var delegation: RunDelegationInfo? = nil

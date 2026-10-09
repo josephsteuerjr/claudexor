@@ -177,7 +177,9 @@ at every wire boundary.
   home. An in-place run normally keeps the native environment so its vendor
   session stays resumable; a run marked `execution.delegated` (started by an
   external orchestrator that owns the workspace) is scoped even in place, and
-  refuses rather than starting a harness in the operator's home.
+  refuses rather than starting a harness in the operator's home. The in-place
+  candidate of a delegated thread's turn uses that thread's durable lane home
+  instead of a per-attempt one (below).
   A selected native Codex route uses its Claudexor-owned file-only profile;
   native Claude also uses a Claudexor-owned config dir and exposes only the
   narrow host Keychain bridge described in §5. The package also owns Git diff
@@ -317,6 +319,71 @@ delegated-live request must supply it and never falls back to `scope.root`.
 Read-only requests may omit it. Exact Retry revalidates a frozen new-shape
 workspace; the bounded legacy no-field replay retains its historical
 `scope.root` execution semantics.
+
+A persistent delegated thread binds that execution address once.
+`POST /v2/threads` with `workspace: "delegated"` requires `workspaceRoot` (and
+accepts it only then) on a project scope; it must be an absolute existing
+directory, kept in the spelling sent. The thread persists it as
+`workspace.workspace_root` (projected as `workspaceRoot`), separate from the
+managed `worktree_path`; no PATCH or turn field can change it. An exact
+creation replay is answered from retained, registered project partitions before
+checking the project or workspace path again. The existing startup ghost-project
+quarantine can unregister a missing author root and remove its partition from
+this lookup; replay after that retirement is not guaranteed. Before a turn's
+command is accepted, the turn route
+records the effective execution in its params: Agent turns carry
+`{delegated: true, isolation: "live", workspaceRoot}`, while Ask and Plan keep
+their ordinary isolation and readonly clamp and carry the same delegated root
+(the shared normalizer admits `workspaceRoot` for a delegated project-scoped
+read-only run, or an Agent that is live or uses directory execution, and
+nowhere else). A per-turn `execution.isolation: "envelope"` on an Agent Git
+turn contradicts the binding and is refused `thread_execution_conflict`. The
+turn's idempotency digest still covers only the client's request body. The
+runner then enforces agreement for every thread-bound run, the raw daemon
+socket included: the run's project is the thread's project, a delegated
+thread's run carries exactly its bound root under delegated authority, and an
+ordinary thread's run carries neither (`thread_execution_mismatch`). The
+root's existence is checked inside the durable job, so a missing workspace is
+a retryable `delegated_workspace_unavailable` refusal on the exact turn; Turn
+Retry replays the accepted request after the caller restores it. Every mode
+and access level resolves to the bound root before any managed-workspace rule:
+no thread worktree is created, protected paths never promote the thread, and
+nothing reads or writes the author tree in its place. Directory execution
+keeps its own live/copy semantics with the bound root as its source.
+Mandatory-context checks and the Plan scope atlas read that execution tree;
+their mandatory paths and include/exclude rules remain project configuration.
+Manual run Apply, Apply Check, eligibility, and Accept Clean Patch use the
+recorded execution workspace as the original delivery target when present.
+Copied directory results return there through the ordinary verifier and
+preimage checks; the stable project still owns configuration and run identity.
+An unavailable execution workspace never substitutes the project directory.
+
+The caller owns the workspace's contents. Claudexor captures each mutating
+turn's Git-visible changes against a pre-turn snapshot of the workspace (so a
+subject the caller staged before the turn is never attributed to it, and
+Git-ignored evidence never enters `patch.diff`), never applies the workspace to
+the project (Thread Apply refuses `thread_workspace_caller_owned`), and never
+resets, cleans, or deletes it; purge removes only Claudexor's lane state and
+keeps the binding as history. The snapshot is written with a scratch index
+into the workspace's own object store; the workspace's HEAD, index, refs, and
+stash are not changed. `/produced`, revert, continuation, and the Run Again
+draft all read the recorded `execution.workspaceRoot` and never fall back to
+`scope.root`. Run summaries project that address as `executionRoot` beside the
+stable `project.root` (the project root for every other project run, null
+without a project). The macOS terminal and local preview use the thread's same
+bound workspace and explicitly report a missing binding; the thread's
+changed-image gallery, turn file links, and Run Detail's answer, retained output
+and artifact previews resolve only in that workspace, never in same-named project
+files, and a run whose summary carries no `executionRoot` scopes only its run
+directory. A remote image names its run (`runId` on `GET /v2/projects/:id/file`):
+the remote runtime verifies that every supplied run belongs to the addressed
+project, including ordinary runs without a workspace override. A run without
+project scope cannot name project files. Reads without a run retain the project
+root, and a recorded workspace needs no project registration. A missing
+root answers `execution_workspace_unavailable` from `/produced` and from that
+file read (410), never the project's file. Refreshing the workspace between turns is the caller's job, and
+only after it has established that the previous turn's processes stopped: a
+restart-interrupted turn proves nothing about that (see Daemon lifecycle).
 
 The active access profiles are `readonly`, `workspace_write`, `full`, and
 `inherit_native`. Each adapter translates that request to its own native
@@ -1549,7 +1616,10 @@ Directory work produces a `files` WorkProduct. Its `files.manifest` and
 `meta.manifest_sha256` address a complete file manifest in the existing run
 artifact tree, including source/execution roots, selection, completeness, modes,
 symlinks and full content references at `final/files/manifest.json` and
-`final/files/content/<digest>`. Completeness refers to the declared footprint,
+`final/files/content/<digest>`. The source root is the tree the selection was
+read from: a delegated run's bound `execution.workspaceRoot`, otherwise the
+project. A best-of winner therefore delivers back into that tree, and an apply
+aimed at any other tree is refused. Completeness refers to the declared footprint,
 not to an unobserved whole source tree. Null preimages mean proven absence;
 `unknown` cannot authorize overwriting an existing target. Copied inputs remain
 available for fresh verification, and new outputs outside the initial selection
@@ -1647,7 +1717,15 @@ and outside every worktree (INV-063). The lane home persists across turns so
 the harness's recorded native session is reachable for Codex app-server
 `thread/resume` / `claude --resume` on the next lane turn (INV-034); it is
 removed only by thread purge, credential-profile deletion, or the orphan-lane
-retention sweep.
+retention sweep. The in-place candidate of a delegated thread's turn (readonly
+Agent included) runs in the same lane home, re-keyed to the account the
+attempt actually resolved, so Ask, Plan, and Agent turns of one lane share it;
+an in-run account hop moves the spec and the recorded home and account
+together, on success and failure paths alike. Best-of and other disposable
+candidates keep their per-attempt envelope homes. Which vendor state actually
+lives in that home is per route: Claude and Codex keep transcripts in the
+account store as above, while state a route writes under the generic `HOME`
+persists across the lane's turns.
 
 Convergence modes also default to isolated envelopes. The CLI-only `--in-place`
 is reserved for explicit stateful external adapters, such as Terminal-Bench
@@ -2233,7 +2311,9 @@ Request validation remains a typed 400; transport does not retry automatically.
 - Threads are the chat/session-first conversation SSOT (run lineage + native
   harness sessions). A thread declares a `workspace.mode`: `in_place` (default)
   mutates the live project tree; `isolated` keeps a persistent git worktree per
-  thread once a mutating turn materializes it. It also carries sticky routing — `primaryHarness` and
+  thread once a mutating turn materializes it; `delegated` runs every turn in
+  the caller-owned `workspaceRoot` bound at creation (External-orchestrator
+  workspaces, above). It also carries sticky routing — `primaryHarness` and
   `eligibleHarnesses` — that its turns inherit; `PATCH /v2/threads/:id` renames /
   archives a thread (title + open/closed state) and switches the sticky
   routing. Its optional `folder` label is daemon-owned and journaled with the
@@ -2244,9 +2324,10 @@ Request validation remains a typed 400; transport does not retry automatically.
   the project) do not move; any other field still bumps it.
 - `POST /v2/threads/:id/turns` enqueues a follow-up run anchored to the thread.
   Mutating Agent turns run IN-PLACE in the execution tree — the live project for
-  an in-place thread, or the thread's worktree for an isolated thread. Read-only
-  turns reuse an existing isolated worktree or read the stable project without
-  materializing one — so the
+  an in-place thread, the thread's worktree for an isolated thread, or the bound
+  workspace of a delegated thread. Read-only turns reuse an existing isolated
+  worktree or read the stable project without materializing one (a delegated
+  thread's read-only turns read its bound workspace) — so the
   routed harness resumes its own native CLI session and the next turn sees the
   work. A best-of-N race runs candidates in isolated envelopes and auto-applies
   the winner to the execution tree. When a turn runs on a lane that has not seen
@@ -2269,7 +2350,7 @@ Request validation remains a typed 400; transport does not retry automatically.
   turn) and delivers it to the executor as a server-owned file reference, so the
   agent runs against the frozen plan rather than a bare prompt. `POST /v2/threads/:id/apply` delivers an isolated thread's accumulated
   worktree diff to the project; in-place threads write the project directly and
-  never need it.
+  never need it, and a delegated thread's workspace is never delivered.
 - `POST /v2/threads/:id/trash` moves a thread into recoverable trash for 30 days
   (`trashedAt`, `purgeAfter`); a trashed thread refuses edits and new turns, and
   a turn already running finishes normally. `restore` returns it to its
@@ -2283,7 +2364,9 @@ Request validation remains a typed 400; transport does not retry automatically.
   thread out of every listing, then deletes the thread's own directories: the
   isolated worktree, with any changes never applied to the project, and its
   `claudexor/thread-*` branch, and every lane home (the per-thread HOME of its
-  Ask/Plan turns and its cached continuation summaries). A directory error
+  Ask/Plan turns, of a delegated thread's turns, and its cached continuation
+  summaries). A delegated thread's caller-owned workspace is never deleted, and
+  its recorded binding stays on the purged record. A directory error
   after that commit (ENOTEMPTY, EBUSY, a Windows lock) fails the request
   although the thread is already purged and no longer restorable, so a client
   re-reads the list instead of promising Trash, and reads the thread's absence
@@ -2300,7 +2383,11 @@ Request validation remains a typed 400; transport does not retry automatically.
 - Refused turns are honest end-to-end: when a turn's run dies BEFORE it starts
   (the trust gate refusing `access: full`, preflight validation, an enqueue
   throw, or an Implement whose plan still has open questions and no explicit
-  override — a typed `plan_not_ready`), the daemon persists the reason on the
+  override — a typed `plan_not_ready`; a delegated thread whose bound workspace
+  is missing — `delegated_workspace_unavailable`; a daemon restart after the
+  turn's command was accepted but before its run started —
+  `daemon_restarted_before_start`, recorded at restart recovery from the
+  interrupted command), the daemon persists the reason on the
   turn (`ThreadTurn.enqueue_error`, projected as `enqueueError`) as one typed,
   sanitized problem: message, machine code, retryability, bounded required
   actions, bounded structured context, and failure time. String leaves are
@@ -2951,7 +3038,16 @@ keep their ordinary lifecycle.
 While running it snapshots its live harness child process groups to
 `daemon/pids.json`; the NEXT startup reaps recorded orphans that survived a
 crash (pid liveness + command-name recycling guard) and sweeps workspace
-debris under daemon-known project roots: orphaned envelopes (with their
+debris under daemon-known project roots. The reap is not a stop proof: it sends
+SIGTERM to each recorded group, deletes the record, and only schedules SIGKILL
+three seconds later without awaiting the group's exit, and a child spawned after
+the last two-second snapshot is not recorded at all. A run the restart
+terminalized as `interrupted` (`resumable.cause: host_restart`, with its
+`workspace` root) therefore has unknown process custody; a caller that owns
+that workspace keeps it and reconciles quiescence itself before refreshing or
+reusing it. An in-run cancel reaps its own process tree and discloses any
+unconfirmed death as `termination_unconfirmed` on the harness's completion
+event. The sweep covers orphaned envelopes (with their
 seeded-credential homes), dead per-attempt `claudexor/<task>/<attempt>`
 branches, leaked `claudexor/verify-*` branches, and stale
 `claudexor-ro-*`/`claudexor-verify-*` tmp dirs. Envelopes whose creating
@@ -3469,7 +3565,10 @@ fence (Bible INV-113); an unlisted mutation path is a release blocker:
    turn executes directly in the thread's execution tree, and the thread-less
    one-shot surface (`POST /v2/runs` with `execution.isolation: "live"`,
    agent-mode only; `execution.delegated` external-orchestrator runs ride this
-   same shape) executes directly in the live project tree. Fences (the same
+   same shape) executes directly in the live project tree. A delegated run
+   that records `execution.workspaceRoot` (every delegated thread turn, and
+   every new mutating one-shot) executes in that caller-owned tree and never
+   mutates the project tree. Fences (the same
    machinery for Git-backed turns): a pre-turn snapshot is taken at turn/run start and a
    post-turn snapshot at turn end (the per-turn diff base, so prior dirty state
    is never attributed to the turn), and the server-owned `revert_run` decision
@@ -4661,7 +4760,9 @@ lists only visible (non-hidden) directories and refuses to descend into dot
 trees — file names and hidden names are never disclosed, and every refusal
 (absent, outside home, not a directory, hidden) is one constant typed answer
 so the endpoint is not an existence oracle for the names it hides. Remote
-image links use the registered-project-scoped, size-capped file endpoint:
+image links use the registered-project-scoped, size-capped file endpoint (a
+delegated run's image names that run, and is read from its recorded
+caller-owned workspace under the same project id, above):
 content type is identified by magic bytes, never by file name — a
 non-matching file is refused before its content is read, while a matching
 file's remaining bytes are served verbatim (the sniff authenticates the
@@ -5026,7 +5127,10 @@ code touching one of these areas must honor it or change it explicitly here.
   the plan run.
 - Startup crash GC sweeps orphaned envelopes only under project roots recorded
   in the daemon command journal; envelopes created by CLI/MCP/ACP runs
-  in roots the daemon never saw are reclaimed only by their own process.
+  in roots the daemon never saw are reclaimed only by their own process. For a
+  caller-owned `execution.workspaceRoot` recorded by a delegated command (global
+  or project partition), it disposes only Claudexor's envelope scratch under that
+  root's runtime namespace; it never deletes the caller's tree or its Git refs.
 - Web use is optional under `auto`, `cached`, and `live`; no
   did-this-task-NEED-web resolver or mandatory evidence gate is inferred from
   those policies. `off` remains the only strict external-context policy.

@@ -327,7 +327,8 @@ struct ThreadsScreen: View {
                                     target: model.turnStartTarget(
                                         locationID: model.selectedExecutionLocation,
                                         thread: detail.thread),
-                                    routingOptions: resolvedComposerOptions.routingOverridesOnly)
+                                    routingOptions: resolvedComposerOptions.routingOverridesOnly,
+                                    executionRoot: ThreadWorkspacePanel.executionRoot(for: detail.thread))
                                     .conversationMeasure()
                                     .id(turn.id)
                             }
@@ -371,7 +372,12 @@ struct ThreadsScreen: View {
     var navTitle: String { model.currentThread?.title ?? "Claudexor" }
     var navSubtitle: String {
         guard let t = model.currentThread else { return "" }
-        return threadSubtitle(t) + " · " + (t.workspaceMode == "isolated" ? "isolated" : "in-place")
+        let workspace = switch t.workspaceMode {
+        case "isolated": "isolated"
+        case "delegated": "caller-owned workspace"
+        default: "in-place"
+        }
+        return threadSubtitle(t) + " · " + workspace
     }
 
     /// The persistent composer — ONE floating Liquid-Glass panel (pointer-driven

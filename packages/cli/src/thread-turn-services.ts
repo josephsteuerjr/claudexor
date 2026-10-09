@@ -1,12 +1,14 @@
 import type { ProjectPartitions, ResourceStore } from "@claudexor/daemon";
 import type { ResourceAttachmentRef, TurnEnqueueProblem } from "@claudexor/schema";
 
-/** Thin Control API bindings over the daemon's durable thread-turn authority. */
+/** Thin Control API bindings over the daemon's durable thread and turn authority. */
 export function threadTurnServices(
   threads: ProjectPartitions,
   resources: Pick<ResourceStore, "resolve">,
 ) {
   return {
+    findThreadCreation: async (input: unknown) =>
+      threads.findThreadCreation(input as Parameters<ProjectPartitions["findThreadCreation"]>[0]),
     threadDetail: async (id: string) => {
       const thread = threads.getThread(id);
       if (!thread) throw Object.assign(new Error(`no such thread: ${id}`), { status: 404 });

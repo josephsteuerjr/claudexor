@@ -18,6 +18,10 @@ struct ArtifactGalleryView: View {
     /// When true, source the project's PRODUCED outputs (`/runs/:id/produced`)
     /// instead of the run's orchestration tree — and skip the run-tree filter.
     var produced: Bool = false
+    /// The thread's execution tree (`ThreadWorkspacePanel.executionRoot`). Changed
+    /// images read their bytes only there; nil (no tree, or a delegated thread's
+    /// missing workspace) shows none rather than the project's same-named files.
+    var executionRoot: String? = nil
     /// D15: identity-keyed load slot — switching the run set shows loading/empty,
     /// never the previous set's artifact list.
     @State private var slot = PayloadSlot<[RunArtifact]>()
@@ -46,11 +50,13 @@ struct ArtifactGalleryView: View {
     init(
         locationID: ExecutionLocationID = .local,
         runIds: [String],
-        produced: Bool = false
+        produced: Bool = false,
+        executionRoot: String? = nil
     ) {
         self.locationID = locationID
         self.runIds = runIds
         self.produced = produced
+        self.executionRoot = executionRoot
     }
 
     private var plane: PayloadPlane { produced ? .produced : .run }
@@ -86,28 +92,41 @@ struct ArtifactGalleryView: View {
         displayArtifacts.filter { ArtifactCategory.of(mime: $0.art.mime, path: $0.art.path) != .image }
     }
 
-    /// Images the runs CHANGED anywhere in the project tree (typed diff evidence),
+    /// Images the runs CHANGED anywhere in the execution tree (typed diff evidence),
     /// aggregated across the run set and de-duplicated — agents drop screenshots
     /// wherever the task says, so the gallery surfaces every image the diffs
     /// touched, same canonical scope gate as inline chat previews.
-    private var runChangedImages: [String] {
+    private var runChangedImages: [ChangedImage] {
         guard produced else { return [] }
-        var seen = Set<String>()
-        var out: [String] = []
-        for runId in runIds {
-            guard let run = model.task(runId, at: locationID) else { continue }
-            for path in Self.runImagePaths(
-                diffPaths: run.diff.map(\.path),
-                repoRoot: run.repoRoot,
-                locationID: locationID)
-            where seen.insert(path).inserted { out.append(path) }
-        }
-        return out
+        return Self.changedImages(
+            runs: runIds.compactMap { id in
+                model.task(id, at: locationID).map { (id, $0.diff.map(\.path)) }
+            },
+            executionRoot: executionRoot,
+            locationID: locationID)
     }
 
-    /// The repo roots across the run set (for the scoped inline image gate).
-    private var changedImageRoots: [String] {
-        runIds.compactMap { model.task($0, at: locationID)?.repoRoot }
+    /// A changed image and the first run whose diff touched it: a remote fetch
+    /// reaches a caller-owned tree only through that run's recorded binding.
+    struct ChangedImage: Hashable {
+        let path: String
+        let runID: String
+    }
+
+    /// Pure aggregation (unit-tested): each run's changed images under the one
+    /// execution tree, de-duplicated in run order; no tree yields none.
+    static func changedImages(
+        runs: [(id: String, diffPaths: [String])],
+        executionRoot: String?,
+        locationID: ExecutionLocationID = .local
+    ) -> [ChangedImage] {
+        var seen = Set<String>()
+        return runs
+            .flatMap { run in
+                runImagePaths(diffPaths: run.diffPaths, repoRoot: executionRoot, locationID: locationID)
+                    .map { ChangedImage(path: $0, runID: run.id) }
+            }
+            .filter { seen.insert($0.path).inserted }
     }
 
     /// Pure derivation (unit-tested): local diffs resolve through the host
@@ -142,8 +161,8 @@ struct ArtifactGalleryView: View {
                         .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: Theme.Spacing.md)],
                               alignment: .leading, spacing: Theme.Spacing.md) {
-                        ForEach(runChangedImages, id: \.self) { path in
-                            changedImage(path)
+                        ForEach(runChangedImages, id: \.path) { image in
+                            changedImage(image)
                         }
                     }
                 }
@@ -199,18 +218,19 @@ struct ArtifactGalleryView: View {
     }
 
     @ViewBuilder
-    private func changedImage(_ path: String) -> some View {
+    private func changedImage(_ image: ChangedImage) -> some View {
+        let alt = (image.path as NSString).lastPathComponent
         if locationID == .local {
-            ScopedInlineImage(
-                target: path,
-                alt: (path as NSString).lastPathComponent,
-                roots: changedImageRoots)
+            ScopedInlineImage(target: image.path, alt: alt, roots: executionRoot.map { [$0] } ?? [])
         } else {
             RemoteScopedProjectImage(
-                target: path,
-                alt: (path as NSString).lastPathComponent,
+                target: image.path,
+                alt: alt,
                 locationID: locationID,
-                repoRoot: changedImageRoots.first)
+                scope: RemoteFileScope(
+                    runID: image.runID,
+                    projectRoot: model.task(image.runID, at: locationID)?.repoRoot,
+                    executionRoot: executionRoot))
         }
     }
 

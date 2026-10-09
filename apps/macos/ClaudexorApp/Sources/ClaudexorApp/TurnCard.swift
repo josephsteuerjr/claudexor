@@ -20,6 +20,22 @@ struct TurnCard: View {
     /// Current per-turn routing choices shared with plan-card actions. Strategy,
     /// access, and review controls are deliberately absent.
     let routingOptions: TurnOptions
+    /// The thread's execution tree (`ThreadWorkspacePanel.executionRoot`): answer
+    /// and transcript file links resolve there, never in a delegated thread's
+    /// project; nil leaves only the run's own directory in scope.
+    let executionRoot: String?
+
+    /// Roots whose files this turn's answer and transcript may open or render.
+    static func fileScopeRoots(executionRoot: String?, runDir: String?) -> [String] {
+        [executionRoot, runDir].compactMap { $0 }
+    }
+
+    /// The same tree on a remote location, addressed through the run's project.
+    static func remoteFileScope(_ run: TaskRun, executionRoot: String?) -> RemoteFileScope {
+        RemoteFileScope(
+            runID: run.resolvedRunId ?? run.id, projectRoot: run.repoRoot, executionRoot: executionRoot)
+    }
+
     @State private var actionError: String?
     /// Set after a successful accept-risk decision so the apply affordance appears
     /// immediately; the SERVER gate still owns whether apply succeeds.
@@ -268,7 +284,9 @@ struct TurnCard: View {
                 // Collapsed = a bounded PREFIX (the W23 hang class): frame+clip
                 // alone still lays out the full text on the main thread.
                 MarkdownOutputView(markdown: long && !answerExpanded ? String(answer.prefix(4_000)) : answer,
-                                   fileScopeRoots: [run.repoRoot, run.runDir].compactMap { $0 },
+                                   fileScopeRoots: Self.fileScopeRoots(
+                                       executionRoot: executionRoot, runDir: run.runDir),
+                                   remoteFileScope: Self.remoteFileScope(run, executionRoot: executionRoot),
                                    bodyFont: .body)
                     .frame(maxHeight: long && !answerExpanded ? 260 : nil, alignment: .top)
                     .clipped()
@@ -303,7 +321,9 @@ struct TurnCard: View {
             TranscriptView(blocks: blocks,
                            trimmedOlder: model.transcriptTrimmedCount(runId),
                            truncatedChars: model.transcriptTruncatedChars(runId),
-                           fileScopeRoots: [run.repoRoot, run.runDir].compactMap { $0 })
+                           fileScopeRoots: Self.fileScopeRoots(
+                               executionRoot: executionRoot, runDir: run.runDir),
+                           remoteFileScope: Self.remoteFileScope(run, executionRoot: executionRoot))
                 // D-13 E: skip the up-to-200-row transcript re-layout when an
                 // unrelated AppModel write re-ran this card's body but the blocks
                 // are byte-identical (EquatableView compares before re-evaluating).

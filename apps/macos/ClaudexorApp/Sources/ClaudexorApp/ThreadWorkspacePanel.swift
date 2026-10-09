@@ -23,6 +23,39 @@ struct ThreadWorkspacePanel: View {
 
     private var detail: ThreadDetailResponse? { model.selectedThreadDetail }
 
+    /// Project identity is not an execution address for caller-owned workspaces.
+    static func executionRoot(for thread: ThreadSummary) -> String? {
+        let root = thread.workspaceMode == "delegated" ? thread.workspaceRoot : thread.repoRoot
+        return root.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    enum PreviewAvailability: Equatable {
+        case available(root: String)
+        case missingWorkspace
+        case absent
+    }
+
+    static func localPreview(for thread: ThreadSummary) -> PreviewAvailability {
+        guard let root = executionRoot(for: thread) else {
+            return thread.workspaceMode == "delegated" ? .missingWorkspace : .absent
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return thread.workspaceMode == "delegated" ? .missingWorkspace : .absent
+        }
+        return FileManager.default.fileExists(
+            atPath: (root as NSString).appendingPathComponent("index.html"))
+            ? .available(root: root) : .absent
+    }
+
+    private var missingWorkspace: some View {
+        EmptyStateView(
+            title: "Workspace unavailable",
+            message: "This thread's caller-owned workspace is missing or unavailable.",
+            systemImage: "folder.badge.questionmark")
+    }
+
     /// The thread's runs in conversation order, de-duplicated (a run appears once
     /// even if referenced by more than one turn).
     static func threadRunIds(_ detail: ThreadDetailResponse) -> [String] {
@@ -251,11 +284,17 @@ struct ThreadWorkspacePanel: View {
 
     @ViewBuilder
     private func content(_ detail: ThreadDetailResponse) -> some View {
-        if tab == .terminal,
-           model.selectedExecutionLocation != .local,
-           let root = detail.thread.repoRoot
-        {
-            RemoteThreadTerminalView(repoRoot: root)
+        if tab == .terminal, model.selectedExecutionLocation != .local {
+            if let root = Self.executionRoot(for: detail.thread) {
+                RemoteThreadTerminalView(repoRoot: root)
+            } else if detail.thread.workspaceMode == "delegated" {
+                missingWorkspace
+            } else {
+                EmptyStateView(
+                    title: "No project selected",
+                    message: "This thread has no project directory for Terminal.",
+                    systemImage: "terminal")
+            }
         // A trivial thread (no runs at all) has nothing to show — be honest.
         } else if runIds.isEmpty {
             EmptyStateView(
@@ -291,18 +330,23 @@ struct ThreadWorkspacePanel: View {
     @ViewBuilder
     private func artifactsTab(_ detail: ThreadDetailResponse, scope: [String]) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            if model.selectedExecutionLocation == .local,
-               let root = detail.thread.repoRoot,
-               FileManager.default.fileExists(atPath: (root as NSString).appendingPathComponent("index.html")) {
-                HStack {
-                    Button { showPreview = true } label: {
-                        Label("Open preview", systemImage: "safari")
+            if model.selectedExecutionLocation == .local {
+                switch Self.localPreview(for: detail.thread) {
+                case .available(let root):
+                    HStack {
+                        Button { showPreview = true } label: {
+                            Label("Open preview", systemImage: "safari")
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .help("Open the workspace's index.html in a preview browser")
+                        Spacer()
                     }
-                    .buttonStyle(.bordered).controlSize(.small)
-                    .help("Open the project's index.html in a preview browser")
-                    Spacer()
+                    .sheet(isPresented: $showPreview) { PreviewSheet(repoRoot: root) }
+                case .missingWorkspace:
+                    missingWorkspace
+                case .absent:
+                    EmptyView()
                 }
-                .sheet(isPresented: $showPreview) { PreviewSheet(repoRoot: root) }
             }
             if model.selectedExecutionLocation != .local {
                 Text(
@@ -313,7 +357,8 @@ struct ThreadWorkspacePanel: View {
             ArtifactGalleryView(
                 locationID: model.selectedExecutionLocation,
                 runIds: scope,
-                produced: true)
+                produced: true,
+                executionRoot: Self.executionRoot(for: detail.thread))
                 .frame(minHeight: 200)
         }
     }

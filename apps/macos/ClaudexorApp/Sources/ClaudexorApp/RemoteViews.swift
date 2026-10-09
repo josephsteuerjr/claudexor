@@ -381,16 +381,18 @@ struct RemoteScopedProjectImage: View {
     let target: String
     let alt: String
     var locationID: ExecutionLocationID? = nil
-    var repoRoot: String? = nil
+    /// The run whose execution tree `target` resolves in; nil = the selected thread.
+    var scope: RemoteFileScope? = nil
     @State private var image: NSImage?
     @State private var status: String?
 
     private struct ImageBox: @unchecked Sendable { let image: NSImage }
     private var loadIdentity: String {
         let location = locationID ?? model.selectedExecutionLocation
-        let root = repoRoot ?? model.currentThread?.repoRoot ?? ""
+        let scope = scope ?? model.currentThreadRemoteFileScope
         let generation = model.executionLocationGeneration(for: location)
-        return "\(location.rawValue)|\(generation)|\(root)|\(target)"
+        let binding = [scope.projectRoot, scope.executionRoot, scope.runID].map { $0 ?? "" }
+        return "\(location.rawValue)|\(generation)|\(binding.joined(separator: "|"))|\(target)"
     }
 
     var body: some View {
@@ -415,14 +417,14 @@ struct RemoteScopedProjectImage: View {
         }
         .task(id: loadIdentity) {
             let scopeLocationID = locationID ?? model.selectedExecutionLocation
-            let scopeRoot = repoRoot ?? model.currentThread?.repoRoot
+            let fileScope = scope ?? model.currentThreadRemoteFileScope
             let generation = model.executionLocationGeneration(for: scopeLocationID)
             image = nil
             status = nil
             guard let reference = model.remoteProjectFileReference(
                       target: target,
                       locationID: scopeLocationID,
-                      repoRoot: scopeRoot),
+                      scope: fileScope),
                   let client = model.gateway(for: scopeLocationID)
             else {
                 status = "Remote image path is outside this project's scope."
@@ -431,7 +433,8 @@ struct RemoteScopedProjectImage: View {
             do {
                 let response = try await client.fetchProjectFile(
                     projectID: reference.projectID,
-                    relativePath: reference.relativePath)
+                    relativePath: reference.relativePath,
+                    runID: reference.runID)
                 guard requestIsCurrent(
                     client: client, locationID: scopeLocationID, generation: generation)
                 else { return }

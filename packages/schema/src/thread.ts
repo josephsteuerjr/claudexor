@@ -63,12 +63,16 @@ export type ThreadTurnKind = z.infer<typeof ThreadTurnKind>;
  * directly (continuity is the tree itself; native vendor sessions resume); the
  * default, matching how Claude Code / Cursor work locally. `isolated` keeps a
  * persistent git worktree per thread; turns accumulate there and `apply` merges
- * into the project. Race candidates always run in throwaway envelopes regardless.
+ * into the project. `delegated` binds the thread at creation to ONE
+ * caller-owned workspace (`workspace_root`): every turn and mode executes
+ * there under the external caller's delegated authority, and Claudexor never
+ * provisions, resets, applies, or deletes it. Race candidates always run in
+ * throwaway envelopes regardless.
  */
 export const WorkspaceMode = z
-  .enum(["in_place", "isolated"])
+  .enum(["in_place", "isolated", "delegated"])
   .describe(
-    "Per-thread workspace mode: in_place mutates the live project tree directly (the default); isolated keeps a persistent git worktree per thread that apply merges into the project.",
+    "Per-thread workspace mode: in_place mutates the live project tree directly (the default); isolated keeps a persistent git worktree per thread that apply merges into the project; delegated runs every turn in one caller-owned workspace bound at creation, which Claudexor never applies to the project or deletes.",
   );
 export type WorkspaceMode = z.infer<typeof WorkspaceMode>;
 
@@ -92,8 +96,18 @@ export const ThreadWorkspace = z
     delivered_through_run_id: Id.nullable()
       .default(null)
       .describe("Last run in the lineage prefix already delivered from this isolated thread."),
+    /** Caller-owned execution tree of a `delegated` thread, bound at creation. */
+    workspace_root: z
+      .string()
+      .nullable()
+      .default(null)
+      .describe(
+        "Caller-owned absolute workspace every turn of a delegated thread executes in; bound at creation, immutable, and retained after purge as the historical binding. Null for in_place and isolated threads.",
+      ),
   })
-  .describe("How the thread's turns touch files (in-place live tree vs isolated worktree).");
+  .describe(
+    "How the thread's turns touch files (in-place live tree, isolated worktree, or caller-owned delegated workspace).",
+  );
 export type ThreadWorkspace = z.infer<typeof ThreadWorkspace>;
 
 /** The Claudexor-owned conversation. SSOT for lineage; vendor sessions are caches. */

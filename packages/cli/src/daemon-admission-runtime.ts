@@ -13,10 +13,14 @@ import {
   daemonDir,
   logPath,
   QUOTA_POLL_INTERVAL_MS,
+  threadHeadPingProjection,
+  threadProjection,
+  withRunlessTurnRecovery,
   type DaemonServingMode,
   type JournalManager,
   type ProjectPartitions,
   type RootAuthorityGrant,
+  type ThreadHeadPingSink,
 } from "@claudexor/daemon";
 import { sweepRetiredConfigKeysAtStartup } from "@claudexor/config";
 import { redactSecrets } from "@claudexor/util";
@@ -32,6 +36,30 @@ import {
   safeDaemonLaunchSource,
   type DaemonStartupDiagnostics,
 } from "./startup-diagnostics.js";
+
+/** Register after commands so runless-turn recovery sees interrupted jobs. */
+export function registerDaemonThreadProjection(
+  manager: JournalManager,
+  commandRecords: Parameters<typeof withRunlessTurnRecovery>[1],
+) {
+  // Sidebar invalidation ping (W12): a GLOBAL-partition emitter every
+  // ThreadStore (global + per-project) writes through, so any thread
+  // mutation reaches the app's single global stream. The ping is auxiliary
+  // invalidation — it must never fail the mutation that triggered it
+  // (mirrors the runner's turn-binding policy).
+  const threadHeadPingSlot = manager.registerProjection(threadHeadPingProjection());
+  const threadHeadPing: ThreadHeadPingSink = (ping) => {
+    try {
+      threadHeadPingSlot.current().ping(ping);
+    } catch {
+      /* invalidation ping must never fail the thread mutation */
+    }
+  };
+  const threadStoreSlot = manager.registerProjection(
+    withRunlessTurnRecovery(threadProjection(threadHeadPing), commandRecords),
+  );
+  return { threadStoreSlot, threadHeadPing };
+}
 
 export interface StartupDiagnosticsHandle {
   diagnostics: DaemonStartupDiagnostics | null;
@@ -148,6 +176,8 @@ export function createStartupAdmissionRuntime(input: {
    * command projection (accepted commands plus prune tombstones) instead of a
    * second journal replay. */
   knownProjectRoots: () => readonly string[];
+  /** Caller-owned execution roots of delegated runs (envelope scratch only). */
+  knownExecutionRoots?: () => readonly string[];
   normalPlane: NormalPlaneDuties;
 }): {
   runAdmissionCompletion(blockedPartitions: () => string[]): Promise<DaemonServingMode>;
@@ -231,6 +261,9 @@ export function createStartupAdmissionRuntime(input: {
               daemonDir: daemonDir(),
               logPath: logPath(),
               knownProjectRoots: input.knownProjectRoots,
+              ...(input.knownExecutionRoots
+                ? { knownExecutionRoots: input.knownExecutionRoots }
+                : {}),
               ...(input.diagnostics.diagnostics
                 ? { diagnostics: input.diagnostics.diagnostics }
                 : {}),

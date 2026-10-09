@@ -309,6 +309,15 @@ export class ProjectPartitions implements CommandAuthority {
     return this.threadStoreForRoot(root).createThread(input);
   }
 
+  preparedExecutionRoots(): string[] {
+    return this.partitions.preparedExecutionRoots();
+  }
+
+  /** Exact accepted-creation replay lookup; registers and creates nothing. */
+  findThreadCreation(input: CreateThreadInput & { ephemeral?: boolean }): Thread | null {
+    return this.partitions.findThreadCreation(input, this.globalThreads.current());
+  }
+
   listThreads(): Thread[] {
     return this.listThreadsResilient().threads;
   }

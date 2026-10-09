@@ -14,6 +14,7 @@ import {
   RecordedControlRunStartRequest,
   RETIRED_EXTERNAL_SANDBOX_FULL,
   runAccessStrategyViolation,
+  runExecutionWorkspaceRootAllowed,
   runExecutionWorkspaceViolation,
   runStartStrategyViolations,
 } from "@claudexor/schema";
@@ -58,14 +59,19 @@ function executionWorkspaceError(message: string, code: string): Error {
   });
 }
 
-/** Validate the one-shot execution tree without respelling it. */
-export function normalizeExistingExecutionWorkspace(workspaceRoot: string): string {
+function assertAbsoluteExecutionWorkspace(workspaceRoot: string): string {
   if (!isAbsolute(workspaceRoot)) {
     throw executionWorkspaceError(
       "execution.workspaceRoot must be an absolute path",
       "execution_workspace_invalid",
     );
   }
+  return workspaceRoot;
+}
+
+/** Validate the one-shot execution tree without respelling it. */
+export function normalizeExistingExecutionWorkspace(workspaceRoot: string): string {
+  assertAbsoluteExecutionWorkspace(workspaceRoot);
   try {
     if (statSync(workspaceRoot).isDirectory()) return workspaceRoot;
   } catch {
@@ -77,7 +83,20 @@ export function normalizeExistingExecutionWorkspace(workspaceRoot: string): stri
   );
 }
 
-export function normalizeRunStart(parsed: ControlRunStartRequest): ControlRunStartRequest {
+export interface RunStartNormalizationOptions {
+  /**
+   * A delegated thread turn records its bound execution root before its
+   * durable turn and command exist; the root's current existence is a mutable
+   * fact the daemon job revalidates, so a missing copy becomes a durable,
+   * retryable refusal on the turn instead of a lost HTTP-only 400.
+   */
+  deferExecutionWorkspaceAvailability?: boolean;
+}
+
+export function normalizeRunStart(
+  parsed: ControlRunStartRequest,
+  options: RunStartNormalizationOptions = {},
+): ControlRunStartRequest {
   const mode = parsed.mode ?? "agent";
   // Empty chat is never a silent no-op (Bible): reject a blank prompt at the
   // engine boundary. Fail loud (400) rather than enqueue a doomed run that
@@ -128,19 +147,18 @@ export function normalizeRunStart(parsed: ControlRunStartRequest): ControlRunSta
     );
   }
   const workspaceRoot = parsed.execution?.workspaceRoot;
-  const workspaceShapeValid =
-    parsed.scope.kind === "project" &&
-    parsed.execution?.delegated === true &&
-    parsed.execution.isolation === "live" &&
-    mode === "agent";
-  if (workspaceRoot !== undefined && !workspaceShapeValid) {
+  if (workspaceRoot !== undefined && !runExecutionWorkspaceRootAllowed({ ...parsed, mode })) {
     throw executionWorkspaceError(
-      "execution.workspaceRoot is supported only for project-scoped delegated agent runs with execution.isolation='live'",
+      "execution.workspaceRoot is supported only for project-scoped delegated runs: an agent with execution.isolation='live' or directory execution, or a read-only ask/plan",
       "execution_workspace_invalid",
     );
   }
   const normalizedWorkspaceRoot =
-    workspaceRoot === undefined ? undefined : normalizeExistingExecutionWorkspace(workspaceRoot);
+    workspaceRoot === undefined
+      ? undefined
+      : options.deferExecutionWorkspaceAvailability === true
+        ? assertAbsoluteExecutionWorkspace(workspaceRoot)
+        : normalizeExistingExecutionWorkspace(workspaceRoot);
   // An omitted Agent access profile inherits the project trust default, which
   // this filesystem-only normalizer does not own. The project-aware preflight
   // resolves that default and applies the same shared requirement below; only
@@ -191,9 +209,12 @@ export function normalizeRunStart(parsed: ControlRunStartRequest): ControlRunSta
  * and the daemon socket runner) MUST use this so scope/secret/absolute-root
  * acceptance can never drift between surfaces.
  */
-export function normalizeRunStartRequest(raw: unknown): ControlRunStartRequest {
+export function normalizeRunStartRequest(
+  raw: unknown,
+  options: RunStartNormalizationOptions = {},
+): ControlRunStartRequest {
   assertNoInlineSecretValues(raw);
-  return normalizeRunStart(ControlRunStartRequest.parse(raw ?? {}));
+  return normalizeRunStart(ControlRunStartRequest.parse(raw ?? {}), options);
 }
 
 /** Reconstruct the request projection used by the pre-retirement command

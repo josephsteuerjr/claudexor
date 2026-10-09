@@ -13,8 +13,9 @@ public struct ThreadSummary: Codable, Sendable, Identifiable, Equatable {
     public let folder: String?
     public let repoRoot: String?
     public let mode: String?
-    /// in_place (default) mutates the live tree; isolated keeps a thread worktree.
+    /// in_place (default) | isolated (thread worktree) | delegated (caller-owned workspaceRoot).
     public let workspaceMode: String?
+    public let workspaceRoot: String?
     public let authPreference: String?
     /// Sticky credential profile (INV-135); nil = engine-default credentials.
     public let credentialProfileId: String?
@@ -394,8 +395,7 @@ public struct CreateThreadRequest: Codable, Sendable {
     public var eligibleHarnesses: [String]?
     /// Sticky credential profile for the thread (INV-135); per-turn wins.
     public var credentialProfileId: String?
-    /// Sticky write scope for the new thread's write turns (D26); nil => the
-    /// repo trust default. Same five-value `access` enum as a run start.
+    /// Sticky write scope for write turns (D26); nil => repo trust default (run-start enum).
     public var access: String?
 
     public init(title: String? = nil, folder: String? = nil,

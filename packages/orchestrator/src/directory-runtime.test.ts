@@ -84,6 +84,52 @@ function writer(bytes: Buffer, fail = false) {
   };
   return { adapter, calls };
 }
+function approvingReviewer(id: string, providerFamily: "openai" | "anthropic"): ReviewerSpec {
+  return {
+    providerFamily,
+    requestedModel: `${id}-model`,
+    adapter: {
+      id,
+      async discover() {
+        return HarnessManifest.parse({
+          id,
+          display_name: id,
+          kind: "local_cli",
+          provider_family: providerFamily,
+          access_profiles_supported: ["readonly"],
+          capabilities: { review: true, known_models: [`${id}-model`] },
+        });
+      },
+      async doctor() {
+        return ConformanceReport.parse({
+          harness_id: id,
+          status: "ok",
+          enabled_intents: ["review"],
+        });
+      },
+      async *run(spec) {
+        const ts = new Date().toISOString();
+        const route = { credential_route: "managed_api_key" as const };
+        yield {
+          type: "started",
+          ts,
+          session_id: spec.session_id,
+          observed_model: `${id}-model`,
+          ...route,
+        };
+        yield { type: "message", ts, session_id: spec.session_id, text: "```json\n[]\n```" };
+        yield {
+          type: "usage",
+          ts,
+          session_id: spec.session_id,
+          ...route,
+          usage: { cost_usd: 0.001 },
+        };
+        yield { type: "completed", ts, session_id: spec.session_id };
+      },
+    },
+  };
+}
 function readResult(root: string, runDir: string) {
   const store = new ArtifactStore(root);
   const facts = RunFacts.parse(store.readYaml(join(runDir, "final/run_facts.yaml")));
@@ -152,7 +198,7 @@ describe("ordinary directory Agent execution", () => {
     },
   );
 
-  it("preserves stable project identity and actual delegated execution cwd", async () => {
+  it("keeps project identity for the run while its files name the delegated execution tree", async () => {
     const root = fixture(),
       executionRoot = fixture();
     const author = writer(Buffer.from([0, 255]));
@@ -168,11 +214,96 @@ describe("ordinary directory Agent execution", () => {
       harnesses: [author.adapter.id],
     });
     expect(result.facts.lifecycle).toBe("succeeded");
-    const { manifest } = readResult(root, result.runDir);
-    expect(manifest.sourceRoot).toBe(root);
+    const { manifest, product } = readResult(root, result.runDir);
+    expect(
+      new ArtifactStore(root).readYaml<{ repo: { root: string } }>(
+        join(result.runDir, "context/task.yaml"),
+      )?.repo.root,
+    ).toBe(root);
+    expect(manifest.sourceRoot).toBe(executionRoot);
     expect(manifest.executionRoot).toBe(executionRoot);
+    expect(product.meta.source_root).toBe(executionRoot);
     expect(existsSync(join(root, "output.bin"))).toBe(false);
     expect(existsSync(join(executionRoot, "output.bin"))).toBe(true);
+  });
+
+  it("delivers a delegated directory best-of winner into the bound execution root", async () => {
+    const root = fixture(),
+      executionRoot = fixture();
+    writeFileSync(join(executionRoot, "input.txt"), "caller workspace source\n");
+    const author = writer(Buffer.from([0, 255, 7]));
+    const result = await new Orchestrator({
+      registry: new Map([[author.adapter.id, author.adapter]]),
+      reviewers: [
+        approvingReviewer("review-a", "openai"),
+        approvingReviewer("review-b", "anthropic"),
+      ],
+    }).run({
+      repoRoot: root,
+      executionRoot,
+      workspaceKind: "directory",
+      scopePaths: ["input.txt"],
+      inPlace: true,
+      delegated: true,
+      prompt: "Race to write in the selected directory",
+      harnesses: [author.adapter.id],
+      n: 2,
+      review: true,
+    });
+    expect(result.facts).toMatchObject({ lifecycle: "succeeded", review: "approved" });
+    expect(
+      new ArtifactStore(root).readYaml(join(result.runDir, "final/delivery_receipt.yaml")),
+    ).toMatchObject({ applied: true, appliedPaths: ["output.bin"] });
+    expect(readFileSync(join(executionRoot, "output.bin"))).toEqual(Buffer.from([0, 255, 7]));
+    expect(existsSync(join(root, "output.bin"))).toBe(false);
+    expect(readFileSync(join(root, "input.txt"), "utf8")).toBe("selected source\r\n");
+    expect(author.calls).toHaveLength(2);
+    expect(author.calls).not.toContain(executionRoot);
+    const { product, manifest } = readResult(root, result.runDir);
+    expect(manifest).toMatchObject({ sourceRoot: executionRoot, isolation: "envelope" });
+    const baseline = manifest.entries.find((entry) => entry.path === "input.txt")?.before;
+    if (!baseline || baseline === "unknown" || baseline.kind !== "file")
+      throw new Error("missing selected baseline");
+    expect(readFileSync(join(result.runDir, baseline.artifactPath!), "utf8")).toBe(
+      "caller workspace source\n",
+    );
+    expect(product.meta).toMatchObject({ source_root: executionRoot, apply_state: "applied" });
+  });
+
+  it("binds a copied delegated directory result to its execution root, never the project", async () => {
+    const root = fixture(),
+      executionRoot = fixture();
+    const author = writer(Buffer.from([9, 0, 255]));
+    const result = await new Orchestrator({
+      registry: new Map([[author.adapter.id, author.adapter]]),
+    }).run({
+      repoRoot: root,
+      executionRoot,
+      workspaceKind: "directory",
+      scopePaths: ["input.txt"],
+      delegated: true,
+      prompt: "Write in a copy of the selected directory",
+      harnesses: [author.adapter.id],
+      review: false,
+    });
+    expect(result.facts.lifecycle).toBe("succeeded");
+    const { product, manifest } = readResult(root, result.runDir);
+    expect(manifest.sourceRoot).toBe(executionRoot);
+    const candidate = {
+      manifest,
+      manifestSha256: String(product.meta.manifest_sha256),
+      artifactRoot: result.runDir,
+    };
+    expect(await verifyAndDeliverFiles(root, candidate)).toMatchObject({
+      applied: false,
+      treeMutated: false,
+      detail: "target does not match the work product source",
+    });
+    expect(existsSync(join(root, "output.bin"))).toBe(false);
+    expect(await verifyAndDeliverFiles(executionRoot, candidate)).toMatchObject({
+      applied: true,
+    });
+    expect(readFileSync(join(executionRoot, "output.bin"))).toEqual(Buffer.from([9, 0, 255]));
   });
 
   it("does not initialize Git or capture files on readonly Agent", async () => {

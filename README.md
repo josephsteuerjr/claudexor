@@ -427,9 +427,10 @@ session it records survives the run and the next lane turn actually reaches
 it; a one-shot ask/plan with no thread keeps a disposable throwaway home.
 Write (agent) turns run
 IN-PLACE: a single-candidate turn mutates the thread's live execution tree
-directly (the project for an `in_place` thread, or the thread's persistent git
-worktree for an `isolated` thread) and resumes the native vendor session, so
-the next turn sees the work. A race (`--n N` > 1) runs its candidates in
+directly (the project for an `in_place` thread, the thread's persistent git
+worktree for an `isolated` thread, or the caller-owned workspace an external
+orchestrator bound to a `delegated` thread) and resumes the native vendor
+session, so the next turn sees the work. A race (`--n N` > 1) runs its candidates in
 isolated throwaway envelopes and AUTO-ADOPTS the winner's patch into the live
 tree.
 
@@ -686,8 +687,9 @@ always use isolated envelopes. They live under the same external project
 namespace at `~/.claudexor/v3/projects/<project-sha256>/workspaces/.../tree`;
 an isolated run's harness `cwd` is its Git worktree or selected-input directory
 copy. Git-backed chat thread turns follow the workspace mode described above:
-`in_place` uses the live project, while `isolated` uses its persistent thread
-worktree.
+`in_place` uses the live project, `isolated` uses its persistent thread
+worktree, and `delegated` uses the caller-owned workspace bound at creation
+(see [INTEGRATIONS](docs/INTEGRATIONS.md)).
 
 Proven work product means a Git diff, a complete directory file manifest, a
 declared run artifact, or an explicitly verified host side-effect. Absolute

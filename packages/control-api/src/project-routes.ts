@@ -8,8 +8,10 @@ import {
   ControlDirectoryListing,
 } from "@claudexor/schema";
 import { assertNoInlineSecretValues } from "@claudexor/util";
+import type { DaemonRunRecord } from "./daemon-server.js";
 import { requiredIdempotencyKey } from "./run-start.js";
 import { routeValue, serviceResponse } from "./route-stages.js";
+import { runWorkspaceBinding, type RunWorkspaceBinding } from "./run-execution-root.js";
 
 export interface ProjectRouteServices {
   listProjects?: () => Promise<{ projects: unknown[] }>;
@@ -21,9 +23,12 @@ export interface ProjectRouteServices {
   relinkProject?: (id: string, root: string) => Promise<unknown>;
   removeProject?: (id: string) => Promise<unknown>;
   listDirectory?: (path?: string) => Promise<unknown>;
+  /** `binding` (from `runId`) verifies the run belongs to the project and reads
+   *  its caller-owned workspace when it recorded an override. */
   fetchProjectFile?: (
     projectId: string,
     path: string,
+    binding?: RunWorkspaceBinding,
   ) => Promise<{ data: Buffer; contentType: string; fileName: string }>;
 }
 
@@ -39,6 +44,7 @@ export interface ProjectRouteContext {
     contentType: string,
     fileName: string,
   ): void;
+  findRun(id: string): Promise<DaemonRunRecord | null>;
 }
 
 export async function handleProjectRoute(
@@ -131,16 +137,29 @@ export async function handleProjectRoute(
       const projectId = decodeURIComponent(projectFileMatch[1] as string);
       const url = new URL(req.url ?? "", "http://localhost");
       for (const key of url.searchParams.keys()) {
-        if (key !== "path") throw new Error(`unexpected query parameter: ${key}`);
+        if (key !== "path" && key !== "runId") {
+          throw new Error(`unexpected query parameter: ${key}`);
+        }
       }
       if (url.searchParams.getAll("path").length !== 1) {
         throw new Error("one path query parameter is required");
       }
-      return { projectId, requestedPath: url.searchParams.get("path") ?? "" };
+      if (url.searchParams.getAll("runId").length > 1) {
+        throw new Error("runId may be specified only once");
+      }
+      const runId = url.searchParams.get("runId");
+      return { projectId, requestedPath: url.searchParams.get("path") ?? "", runId };
     });
     if (!input.ok) return true;
+    // Every supplied run keeps its project identity, even without a workspace
+    // override; only an unbound request reads the project without correlation.
+    const { runId } = input.value;
+    const run = await routeValue(ctx, res, 500, () => (runId === null ? null : ctx.findRun(runId)));
+    if (!run.ok) return true;
+    if (runId !== null && !run.value) return (ctx.json(res, 404, { error: "no such run" }), true);
+    const binding = run.value ? runWorkspaceBinding(run.value) : undefined;
     const file = await routeValue(ctx, res, 500, () =>
-      service(input.value.projectId, input.value.requestedPath),
+      service(input.value.projectId, input.value.requestedPath, binding),
     );
     if (!file.ok) return true;
     return serviceResponse(ctx, res, "fetchProjectFile", () =>

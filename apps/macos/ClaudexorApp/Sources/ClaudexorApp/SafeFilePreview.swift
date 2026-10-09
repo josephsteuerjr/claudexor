@@ -62,6 +62,8 @@ struct SafeFilePreviewRequest: Identifiable, Equatable, Sendable {
     let source: BoundedSource?
     let displayName: String
     let fileScopeRoots: [String]
+    /// The previewed run's tree for remote link checks; nil = the selected thread.
+    var remoteFileScope: RemoteFileScope?
 
     init(
         url: URL,
@@ -286,6 +288,7 @@ struct SafeFilePreviewSheet: View {
                     ScrollView {
                         MarkdownOutputView(
                             markdown: text, fileScopeRoots: request.fileScopeRoots,
+                            remoteFileScope: request.remoteFileScope,
                             bodyFont: .body, isFilePreview: true)
                             .padding(Theme.Spacing.lg)
                     }

@@ -929,7 +929,9 @@ views in the shared design-system files; screens compose them.
   Browser was effective and why not; the app never infers that from the toggle.
 - **One minimal toolbar, no second header.** The thread title/subtitle live in the
   system window toolbar (`.navigationTitle`/`.navigationSubtitle`) — there is NO custom
-  header strip below it. The toolbar holds ONLY the standard trailing icon cluster:
+  header strip below it. The subtitle ends with where the thread's turns work
+  (INV-073): `in-place`, `isolated`, or `caller-owned workspace` for a delegated
+  thread, whose Delete Now… copy also says that workspace is not touched. The toolbar holds ONLY the standard trailing icon cluster:
   appearance · thread-workspace · settings · new (each with a `.help()` tooltip). There is
   **no engine-status capsule and no Refresh button** in the toolbar (custom capsules
   overlapped the window edge and read out-of-app; the engine auto-reconnects on launch

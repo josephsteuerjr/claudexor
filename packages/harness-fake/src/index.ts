@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   ConformanceReport,
@@ -31,7 +31,10 @@ export type FakeKind =
   | "fake-context-then-complete"
   | "fake-context-then-error"
   // Live-input fixture: the run parks until one message arrives (never echoed).
-  | "fake-steerable";
+  | "fake-steerable"
+  // Native-session fixture: reports a native session id (the resumed one when
+  // the engine carries one) and a probe of the environment it was handed.
+  | "fake-session";
 
 export const FAKE_KINDS: FakeKind[] = [
   "fake-success",
@@ -52,6 +55,7 @@ export const FAKE_KINDS: FakeKind[] = [
   "fake-context-then-complete",
   "fake-context-then-error",
   "fake-steerable",
+  "fake-session",
 ];
 
 /** The one native turn id the steerable fake reports on its receipts. */
@@ -206,7 +210,13 @@ async function* runFake(
   live: FakeLiveInput | null,
 ): AsyncIterable<HarnessEvent> {
   const s = spec.session_id;
-  yield ev(s, "started", { observed_model: observedModel });
+  // fake-session reports its native session on `started`, like a real adapter.
+  const nativeSessionId =
+    kind === "fake-session" ? (spec.resume_session_id ?? `fake-native-${s}`) : null;
+  yield ev(s, "started", {
+    observed_model: observedModel,
+    ...(nativeSessionId ? { payload: { native_session_id: nativeSessionId } } : {}),
+  });
   // #27 / D-6: a synthesize-intent spawn carrying the deep-scan reducer marker is
   // the bounded reducer merging scout reports. Emit a deterministic MERGED report
   // (distinct from raw scout output) so the reducer-success canary is verifiable.
@@ -256,6 +266,42 @@ async function* runFake(
       yield ev(s, "usage", { usage: { input_tokens: 100, output_tokens: 50, cost_usd: 0.01 } });
       yield ev(s, "completed", { observed_model: observedModel });
       return;
+    case "fake-session": {
+      // A native-session fixture for thread continuity (INV-034/137): the
+      // first turn mints a native id, a later turn of the same lane is handed
+      // that id and resumes it. The probe reports only engine-chosen facts
+      // (resumed id, HOME, cwd entry names) — never the prompt.
+      const resumed = spec.resume_session_id ?? null;
+      let entries: string[] = [];
+      try {
+        entries = readdirSync(spec.cwd).sort();
+      } catch {
+        /* unreadable cwd: an empty probe, never a failure */
+      }
+      yield ev(s, "status", {
+        text: `fake session ${nativeSessionId}${resumed ? " (resumed)" : ""}`,
+        payload: {
+          code: "fake_session_probe",
+          native_session_id: nativeSessionId,
+          resumed_from: resumed,
+          home: spec.env?.["HOME"] ?? null,
+          cwd: spec.cwd,
+          cwd_entries: entries,
+        },
+      });
+      if (PRODUCING_INTENTS.has(spec.intent) && spec.access !== "readonly") {
+        try {
+          writeFileSync(join(spec.cwd, "FAKE_CHANGE.txt"), "fake-session deterministic change\n");
+          yield ev(s, "file_change", { payload: { path: "FAKE_CHANGE.txt", action: "create" } });
+        } catch {
+          /* non-writable cwd -> no change */
+        }
+      }
+      yield ev(s, "message", { text: "Answered by the fake session harness." });
+      yield ev(s, "usage", { usage: { input_tokens: 100, output_tokens: 50, cost_usd: 0.01 } });
+      yield ev(s, "completed", { observed_model: observedModel });
+      return;
+    }
     case "fake-reviewer-without-evidence":
       yield ev(s, "message", { text: "I think there might be a bug somewhere (no evidence)." });
       yield ev(s, "completed", { observed_model: observedModel });

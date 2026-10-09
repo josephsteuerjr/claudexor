@@ -18,6 +18,7 @@ import { isVanishedErrno, safeArtifactPath, safeArtifactRoot } from "./artifact-
 import { readRunTombstone } from "./retention.js";
 import type { DaemonRunRecord } from "./daemon-server.js";
 import { streamFilesArtifact } from "./files-artifact-stream.js";
+import { runExecutionWorkspaceRoot } from "./run-execution-root.js";
 import { RETAINED_OUTPUT_PATH } from "@claudexor/event-log";
 
 const MAX_ARTIFACT_FETCH_BYTES = 4 * 1024 * 1024;
@@ -27,9 +28,10 @@ const MAX_ARTIFACT_BINARY_FETCH_BYTES = 32 * 1024 * 1024;
  *  the mode and, for an isolated thread, the persistent worktree path (pinned by
  *  the `claudexor/thread-*` branch) where its turns actually executed. */
 export interface ResolvedThreadWorkspace {
-  mode: "in_place" | "isolated";
-  /** The isolated thread's persistent worktree; null once purged (or before the
-   *  first write turn materializes it). */
+  mode: "in_place" | "isolated" | "delegated";
+  /** The isolated thread's persistent worktree (null once purged or before the
+   *  first write turn materializes it), or a delegated thread's caller-owned
+   *  root, which purge keeps as the historical binding. */
   worktreePath: string | null;
 }
 
@@ -356,7 +358,13 @@ function producedThreadId(rec: DaemonRunRecord): string | null {
 export type ProducedRootResolution =
   | { kind: "root"; root: string }
   | { kind: "no_project" }
-  | { kind: "worktree_unavailable"; threadId: string; reason: WorktreeUnavailableReason };
+  | {
+      kind: "worktree_unavailable";
+      threadId: string | null;
+      reason: WorktreeUnavailableReason;
+      /** The missing tree is a caller-owned delegated workspace, not a managed worktree. */
+      callerOwned?: boolean;
+    };
 
 type WorktreeUnavailableReason =
   "worktree_not_retained" | "worktree_missing" | "authority_unavailable";
@@ -368,6 +376,14 @@ export async function resolveProducedRoot(
   const projectRoot = producedRepoRoot(rec);
   if (!projectRoot) return { kind: "no_project" };
   const threadId = producedThreadId(rec);
+  // A delegated run recorded its caller-owned execution address: its outputs
+  // live there or nowhere — never under the stable project identity.
+  const executionRoot = runExecutionWorkspaceRoot(rec);
+  if (executionRoot) {
+    return existsSync(executionRoot)
+      ? { kind: "root", root: executionRoot }
+      : { kind: "worktree_unavailable", threadId, reason: "worktree_missing", callerOwned: true };
+  }
   if (threadId && resolveThreadWorkspace) {
     let workspace: ResolvedThreadWorkspace | null;
     try {
@@ -379,15 +395,21 @@ export async function resolveProducedRoot(
       // unavailable (a transient 503), never the live project root.
       return { kind: "worktree_unavailable", threadId, reason: "authority_unavailable" };
     }
-    if (workspace?.mode === "isolated") {
+    if (workspace?.mode === "isolated" || workspace?.mode === "delegated") {
       const worktree = workspace.worktreePath;
+      const owner = workspace.mode === "delegated" ? { callerOwned: true } : {};
       // Purge nulls worktree_path (and removes the tree); a never-written
       // isolated thread also has none. Either way there is no run-owned tree to
       // serve — answer typed, do not leak the live project.
       if (!worktree)
-        return { kind: "worktree_unavailable", threadId, reason: "worktree_not_retained" };
+        return {
+          kind: "worktree_unavailable",
+          threadId,
+          reason: "worktree_not_retained",
+          ...owner,
+        };
       if (!existsSync(worktree))
-        return { kind: "worktree_unavailable", threadId, reason: "worktree_missing" };
+        return { kind: "worktree_unavailable", threadId, reason: "worktree_missing", ...owner };
       return { kind: "root", root: worktree };
     }
   }
@@ -399,9 +421,10 @@ export async function resolveProducedRoot(
  *  authority that would locate it could not answer (503) — never a fresh
  *  live-project snapshot under this run id (QA-038). */
 function isolatedWorktreeUnavailableBody(resolved: {
-  threadId: string;
+  threadId: string | null;
   reason: WorktreeUnavailableReason;
-}): { error: string; code: string; reason: string; thread_id: string } {
+  callerOwned?: boolean;
+}): { error: string; code: string; reason: string; thread_id: string | null } {
   if (resolved.reason === "authority_unavailable") {
     return {
       error: `thread ${resolved.threadId} workspace could not be resolved to serve produced outputs (thread authority unavailable)`,
@@ -413,10 +436,12 @@ function isolatedWorktreeUnavailableBody(resolved: {
   const detail =
     resolved.reason === "worktree_not_retained"
       ? "its isolated worktree was purged or never materialized"
-      : "its isolated worktree directory is no longer on disk";
+      : "its execution tree is no longer on disk";
   return {
-    error: `isolated thread ${resolved.threadId} has no retained worktree for produced outputs (${detail})`,
-    code: "isolated_worktree_unavailable",
+    error: `${resolved.threadId ? `thread ${resolved.threadId}` : "this run"} has no retained execution tree for produced outputs (${detail})`,
+    code: resolved.callerOwned
+      ? "execution_workspace_unavailable"
+      : "isolated_worktree_unavailable",
     reason: resolved.reason,
     thread_id: resolved.threadId,
   };

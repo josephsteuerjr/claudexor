@@ -223,19 +223,20 @@ invariant or operator decision before proceeding.
   `[INV-033:verbs-renamed]`.
 - **INV-034** A thread is the Claudexor-owned conversation (runs are its
   turns); the vendor CLI session is a re-hostable cache that later turns
-  resume natively. Read-only thread turns (ask/plan) keep DURABLE per-lane
-  native sessions — a lane is a (thread, harness, profile) triple with a
-  persistent scoped home under the project runtime namespace — and never
-  dispose them with the run; the next turn of the same lane resumes that
-  session, and only thread purge, credential-profile deletion, or orphan
-  retention removes a lane home. Thread, turn, and session mutations are fsync-before-ACK
+  resume natively. Read-only thread turns (ask/plan), and every in-place turn
+  of a delegated thread, keep DURABLE per-lane native sessions — a lane is a
+  (thread, harness, profile) triple with a persistent scoped home under the
+  project runtime namespace — and never dispose them with the run; the next
+  turn of the same lane resumes that session, and only thread purge,
+  credential-profile deletion, or orphan retention removes a lane home. Thread, turn, and session mutations are fsync-before-ACK
   journal records; create and Exact Retry bind `Idempotency-Key` to the
   original request and never duplicate a turn. An already accepted command
   remains the replay authority after later turns; a historical runless turn
   with no accepted command is never admitted after it stops being the thread
   tail. Exact Retry is a fresh linked command with fresh preflight; Run Again is an editable draft with explicit
   differences. verify: thread journal restart and idempotency tests; run retry
-  and draft tests; session-resume orchestrator tests.
+  and draft tests; session-resume orchestrator tests; delegated lane-home tests
+  (`packages/orchestrator/src/delegatedHome.test.ts`).
 - **INV-035** A v2 project has a stable daemon-owned id bound to one canonical
   local root. The v2 registry starts empty, never imports v1 state implicitly,
   and registration is request-idempotent; relink moves the same project id
@@ -519,12 +520,18 @@ invariant or operator decision before proceeding.
   separate facts. The repository's `.claudexor/`
   remains user-owned versioned config. verify: workspace manager tests.
 - **INV-073** Chat thread WRITE turns run IN-PLACE in the thread's
-  explicit execution tree — the live project for an `in_place` thread, or
-  the thread's persistent worktree for an `isolated` thread — and the
-  surface must disclose which applies. A read-only turn reuses an existing
-  isolated worktree, but before the first write turn it reads the stable
-  project directly and does not materialize Git state. verify: thread schema
-  defaults; in-place and lazy isolated-workspace tests.
+  explicit execution tree — the live project for an `in_place` thread, the
+  thread's persistent worktree for an `isolated` thread, or the caller-owned
+  workspace a `delegated` thread binds once at creation — and the surface
+  must disclose which applies. A read-only turn reuses an existing isolated
+  worktree, but before the first write turn it reads the stable project
+  directly and does not materialize Git state. Every turn and mode of a
+  delegated thread reads and writes only its bound workspace: Claudexor never
+  provisions, promotes, resets, applies, deletes, or falls back from it, and an
+  unavailable workspace is a typed refusal. verify: thread schema defaults;
+  in-place, lazy isolated-workspace, and delegated-workspace tests
+  (`packages/cli/src/thread-delegated-workspace.test.ts`); canary
+  `[INV-073:delegated-thread-two-rounds]`.
 - **INV-074** Absolute host paths such as `/tmp/...` are not project diffs
   and do not prove project success. Project tmp requests default to
   project-local `tmp/...` or run artifacts unless the user explicitly

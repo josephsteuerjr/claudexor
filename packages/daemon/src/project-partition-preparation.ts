@@ -1,5 +1,8 @@
+import { commandExecutionRoots } from "./command-scope-roots.js";
+import { withRunlessTurnRecovery } from "./runless-turn-recovery.js";
 import { createHash } from "node:crypto";
 import { JournalRecoveryRequiredError } from "@claudexor/journal";
+import type { Thread } from "@claudexor/schema";
 import { commandProjection, type CommandStore } from "./command-store.js";
 import { interactionProjection, type InteractionStore } from "./interactions.js";
 import { JournalManager, type JournalProjectionSlot } from "./journal-manager.js";
@@ -8,7 +11,12 @@ import { recoveryFrom } from "./journal-recovery-files.js";
 import { operatorDecisionProjection, type OperatorDecisionStore } from "./operator-decisions.js";
 import type { ProjectStore } from "./projects.js";
 import { runEventProjection, type RunEventStore } from "./run-events.js";
-import { threadProjection, type ThreadHeadPingSink, type ThreadStore } from "./threads.js";
+import {
+  threadProjection,
+  type CreateThreadInput,
+  type ThreadHeadPingSink,
+  type ThreadStore,
+} from "./threads.js";
 
 export interface ProjectPartitionEntry {
   manager: JournalManager;
@@ -80,6 +88,43 @@ export class ProjectPartitionCollection extends Map<string, ProjectPartitionEntr
     entry.manager.start();
     this.set(projectId, entry);
     return entry;
+  }
+
+  findThreadCreation(
+    input: CreateThreadInput & { ephemeral?: boolean },
+    globalThreads: ThreadStore,
+  ): Thread | null {
+    const root = input.ephemeral === true ? null : (input.repoRoot ?? null);
+    if (!root) return globalThreads.findThreadCreation(input.idempotency) ?? null;
+    // The accepted request and its journal partition outlive the directory
+    // (and any symlink spelling the caller used). Keys are partition-scoped,
+    // so a different request in another project cannot conflict with replay.
+    if (input.idempotency) {
+      for (const entry of this.healthy()) {
+        const prior = entry.threads.current().findThreadCreation(input.idempotency, true);
+        if (prior) return prior;
+      }
+    }
+    const project = this.projects.current().findByRoot(root);
+    return project
+      ? (this.ensure(project.id).threads.current().findThreadCreation(input.idempotency) ?? null)
+      : null;
+  }
+
+  /** Caller-owned execution roots recorded by the prepared partition
+   * commands, for crash GC (a partition not prepared contributes nothing). */
+  preparedExecutionRoots(): string[] {
+    const roots = new Set<string>();
+    for (const entry of this.values()) {
+      try {
+        for (const root of commandExecutionRoots(entry.commands.prepared().records())) {
+          roots.add(root);
+        }
+      } catch {
+        // Unprepared/quarantined partition: its roots are not swept this start.
+      }
+    }
+    return [...roots];
   }
 
   healthy(): ProjectPartitionEntry[] {
@@ -284,13 +329,16 @@ function createProjectPartition(
   requestMaintenance?: JournalManagerOptions["requestMaintenance"],
 ): ProjectPartitionEntry {
   const manager = new JournalManager(rootDir, { partition, requestMaintenance });
+  const commands = manager.registerProjection(commandProjection());
   const value: ProjectPartitionEntry = {
     manager,
-    commands: manager.registerProjection(commandProjection()),
+    commands,
     interactions: manager.registerProjection(interactionProjection()),
     decisions: manager.registerProjection(operatorDecisionProjection()),
     runEvents: manager.registerProjection(runEventProjection()),
-    threads: manager.registerProjection(threadProjection(headPing)),
+    threads: manager.registerProjection(
+      withRunlessTurnRecovery(threadProjection(headPing), () => commands.current().records()),
+    ),
   };
   return value;
 }
