@@ -1098,6 +1098,26 @@ describe("image input capability gating", () => {
     expect(fixture.onDispatch).not.toHaveBeenCalled();
     expect(fixture.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toEqual([]);
   });
+  it("refuses an image-bearing request when the catalog has no row for the model at all", async () => {
+    const fixture = setup();
+    const discovered = await fixture.adapter.catalog(fixture.context);
+    expect(discovered.models.some((entry) => entry.id === "unknown-model")).toBe(false);
+    const result = await fixture.adapter.invoke(
+      ModelCallRequest.parse({
+        ...fixture.request,
+        model: "unknown-model",
+        messages: imageMessages,
+      }),
+      { ...fixture.context, catalog: discovered },
+    );
+    expect(result.problem).toMatchObject({
+      code: "unsupported_parameter",
+      context: { parameter: "imageInput" },
+    });
+    expect(result.outcome).toBe("failed");
+    expect(fixture.onDispatch).not.toHaveBeenCalled();
+    expect(fixture.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toEqual([]);
+  });
   it.each([
     { label: "false", textOnly: true },
     { label: "absent", textOnly: false },

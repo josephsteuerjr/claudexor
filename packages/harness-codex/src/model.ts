@@ -384,9 +384,10 @@ export function createCodexModelAdapter(deps: CodexModelAdapterDeps = {}): Model
         // Image input is a build-declared capability, never a transport guess.
         // The catalog's imageInput is exactly true when the model itself has an
         // image modality AND this engine build carries images; anything else —
-        // including catalogs from an older engine without the field — refuses
-        // image-bearing requests BEFORE dispatch, like the effort gate below.
-        if (model && requestCarriesImages(request.messages, route) && model.imageInput !== true) {
+        // a false/absent field, or a catalog with no row for the requested
+        // model at all (INV-104: a miss never becomes a fabricated row) —
+        // refuses image-bearing requests BEFORE dispatch, like the effort gate.
+        if (requestCarriesImages(request.messages, route) && model?.imageInput !== true) {
           throw new CodexModelError(
             "unsupported_parameter",
             "This model or engine build does not accept image inputs; the request carries image content.",
