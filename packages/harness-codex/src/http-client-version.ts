@@ -11,10 +11,11 @@ import { harnessBinaryIdentityOnPath } from "@claudexor/core";
  * moved the installer decided which models an account could see through this
  * transport (issue #339). The two meanings are separate now:
  *
- * - `CODEX_HTTP_CLIENT_VERSION` is the Codex client version this release's
- *   catalog parser (`parseCodexModelCatalog`) and Responses projection were
- *   verified against. Bump it together with a recorded catalog fixture pair
+ * - `CODEX_HTTP_CLIENT_VERSION` is the Codex client version whose account
+ *   catalog response this release verified with `parseCodexModelCatalog`.
+ *   Bump it together with a recorded same-account catalog fixture pair
  *   (see `fixtures/models-http-*.json`), never with the installer pin.
+ *   Catalog visibility does not prove a model's generation capability.
  * - The installed Codex CLI, when it is NEWER than that constant, is the
  *   vendor's own runtime on this host and raises the declared version (owner
  *   decision 2026-09-24, Q2=A): updating Codex is then the one action that
@@ -33,7 +34,7 @@ import type { ControlModelCatalogResponse } from "@claudexor/schema";
 import type { PinnedVendorCliVersion } from "@claudexor/util";
 import { BIN, detectVersion, probeEnv } from "./missing-cli.js";
 
-export const CODEX_HTTP_CLIENT_VERSION: PinnedVendorCliVersion = "0.156.1";
+export const CODEX_HTTP_CLIENT_VERSION: PinnedVendorCliVersion = "0.163.0";
 
 export type CodexCatalogClientVersion = {
   version: string;

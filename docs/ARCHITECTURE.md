@@ -2076,9 +2076,10 @@ source. Selected-account discovery can negotiate `includeAdmission=true` with
 `requestedModel` for those facts and `admission: {requestedModel,
 inventoryAbsence}`, which permits an attempt without a synthetic model row or
 generation claim; the legacy query keeps its exact shape. The
-constant moves with a recorded catalog fixture pair (`fixtures/models-http-*.json`)
-whose shared rows must stay identical. Refresh work is serialized per canonical
-managed home; a cancelled caller cannot release another past a still-live
+constant moves with a same-account catalog fixture pair (`fixtures/models-http-*.json`):
+shared backend metadata stays identical, while the first visible model (and thus
+`isDefault`) may change when the newer response adds a higher-priority row.
+Refresh work is serialized per canonical managed home; a cancelled caller cannot release another past a still-live
 refresh, and each caller rereads current authorization. Selection hands its
 exact-profile catalog to the invocation, which rechecks the account fingerprint; no catalog or credentials are cached across operations, and an
 unknown fingerprint keeps fresh discovery and cannot authorize native

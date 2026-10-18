@@ -36,9 +36,15 @@ describe("codexCatalogClientVersion", () => {
   let dir: string;
   let bin: string;
   const env = () => ({ PATH: "" }) as NodeJS.ProcessEnv;
+  // Discovery resolves native .exe/.com on Windows, not a POSIX shebang with
+  // no extension. Only stat identity is used here; detectVersion is mocked.
+  const runnableBin = () => (process.platform === "win32" ? `${bin}.exe` : bin);
   const stub = (marker: string): void => {
-    writeFileSync(bin, `#!/bin/sh\necho ${marker}\n`);
-    chmodSync(bin, 0o755);
+    writeFileSync(
+      runnableBin(),
+      process.platform === "win32" ? `stub ${marker}\n` : `#!/bin/sh\necho ${marker}\n`,
+    );
+    chmodSync(runnableBin(), 0o755);
   };
   beforeEach(() => {
     clearCodexClientVersionMemo();
@@ -49,7 +55,7 @@ describe("codexCatalogClientVersion", () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   it("declares the verified transport level as its own constant, separate from the installer pin", () => {
-    expect(CODEX_HTTP_CLIENT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(CODEX_HTTP_CLIENT_VERSION).toBe("0.163.0");
     // The two constants may coincide in a given release, but the URL must never
     // read the installer pin: the catalog is about what the TRANSPORT verified.
     expect(codexVersionTriple(CODEX_HTTP_CLIENT_VERSION)).not.toBeNull();
@@ -65,7 +71,7 @@ describe("codexCatalogClientVersion", () => {
     expect(declared).toEqual({ version: "9.0.1", source: "installed_cli" });
   });
 
-  it.each(["codex-cli 0.1.0", "codex (version unknown)", null])(
+  it.each(["codex-cli 0.155.1", "codex-cli 0.1.0", "codex (version unknown)", null])(
     "never drops below the verified level (installed %j)",
     async (reported) => {
       const declared = await codexCatalogClientVersion({
@@ -108,12 +114,12 @@ describe("codexCatalogClientVersion", () => {
     expect(spawns).toBe(1);
     // An in-place upgrade changes size/mtime (and usually the inode): seen at once.
     stub("upgraded");
-    utimesSync(bin, new Date(now + 5_000), new Date(now + 5_000));
+    utimesSync(runnableBin(), new Date(now + 5_000), new Date(now + 5_000));
     expect((await codexCatalogClientVersion(deps)).version).toBe("9.1.0");
     expect(spawns).toBe(2);
     // A failed detection is memoised briefly, then retried.
     stub("broken");
-    utimesSync(bin, new Date(now + 10_000), new Date(now + 10_000));
+    utimesSync(runnableBin(), new Date(now + 10_000), new Date(now + 10_000));
     expect((await codexCatalogClientVersion(deps)).source).toBe("verified_transport");
     expect((await codexCatalogClientVersion(deps)).source).toBe("verified_transport");
     expect(spawns).toBe(3);
